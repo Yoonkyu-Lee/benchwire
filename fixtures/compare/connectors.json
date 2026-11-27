@@ -1,0 +1,12 @@
+{
+  "sources": [
+    {"id":"compare-connectors","title":"합성 비교 커넥터 결합","locator":"fixture:compare/compare-connectors","retrievedAt":"2026-11-27"}
+  ],
+  "connectors": [
+    {"id":"compare-plug","endForm":{"value":"plug","confidence":"inferred","sources":["compare-connectors"]}},
+    {"id":"compare-socket","endForm":{"value":"receptacle","confidence":"inferred","sources":["compare-connectors"]}}
+  ],
+  "mates": [
+    {"a":"compare-plug","b":"compare-socket","evidence":{"value":true,"confidence":"inferred","sources":["compare-connectors"]}}
+  ]
+}

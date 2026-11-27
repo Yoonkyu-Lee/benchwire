@@ -1,0 +1,29 @@
+{
+  "sceneId": "후보 A",
+  "sources": [
+    {"id":"compare-scene","title":"합성 장면 작업 전제","locator":"fixture:compare/compare-scene","retrievedAt":"2026-11-27"}
+  ],
+  "items": [
+    {"instanceId":"host","modelId":"compare-host","revision":"1"},
+    {"instanceId":"first","modelId":"compare-medium","revision":"1"},
+    {"instanceId":"peer-b","modelId":"compare-sink","revision":"1"},
+    {"instanceId":"peer-c","modelId":"compare-sink","revision":"1"},
+    {"instanceId":"alone","modelId":"compare-sink","revision":"1"}
+  ],
+  "connections": [
+    {"id":"link-a","from":{"instanceId":"host","id":"a"},"to":{"instanceId":"first","id":"in"},"parts":[],"evidence":{"value":true,"confidence":"inferred","sources":["compare-scene"]}},
+    {"id":"link-b","from":{"instanceId":"host","id":"b"},"to":{"instanceId":"peer-b","id":"in"},"parts":[],"evidence":{"value":true,"confidence":"inferred","sources":["compare-scene"]}},
+    {"id":"link-c","from":{"instanceId":"host","id":"c"},"to":{"instanceId":"peer-c","id":"in"},"parts":[],"evidence":{"value":true,"confidence":"inferred","sources":["compare-scene"]}},
+    {"id":"link-d","from":{"instanceId":"host","id":"d"},"to":{"instanceId":"alone","id":"in"},"parts":[],"evidence":{"value":true,"confidence":"inferred","sources":["compare-scene"]}}
+  ],
+  "workloads": [
+    {"id":"first","domain":"trial","kind":"transfer","from":{"instanceId":"host","id":"root"},"to":{"instanceId":"first","id":"target"},"request":{"rate":{"value":200,"unit":"회/s","confidence":"inferred","sources":["compare-scene"]}}},
+    {"id":"peer-b","domain":"trial","kind":"transfer","from":{"instanceId":"host","id":"root"},"to":{"instanceId":"peer-b","id":"target"},"request":{"rate":{"value":800,"unit":"회/s","confidence":"inferred","sources":["compare-scene"]}}},
+    {"id":"peer-c","domain":"trial","kind":"transfer","from":{"instanceId":"host","id":"root"},"to":{"instanceId":"peer-c","id":"target"},"request":{"rate":{"value":800,"unit":"회/s","confidence":"inferred","sources":["compare-scene"]}}},
+    {"id":"alone","domain":"trial","kind":"transfer","from":{"instanceId":"host","id":"isolated"},"to":{"instanceId":"alone","id":"target"},"request":{"rate":{"value":300,"unit":"회/s","confidence":"inferred","sources":["compare-scene"]}}}
+  ],
+  "scenarios": [
+    {"id":"t9","members":["first","peer-b","peer-c","alone"]},
+    {"id":"peer-alone","members":["peer-b"]}
+  ]
+}

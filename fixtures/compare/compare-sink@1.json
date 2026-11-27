@@ -1,0 +1,24 @@
+{
+  "modelId": "compare-sink",
+  "revision": "1",
+  "kind": "device",
+  "name": "합성 고정 수신기",
+  "brand": "합성",
+  "category": "비교 시험",
+  "sources": [
+    {"id":"compare-sink","title":"합성 고정 수신기","locator":"fixture:compare/compare-sink","retrievedAt":"2026-11-27"}
+  ],
+  "nodes": [
+    {"id":"input","kind":"junction","label":"input"},
+    {"id":"target","kind":"junction","label":"target"}
+  ],
+  "ports": [
+    {"id":"in","label":"in","connector":{"value":"compare-socket","confidence":"inferred","sources":["compare-sink"]},"attachment":{"value":"input","confidence":"inferred","sources":["compare-sink"]},"interfaces":[{"id":"in-pulse","domain":"trial","protocol":"pulse","role":"bidirectional","evidence":{"value":true,"confidence":"inferred","sources":["compare-sink"]},"params":{"rate":{"value":2000,"unit":"회/s","confidence":"inferred","sources":["compare-sink"]}}}]}
+  ],
+  "edges": [
+    {"id":"input-target","from":"input","to":"target","evidence":{"value":true,"confidence":"inferred","sources":["compare-sink"]},"uses":[{"resource":"medium","evidence":{"value":true,"confidence":"inferred","sources":["compare-sink"]}}]}
+  ],
+  "resources": [
+    {"id":"medium","kind":"rate","domain":"trial","unit":"회/s","capacity":{"value":1000,"unit":"회/s","confidence":"inferred","sources":["compare-sink"]},"policy":{"value":"max-min","confidence":"inferred","sources":["compare-sink"]}}
+  ]
+}
