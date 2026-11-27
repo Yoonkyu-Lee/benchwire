@@ -122,7 +122,7 @@
             "source": {
               "type": "text",
               "media_type": "text/plain",
-              "data": "Morrow Finch FA-24. USB-C A: connector: usb-c-receptacle. USB-C A: maxW: 30 W. USB-C A: pdo5: 3 A. USB-C A: accepts5: false. Controller and Output are connected and use Supply.\nUSB-C A and Controller are not connected."
+              "data": "Morrow Finch FA-24. USB-C A: connector: usb-c-receptacle. USB-C A: maxW: 30 W. USB-C A: pdo5: 3 A. USB-C A: accepts5: false. Controller and Output are connected and use Supply. USB-C A uses USB PD as source. USB-C A: All source PDOs: 5 V / 3 A.\nUSB-C A and Controller are not connected."
             }
           }
         }
@@ -177,9 +177,9 @@
             "type": "char_location",
             "document_index": 0,
             "document_title": "FA-24 제품 설명서",
-            "cited_text": "Morrow Finch FA-24. USB-C A: connector: usb-c-receptacle. USB-C A: maxW: 30 W. USB-C A: pdo5: 3 A. USB-C A: accepts5: false. Controller and Output are connected and use Supply.",
+            "cited_text": "Morrow Finch FA-24. USB-C A: connector: usb-c-receptacle. USB-C A: maxW: 30 W. USB-C A: pdo5: 3 A. USB-C A: accepts5: false. Controller and Output are connected and use Supply. USB-C A uses USB PD as source. USB-C A: All source PDOs: 5 V / 3 A.",
             "start_char_index": 0,
-            "end_char_index": 176
+            "end_char_index": 244
           },
           {
             "type": "char_location",
@@ -224,8 +224,8 @@
             "document_index": 0,
             "document_title": "FA-24 제품 설명서",
             "cited_text": "USB-C A and Controller are not connected.",
-            "start_char_index": 177,
-            "end_char_index": 218
+            "start_char_index": 245,
+            "end_char_index": 286
           }
         ]
       }

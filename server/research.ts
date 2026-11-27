@@ -1,4 +1,4 @@
-// 공개 제품 자료를 판본별로 조사하고, 검증한 주장으로 저장 전 초안을 만든다.
+// 공개 제품 자료를 판본별로 조사하고, 원문과 경고를 붙인 확인 전 초안을 만든다.
 import type Anthropic from "@anthropic-ai/sdk";
 import { zodOutputFormat } from "@anthropic-ai/sdk/helpers/zod";
 import { createHash } from "node:crypto";
@@ -17,9 +17,8 @@ export { configuredResearchClient, type ResearchClient } from "./claude.ts";
 const BUDGET_USD = 5;
 const MAX_SEARCHES = 6;
 const CACHE_DAYS = 30;
-// 이전 초안의 값·미지원 근거는 열람 본문에서 인용 주변까지 다시 검증해야 한다.
-const CACHE_VERSION = "single-value-quotes-v3";
-const QUOTE_CONTEXT_CHARS = 512;
+// 이전 조사 초안에는 사용자가 확인할 값·출처 목록이 없다.
+const CACHE_VERSION = "review-drafts-v4";
 const DAY_MS = 86_400_000;
 const CONTEXT_TOKENS = 1_000_000;
 const IDENTIFY = { output: 3_072, searches: 2, fetches: 2 };
@@ -97,7 +96,7 @@ const FORMAT = { type: formatType, schema: formatSchema };
 
 type ClaimRow = z.infer<typeof shapes.claims>;
 type Citation = { id: string; source: string; quote: string } & (
-  { verified: true; context: string } | { verified: false; context?: never }
+  { verified: true; document: string; passage: string } | { verified: false }
 );
 type Collected = { sources: Map<string, Source>; citations: Citation[]; text: string };
 const phase = z.enum(["identifying", "choosing", "researching", "normalizing", "complete", "stopped"]);
@@ -105,22 +104,26 @@ const stopReason = z.enum(["budget", "refusal", "incomplete", "unidentified", "u
 type Stop = z.infer<typeof stopReason>;
 type Draft = z.output<typeof draftFile>;
 const sourceFile = modelFile.shape.sources.element.extend({ locator: z.string().refine(url => publicUrl(url) !== undefined) });
-const conflictReport = z.strictObject({
-  field: z.string(), condition: z.string(), values: z.array(shapes.claims.pick({ value: true, unit: true, confidence: true })
-    .extend({ sources: z.array(z.string()) })),
-});
 const modelEdge = modelFile.shape.edges.element;
+const reviewProof = { quote: z.string(), reason: z.string() };
 const claimProposal = shapes.claims.pick({ id: true, domain: true, field: true }).extend({
   target: shapes.claims.shape.target.exclude(["edge"]),
-  label: z.string(), claim: modelFile.shape.ports.element.shape.connector, quote: z.string(), reason: z.string(),
+  label: z.string(),
+  claim: modelFile.shape.ports.element.shape.connector.safeExtend({ value: shapes.claims.shape.value, confidence }),
+  ...reviewProof,
 });
+const definitionProposal = z.strictObject({
+  target: z.enum(["port", "interface", "node", "resource"]), id: text, label: z.string(), source: text, ...reviewProof,
+});
+const omissionProposal = shapes.omissions.omit({ citation: true }).extend({ label: z.string(), source: text, ...reviewProof });
 const draftFile = z.strictObject({
-  model: modelFile, discarded: z.array(z.string()), conflicts: z.array(conflictReport),
-  omissions: z.array(z.strictObject({ field: text, quote: z.string(), source: text })),
+  model: modelFile, discarded: z.array(z.string()),
   proposals: z.strictObject({
+    definitions: z.array(definitionProposal),
     claims: z.array(claimProposal),
-    attachments: z.array(z.strictObject({ port: text, attachment: modelFile.shape.ports.element.shape.attachment, quote: z.string() })),
-    edges: z.array(modelEdge.extend({ quote: z.string(), uses: z.array(modelEdge.shape.uses.element.extend({ quote: z.string() })) })),
+    omissions: z.array(omissionProposal),
+    attachments: z.array(z.strictObject({ port: text, attachment: modelFile.shape.ports.element.shape.attachment, ...reviewProof })),
+    edges: z.array(modelEdge.extend({ ...reviewProof, uses: z.array(modelEdge.shape.uses.element.extend(reviewProof)) })),
   }),
 });
 const cacheFile = z.strictObject({
@@ -173,9 +176,9 @@ function verifiedContext(text: string, quote: string, start: number, end: number
     end = start + quote.length;
   }
   const paragraph = /\r?\n[^\S\r\n]*\r?\n|\u2029/u;
-  const before = text.slice(Math.max(0, start - QUOTE_CONTEXT_CHARS), start).split(paragraph).at(-1)!;
-  const after = text.slice(end, end + QUOTE_CONTEXT_CHARS).split(paragraph)[0]!;
-  return before + quote + after;
+  const before = text.slice(0, start).split(paragraph).at(-1)!;
+  const after = text.slice(end).split(paragraph)[0]!;
+  return { document: text, passage: before + quote + after };
 }
 
 function collect(blocks: readonly Block[], retrievedAt: string): Collected {
@@ -214,7 +217,7 @@ function collect(blocks: readonly Block[], retrievedAt: string): Collected {
       const context = cite.type === "char_location" && doc?.text !== undefined
         ? verifiedContext(doc.text, cite.cited_text, cite.start_char_index, cite.end_char_index) : undefined;
       citations.push({ id: "quote-" + (citations.length + 1), source, quote: cite.cited_text,
-        ...(context === undefined ? { verified: false } : { verified: true, context }) });
+        ...(context === undefined ? { verified: false } : { verified: true, ...context }) });
     }
   }
   return { sources, citations, text: parts.join("") };
@@ -225,7 +228,7 @@ function mentions(quote: string, label: string) {
   return (" " + words(quote) + " ").includes(" " + words(label) + " ");
 }
 
-const CONDITIONAL = /\b(?:only|when|if|single|alone|per[- ]port|up\s+to|condition(?:al|s)?|unless|provided|depending|with\s+(?:one|both|all|a single|two)|without|at\s+(?:most|least))\b|(?<=[\p{L}\p{N}])만(?=[^\p{L}\p{N}]|$)|할\s*때|했을\s*때|일\s*때|경우|조건|단일|포트\s*당|최대\s*\d|한해서|한정/iu;
+const CONDITIONAL = /\b(?:only|when|if|single|alone|standalone|exclusively|per[- ]port|up\s+to|condition(?:al|s)?|unless|provided|depending|with\s+(?:one|both|all|a single|two)|without|at\s+(?:most|least))\b|(?<=[\p{L}\p{N}])만(?=[^\p{L}\p{N}]|$)|할\s*때|했을\s*때|일\s*때|경우|조건|단일|포트\s*당|최대\s*\d|한해서|한정/iu;
 const NEGATIVE = /\b(?:not|never|unsupported|cannot|can['’]t|doesn['’]t|no)\b|미지원|지원하지|않(?:다|음|습니다)|불가/iu;
 
 function clauses(quote: string) {
@@ -256,13 +259,12 @@ function labeledBodies(lines: readonly string[], labels: readonly string[]) {
   });
 }
 
-// 원문에서 대상과 필드가 붙은 구절 하나가 값·단위를 직접 선언해야 한다.
+// 일괄 확인에서는 인용에 대상과 항목이 함께 명시된 값만 다룬다.
 function exactClaim(lines: readonly string[], row: ClaimRow, labels: readonly string[]) {
   const [content, ...other] = labeledBodies(lines, labels);
   if (content === undefined || other.length) return false;
   if (typeof row.value !== "number") return !row.unit && content.toLowerCase() === String(row.value).normalize("NFKC").toLowerCase();
-  const quantity = /^([+-]?(?:\d+(?:\.\d+)?|\.\d+))\s*(.*)$/u.exec(content);
-  return quantity !== null && Number(quantity[1]) === row.value && quantity[2] === row.unit;
+  return row.unit ? contextQuantities(content, row.unit).has(row.value) : JUST_NUMBER.test(content) && numericValue(content) === row.value;
 }
 
 const NUMBER_TEXT = "[+-]?(?:(?:\\d{1,3}(?:,\\d{3})+|\\d+)(?:\\.\\d+)?|\\.\\d+)";
@@ -274,36 +276,49 @@ function numericValue(token: string) {
   return Number(token.replaceAll(",", ""));
 }
 
-function quantityPattern(unit: string) {
-  return new RegExp(QUANTITY_START + "(" + NUMBER_TEXT + ")(?![\\p{N}]|[.,]\\p{N})" +
-    (unit ? "\\s*" + RegExp.escape(unit) : "") + TOKEN_END, "gu");
-}
+// 기호의 대소문자는 SI 접두어를 구별한다. 풀어 쓴 영문 단위는 대소문자를 가리지 않는다.
+const QUANTITY_UNITS = [
+  { mW: 1, W: 1e3, kW: 1e6, milliwatt: 1, milliwatts: 1, watt: 1e3, watts: 1e3, kilowatt: 1e6, kilowatts: 1e6 },
+  { mV: 1, V: 1e3, kV: 1e6, millivolt: 1, millivolts: 1, volt: 1e3, volts: 1e3, kilovolt: 1e6, kilovolts: 1e6 },
+  { mA: 1, A: 1e3, milliamp: 1, milliamps: 1, amp: 1e3, amps: 1e3, ampere: 1e3, amperes: 1e3 },
+  { "B/s": 1, "kB/s": 1e3, "KB/s": 1e3, "MB/s": 1e6, "GB/s": 1e9, "TB/s": 1e12 },
+  { bps: 1, kbps: 1e3, Mbps: 1e6, Gbps: 1e9, Tbps: 1e12, "bit/s": 1, "Mbit/s": 1e6, "Gbit/s": 1e9 },
+  { Hz: 1, kHz: 1e3, MHz: 1e6, GHz: 1e9 },
+] satisfies Record<string, number>[];
 
 function tableCells(line: string) {
-  return line.trim().replace(/^\||\|$/g, "").split("|").map(cell => cell.trim());
+  return (line.includes("|") ? line.trim().replace(/^\||\|$/g, "").split("|") : line.trim().split(/\t+/u))
+    .map(cell => cell.trim());
 }
 
 function contextQuantities(context: string, unit: string) {
   const text = context.normalize("NFKC").replaceAll("\u2212", "-");
-  const quantity = quantityPattern(unit);
-  const values = new Set([...text.matchAll(quantity)].map(match => numericValue(match[1]!)));
-  if (!text.includes("|")) return values;
+  const units: Record<string, number> = QUANTITY_UNITS.find(group => Object.hasOwn(group, unit)) ?? { [unit]: 1 };
+  const names = Object.keys(units).map(name => /^[a-z]{4,}$/u.test(name) ? "(?i:" + name + ")" : RegExp.escape(name)).join("|");
+  const unitToken = new RegExp("(?<![\\p{L}\\p{N}_])(" + names + ")" + TOKEN_END, "u");
+  const quantity = new RegExp(QUANTITY_START + "(" + NUMBER_TEXT + ")(?![\\p{N}]|[.,]\\p{N})\\s*(" + names + ")" + TOKEN_END, "gu");
+  const factor = (name: string) => units[name] ?? units[name.toLowerCase()]!;
+  const wanted = units[unit]!;
+  const values = new Set([...text.matchAll(quantity)].map(match => numericValue(match[1]!) * factor(match[2]!) / wanted));
+  if (!/[|\t]/u.test(text)) return values;
 
   // 표의 단위는 열 제목에서 읽고 같은 열의 숫자만 후보에 넣는다.
-  const unitToken = new RegExp("(?<![\\p{L}\\p{N}_])" + RegExp.escape(unit) + TOKEN_END, "u");
-  let columns: number[] = [];
+  let columns: { index: number; scale: number }[] = [];
   let width = 0;
   for (const line of text.split(/\r?\n/u)) {
     const cells = tableCells(line);
     if (cells.length < 2) { columns = []; continue; }
-    const headings = cells.flatMap((cell, index) => unitToken.test(cell) && ![...cell.matchAll(quantity)].length ? [index] : []);
+    const headings = cells.flatMap((cell, index) => {
+      const name = unitToken.exec(cell)?.[1];
+      return name && ![...cell.matchAll(quantity)].length ? [{ index, scale: factor(name) }] : [];
+    });
     if (headings.length) {
       columns = headings;
       width = cells.length;
     } else if (cells.length === width) {
-      for (const index of columns) {
+      for (const { index, scale } of columns) {
         const cell = cells[index]!;
-        if (JUST_NUMBER.test(cell)) values.add(numericValue(cell));
+        if (JUST_NUMBER.test(cell)) values.add(numericValue(cell) * scale / wanted);
       }
     } else columns = [];
   }
@@ -312,7 +327,7 @@ function contextQuantities(context: string, unit: string) {
 
 function subjectQuantities(context: string, subject: Subject, unit: string, labels: readonly string[], voltageV?: number) {
   const lines = context.normalize("NFKC").split(/\r?\n/u).flatMap(line => {
-    if (line.includes("|")) {
+    if (/[|\t]/u.test(line)) {
       const cells = tableCells(line).map(cell => cell.toLowerCase());
       const peer = subject.peers.some(label => cells.includes(label.normalize("NFKC").toLowerCase()));
       return peer && !cells.includes(subject.label.normalize("NFKC").toLowerCase()) ? [] : [line];
@@ -331,18 +346,6 @@ function subjectQuantities(context: string, subject: Subject, unit: string, labe
     text = text.replace(pair, (whole, voltage: string) => numericValue(voltage) === voltageV ? whole : "");
   }
   return contextQuantities(text, unit);
-}
-
-function quotedValue(quote: string, value: ClaimRow["value"], unit: string) {
-  const token = String(value).normalize("NFKC");
-  if (!token) return false;
-  const assertive = clauses(quote).filter(clause => !NEGATIVE.test(clause));
-  if (typeof value === "number") {
-    const quantity = quantityPattern(unit);
-    return assertive.some(clause => [...clause.matchAll(quantity)].some(match => numericValue(match[1]!) === value));
-  }
-  const literal = new RegExp("(?<![\\p{L}\\p{N}_-])" + RegExp.escape(token) + "(?![\\p{L}\\p{N}_-])", "iu");
-  return assertive.some(clause => literal.test(clause));
 }
 
 const omissionMeta = z.strictObject({ headings: z.array(z.string()), voltageV: z.number() });
@@ -382,7 +385,7 @@ function identityDraft(selected: Candidate, sources: Source[]): Draft {
   return {
     model: { modelId: slug || "model", revision: selected.revision, kind: selected.kind, name: selected.name, brand: selected.brand,
       category: selected.category, attributes: {}, sources, ports: [], nodes: [], resources: [], edges: [] },
-    discarded: [], conflicts: [], omissions: [], proposals: { claims: [], attachments: [], edges: [] },
+    discarded: [], proposals: { definitions: [], claims: [], omissions: [], attachments: [], edges: [] },
   };
 }
 
@@ -392,7 +395,7 @@ function assembledDraft(selected: Candidate, data: unknown, result: Collected, i
   const allSources = new Map([...identitySources, ...[...result.sources.values()].filter(source => forRevision.has(source.id))]
     .map(source => [source.id, source]));
   const draft = identityDraft(selected, [...allSources.values()]);
-  const { model, discarded, conflicts, omissions, proposals } = draft;
+  const { model, discarded, proposals } = draft;
   const modelLabel = selected.name + " " + selected.revision;
   const envelope = lists.safeParse(data);
   if (!envelope.success || envelope.data.revision !== selected.revision) {
@@ -419,7 +422,7 @@ function assembledDraft(selected: Candidate, data: unknown, result: Collected, i
     else discarded.push(rank.id + " · 선택한 판본의 출처 목록에 없습니다.");
   }
   const quotes = new Map(verified.map(c => [c.id, c.quote]));
-  const contexts = new Map(verified.map(c => [c.id, c.context]));
+  const citations = new Map(verified.map(c => [c.id, c]));
   function selectedRevisionHeading(quote: string) {
     const [heading, ...body] = clauses(quote).filter(Boolean);
     return heading !== undefined && (heading.toLowerCase() === modelLabel.normalize("NFKC").toLowerCase() ||
@@ -431,77 +434,57 @@ function assembledDraft(selected: Candidate, data: unknown, result: Collected, i
     return quote !== undefined && labels.every(label => mentions(quote, label));
   }
   type Proof = Omit<Fact, "value" | "confidence"> & { value: true; confidence: z.infer<typeof confidence> };
-  function proof(id: string, declared?: z.infer<typeof confidence>): Proof | undefined {
+  function proof(id: string): Proof | undefined {
     const source = cited.get(id);
     const rank = source && ranks.get(source);
     if (!source || !rank || !sourceById.has(source)) return;
-    const trust = confidenceOrder[Math.max(confidenceOrder.indexOf(rank), confidenceOrder.indexOf(declared ?? rank))]!;
-    return { value: true, unit: "", confidence: trust, sources: [source], condition: "" };
+    return { value: true, unit: "", confidence: rank, sources: [source], condition: "" };
   }
 
   const grouped = new Map<string, { row: ClaimRow; evidence: Proof; used: boolean }[]>();
   const key = (target: ClaimRow["target"], id: string, domain: string, field: string) => JSON.stringify([target, id, domain, field]);
   for (const row of rows("claims")) {
-    const evidence = proof(row.citation, row.confidence);
+    const evidence = proof(row.citation);
     if (!evidence) { discarded.push(row.id + "." + row.field + " · 같은 판본에서 검증된 인용 근거가 없습니다."); continue; }
-    const topology = row.target === "edge" || row.target === "port" && row.field === "attachment";
-    const quote = quotes.get(row.citation)!;
-    if ((!topology && !quotedValue(quote, row.value, row.unit)) || (row.condition && !quote.includes(row.condition))) {
-      discarded.push(row.id + "." + row.field + " · 인용 원문에서 같은 값·단위·조건을 찾을 수 없습니다.");
-      continue;
-    }
     const slot = key(row.target, row.id, row.domain, row.field);
     const group = grouped.get(slot) ?? [];
     group.push({ row, evidence, used: false });
     grouped.set(slot, group);
   }
 
-  function fact(target: z.infer<typeof claimProposal>["target"], id: string, domain: string, field: string,
-    subject: Subject, valid: (row: ClaimRow) => boolean, title = field, voltageV?: number): Fact | undefined {
+  function proposeFact(target: z.infer<typeof claimProposal>["target"], id: string, domain: string, field: string,
+    subject: Subject, valid: (row: ClaimRow) => boolean, title = field, voltageV?: number) {
     const candidates = (grouped.get(key(target, id, domain, field)) ?? []).filter(({ row }) => valid(row));
-    const sameQuantity = Map.groupBy(candidates, ({ row }) => JSON.stringify([row.value, row.unit]));
-    const accepted = new Map<ClaimRow["value"], Omit<Proof, "value"> & { value: ClaimRow["value"] }>();
     candidates.sort((a, b) => confidenceOrder.indexOf(a.evidence.confidence) - confidenceOrder.indexOf(b.evidence.confidence));
     for (const entry of candidates) {
-      entry.used = true;
       const { row, evidence } = entry;
-      const quote = quotes.get(row.citation)!;
-      const condition = row.condition || (CONDITIONAL.test(quote) ? quote : "");
-      const lines = namedClauses(quote, subject);
-      const duplicate = new Set(sameQuantity.get(JSON.stringify([row.value, row.unit]))!.flatMap(item => item.evidence.sources)).size > 1;
-      const base = accepted.values().next().value;
+      const { quote, document, passage } = citations.get(row.citation)!;
+      const warning = [];
       const labels = [title, field];
-      const otherValues = typeof row.value === "number"
-        ? [...subjectQuantities(contexts.get(row.citation)!, subject, row.unit, labels, voltageV)].filter(value => value !== row.value) : [];
-      const reason = condition ? "조건이 붙은 값입니다."
-        : !selectedRevisionHeading(quote) ? "인용 구간에서 선택한 모델과 판본을 확인할 수 없습니다."
-        : !lines.length ? "인용에서 대상을 하나로 확인할 수 없습니다."
-        : NEGATIVE.test(quote) || !exactClaim(lines, row, labels) ? "대상과 항목에 값·단위가 직접 붙은 확정 구절을 확인할 수 없습니다."
-        : otherValues.length ? "같은 구간에 다른 값 " +
-          [row.value, ...otherValues].map(value => row.unit ? `${value} ${row.unit}` : String(value)).join(" · ") + "이 있습니다."
-        : duplicate ? "같은 값의 출처가 여럿입니다. 해당 근거를 골라 주세요."
-        : base && base.unit !== row.unit ? "이미 확인한 값과 단위가 다릅니다." : "";
-      const claim = { ...evidence, value: row.value, unit: row.unit, condition };
-      if (reason) {
-        proposals.claims.push({ target, id, domain, field, label: subject.label + " · " + title, claim, quote, reason });
-      } else {
-        const previous = accepted.get(row.value);
-        if (previous) previous.sources = [...new Set([...previous.sources, ...claim.sources])];
-        else accepted.set(row.value, claim);
+      const lines = namedClauses(quote, subject);
+      if (row.condition || CONDITIONAL.test(passage)) warning.push("조건이 붙은 값인지 확인하세요.");
+      if (!selectedRevisionHeading(quote) || !lines.length) warning.push("인용에서 판본과 대상을 확인하세요.");
+      if (NEGATIVE.test(quote) || !exactClaim(lines, row, labels) || row.condition && !quote.includes(row.condition))
+        warning.push("인용에서 이 값·단위·조건의 직접 근거를 찾지 못했습니다.");
+      if (typeof row.value === "number") {
+        const found = subjectQuantities(document, subject, row.unit, labels, voltageV);
+        const otherValues = [...found].filter(value => value !== row.value);
+        if (otherValues.length) warning.push("같은 문서에 다른 값이 있습니다 · " + otherValues.map(value => [value, row.unit].filter(part => part !== "").join(" ")).join(" · "));
       }
+      if (candidates.some(other => other !== entry && (other.row.value !== row.value || other.row.condition !== row.condition ||
+        other.row.unit !== row.unit || other.evidence.sources[0] !== evidence.sources[0])))
+        warning.push("같은 항목에 다른 제안 또는 출처가 있습니다.");
+      entry.used = true;
+      proposals.claims.push({ target, id, domain, field, label: subject.label + " · " + title,
+        claim: { ...evidence, value: row.value, unit: row.unit, condition: row.condition }, quote, reason: warning.join(" ") });
     }
-    const [base, ...alternatives] = accepted.values();
-    if (!base || !alternatives.length) return base;
-    conflicts.push({ field: id + "." + field, condition: base.condition,
-      values: [base, ...alternatives].map(({ value, unit, confidence, sources }) => ({ value, unit, confidence, sources })) });
-    return { ...base, conflicts: alternatives.map(({ value, confidence, sources }) => ({ value, confidence, sources })) };
   }
 
   function structureRows<R extends { id: string; citation: string }>(incoming: readonly R[]) {
     const seen = new Set<string>();
     return incoming.flatMap(row => {
       const evidence = proof(row.citation);
-      if (!evidence || evidence.confidence === "inferred" || seen.has(row.id)) {
+      if (!evidence || seen.has(row.id)) {
         discarded.push(row.id + " · 구조 근거가 없거나 ID가 겹칩니다.");
         return [];
       }
@@ -514,25 +497,44 @@ function assembledDraft(selected: Candidate, data: unknown, result: Collected, i
     return { label, peers: rows.filter(row => row.id !== id).map(row => row.label) };
   }
 
+  function structureWarning(citation: string, ...labels: string[]) {
+    const { quote, passage } = citations.get(citation)!;
+    return NEGATIVE.test(quote) || CONDITIONAL.test(passage) || !namesInQuote(citation, ...labels)
+      ? "원문에서 이 구조가 성립하는지 확인하세요." : "";
+  }
+
+  function define(target: z.infer<typeof definitionProposal>["target"], row: { id: string; citation: string },
+    label: string, evidence: Proof, ...terms: string[]) {
+    proposals.definitions.push({ target, id: row.id, label, source: evidence.sources[0]!, quote: quotes.get(row.citation)!,
+      reason: structureWarning(row.citation, ...terms) });
+  }
+
   const knownConnectors = new Set(connectors.connectors.map(row => row.id));
   const portRows = structureRows(rows("ports"));
-  for (const { row } of structureRows(rows("nodes"))) model.nodes.push({ id: row.id, label: row.label, kind: row.kind });
+  for (const { row, evidence } of structureRows(rows("nodes"))) {
+    model.nodes.push({ id: row.id, label: row.label, kind: row.kind });
+    define("node", row, "내부 노드 · " + row.label + " · " + row.kind, evidence, row.label);
+  }
   const nodes = new Map(model.nodes.map(node => [node.id, node.label]));
   const namedPorts = portRows.map(({ row }) => row);
   const portSubjects = new Map(namedPorts.map(row => [row.id, subject(row.id, row.label, namedPorts)]));
   for (const { row, evidence } of portRows) {
-    const connector = fact("port", row.id, "", "connector", portSubjects.get(row.id)!,
-      r => !r.unit && typeof r.value === "string" && knownConnectors.has(r.value), "커넥터");
+    proposeFact("port", row.id, "", "connector", portSubjects.get(row.id)!,
+      r => !r.unit && !r.condition && typeof r.value === "string" && knownConnectors.has(r.value), "커넥터");
     for (const entry of grouped.get(key("port", row.id, "", "attachment")) ?? []) {
       const { row: claim, evidence } = entry;
       const node = typeof claim.value === "string" ? nodes.get(claim.value) : undefined;
-      if (claim.condition || claim.unit || evidence.confidence === "inferred" || node === undefined ||
-        !namesInQuote(claim.citation, row.label, node)) continue;
+      if (claim.unit || claim.condition || node === undefined) continue;
       entry.used = true;
-      proposals.attachments.push({ port: row.id, attachment: { ...evidence, value: claim.value }, quote: quotes.get(claim.citation)! });
+      proposals.attachments.push({ port: row.id, attachment: { ...evidence, value: claim.value }, quote: quotes.get(claim.citation)!,
+        reason: structureWarning(claim.citation, row.label, node) });
     }
+    const attachments = proposals.attachments.filter(proposal => proposal.port === row.id);
+    if (new Set(attachments.map(proposal => proposal.attachment.value)).size > 1)
+      for (const proposal of attachments) proposal.reason ||= "다른 부착점 제안이 있습니다.";
     model.ports.push({ id: row.id, label: row.label, location: "", interfaces: [],
-      connector: connector ?? unknown(evidence.sources), attachment: unknown(evidence.sources) });
+      connector: unknown(evidence.sources), attachment: unknown(evidence.sources) });
+    define("port", row, "포트 · " + row.label, evidence, row.label);
   }
   const ports = new Map(model.ports.map(port => [port.id, port]));
   const omissionRows = Map.groupBy(rows("omissions"), row => key(row.target, row.id, row.domain, row.field));
@@ -541,7 +543,8 @@ function assembledDraft(selected: Candidate, data: unknown, result: Collected, i
   function fields(schema: InputSchema, target: "item" | "interface", id: string, domain: string,
     sources: string[], subject: Subject) {
     const result: Record<string, Fact> = Object.create(null);
-    const firstProposal = proposals.claims.length;
+    const firstClaim = proposals.claims.length;
+    const firstOmission = proposals.omissions.length;
     const description = describe(schema);
     const properties = schema instanceof z.ZodObject ? schema.shape as Record<string, z.ZodType> : {};
     for (const group of grouped.values()) {
@@ -550,12 +553,11 @@ function assembledDraft(selected: Candidate, data: unknown, result: Collected, i
       const fieldSchema = Object.hasOwn(properties, row.field) ? properties[row.field] : undefined;
       const property = description.properties?.[row.field];
       const meta = omissionMeta.safeParse(typeof property === "object" ? property.researchOmission : undefined);
-      const value = fact(target, id, domain, row.field, subject, claim => {
+      proposeFact(target, id, domain, row.field, subject, claim => {
         const item = { value: claim.value, unit: claim.unit };
         return fieldSchema ? fieldSchema.safeParse(item).success : schema.safeParse({ [claim.field]: item }).success;
       }, typeof property === "object" ? property.title : undefined, meta.data?.voltageV);
-      if (value) result[row.field] = value;
-      else if (!fieldSchema) {
+      if (!fieldSchema) {
         const proposal = proposals.claims.findLast(p => p.target === target && p.id === id && p.domain === domain && p.field === row.field);
         const placeholder = proposal && unknown(sources, proposal.claim.unit);
         if (placeholder && schema.safeParse({ [row.field]: { value: null, unit: placeholder.unit } }).success) result[row.field] = placeholder;
@@ -566,29 +568,26 @@ function assembledDraft(selected: Candidate, data: unknown, result: Collected, i
       const meta = omissionMeta.safeParse(property.researchOmission);
       if (meta.success && !description.required?.includes(field)) {
         const offered = proposals.claims.some(row => row.target === target && row.id === id && row.domain === domain && row.field === field);
-        const candidates = omissionRows.get(key(target, id, domain, field)) ?? [];
-        const omission = !offered && candidates.find(row => {
-          const quote = quotes.get(row.citation);
+        for (const row of omissionRows.get(key(target, id, domain, field)) ?? []) {
           const evidence = proof(row.citation);
-          if (!quote || !evidence || evidence.confidence === "inferred" || !selectedRevisionHeading(quote) ||
-            CONDITIONAL.test(quote) || NEGATIVE.test(quote) || !excludedFromCompleteList(namedClauses(quote, subject), meta.data)) return false;
-          if (!contextQuantities(contexts.get(row.citation)!, "V").has(meta.data.voltageV)) return true;
-          discarded.push(id + "." + field + " · 인용 주변에 " + meta.data.voltageV + " V가 있습니다.");
-          return false;
-        });
-        if (omission) {
-          omissions.push({ field: id + "." + field, quote: quotes.get(omission.citation)!, source: cited.get(omission.citation)! });
-          continue;
+          if (!evidence) { discarded.push(id + "." + field + " · 검증된 목록 인용이 없습니다."); continue; }
+          const { quote, document, passage } = citations.get(row.citation)!;
+          const voltage = meta.data.voltageV;
+          const reason = contextQuantities(document, "V").has(voltage) ? "같은 문서에 " + voltage + " V가 있습니다."
+            : offered || !selectedRevisionHeading(quote) || CONDITIONAL.test(passage) || NEGATIVE.test(quote) ||
+              !excludedFromCompleteList(namedClauses(quote, subject), meta.data) ? "이 대상의 완전한 목록과 미지원을 확인하세요." : "";
+          const label = subject.label + " · " + (property.title ?? field) + " · 미지원";
+          proposals.omissions.push({ target, id, domain, field, label, source: evidence.sources[0]!, quote, reason });
         }
-        if (candidates.length) discarded.push(id + "." + field + " · 이 대상의 무조건적인 완전 목록을 확인할 수 없습니다.");
       }
       const unit = property.properties?.unit;
       const placeholder = unknown(sources, typeof unit === "object" && typeof unit.const === "string" ? unit.const : "");
       if (properties[field]?.safeParse({ value: placeholder.value, unit: placeholder.unit }).success) result[field] = placeholder;
     }
-    const knownValues = Object.fromEntries(Object.entries(result).map(([name, { value, unit }]) => [name, { value, unit }]));
-    if (schema.safeParse(knownValues).success) return result;
-    proposals.claims.splice(firstProposal);
+    const shape = Object.fromEntries(Object.entries(result).map(([name, { value, unit }]) => [name, { value, unit }]));
+    if (schema.safeParse(shape).success) return result;
+    proposals.claims.splice(firstClaim);
+    proposals.omissions.splice(firstOmission);
     return undefined;
   }
 
@@ -611,6 +610,7 @@ function assembledDraft(selected: Candidate, data: unknown, result: Collected, i
     if (!params) { discarded.push(row.id + " · 인터페이스 필수 필드를 확인할 수 없습니다."); continue; }
     declared.add(signature);
     port.interfaces.push({ id: row.id, domain: row.domain, protocol: row.protocol, role: row.role, evidence, params });
+    define("interface", row, port.label + " · " + row.protocol + " · " + row.role, evidence, port.label, row.protocol, row.role);
   }
   for (const domain of selected.domains) {
     const { plugin } = registrations.get(domain)!;
@@ -627,29 +627,32 @@ function assembledDraft(selected: Candidate, data: unknown, result: Collected, i
       discarded.push(row.id + " · 자원 영역 또는 단위가 맞지 않습니다."); continue;
     }
     const target = subject(row.id, row.label, namedResources);
-    const capacity = fact("resource", row.id, row.domain, "capacity", target, r => r.unit === row.unit && typeof r.value === "number" && r.value >= 0, "용량");
-    const policy = fact("resource", row.id, row.domain, "policy", target, r => !r.unit && typeof r.value === "string", "분배 정책");
+    proposeFact("resource", row.id, row.domain, "capacity", target,
+      r => !r.condition && r.unit === row.unit && typeof r.value === "number" && r.value >= 0, "용량");
+    proposeFact("resource", row.id, row.domain, "policy", target, r => !r.condition && !r.unit && typeof r.value === "string", "분배 정책");
     resources.set(row.id, row.label);
     model.resources.push({ id: row.id, kind: row.kind, domain: row.domain, unit: row.unit,
-      capacity: capacity ?? unknown(evidence.sources, row.unit), policy: policy ?? unknown(evidence.sources) });
+      capacity: unknown(evidence.sources, row.unit), policy: unknown(evidence.sources) });
+    define("resource", row, "자원 · " + row.label + " · " + row.kind + " · " + row.unit, evidence, row.label);
   }
   for (const { row, evidence } of structureRows(rows("edges"))) {
     const from = nodes.get(row.from);
     const to = nodes.get(row.to);
-    if (!from || !to || !namesInQuote(row.citation, from, to)) {
-      discarded.push(row.id + " · 두 노드와 연결을 확인할 인용이 필요합니다."); continue;
+    if (!from || !to) {
+      discarded.push(row.id + " · 참조할 노드가 없습니다."); continue;
     }
     const uses = new Map<string, Draft["proposals"]["edges"][number]["uses"][number]>();
     for (const entry of grouped.get(key("edge", row.id, "", "uses")) ?? []) {
       const { row: claim, evidence } = entry;
       const resource = typeof claim.value === "string" ? resources.get(claim.value) : undefined;
-      if (claim.condition || claim.unit || evidence.confidence === "inferred" || !resource || typeof claim.value !== "string" ||
-        !namesInQuote(claim.citation, from, to, resource)) continue;
+      if (claim.unit || claim.condition || !resource || typeof claim.value !== "string") continue;
       entry.used = true;
       if (!uses.has(claim.value))
-        uses.set(claim.value, { resource: claim.value, evidence, quote: quotes.get(claim.citation)! });
+        uses.set(claim.value, { resource: claim.value, evidence, quote: quotes.get(claim.citation)!,
+          reason: structureWarning(claim.citation, from, to, resource) });
     }
-    proposals.edges.push({ id: row.id, from: row.from, to: row.to, evidence, uses: [...uses.values()], quote: quotes.get(row.citation)! });
+    proposals.edges.push({ id: row.id, from: row.from, to: row.to, evidence, uses: [...uses.values()],
+      quote: quotes.get(row.citation)!, reason: structureWarning(row.citation, from, to) });
   }
   for (const group of grouped.values()) for (const { row, used } of group) {
     if (!used) discarded.push(row.id + "." + row.field + " · 지원하지 않는 값·단위·조건 또는 참조입니다.");
@@ -668,7 +671,7 @@ function assembledDraft(selected: Candidate, data: unknown, result: Collected, i
   } catch (error) {
     if (!(error instanceof Error) || !error.message.includes(" — ")) throw error;
     discarded.push("모델 검증 · " + error.message);
-    return { ...identityDraft(selected, model.sources), discarded, conflicts };
+    return { ...identityDraft(selected, model.sources), discarded };
   }
 }
 
@@ -786,7 +789,7 @@ export function openResearch(dataDir: string, connectors: Connectors, client: Re
       "인터페이스 params의 주장은 자기 interface ID와 영역, 자원은 capacity/policy를 사용하세요.",
       "researchOmission 필드는 검증된 원문에 메타의 제목으로 시작하는 완전한 목록이 명시되고 그 목록에 해당 항목이 없을 때만 omissions에 넣으세요.",
       "간선에 자원 사용 근거가 있으면 domain이 빈 문자열인 uses 주장에 자원 ID를 넣으세요. 같은 판본·조건의 값이 다르면 각각 남기세요.",
-    ].join("\n"), { revision: chosen.revision, text: found.text, citations: found.citations.map(({ context: _context, ...citation }) => citation),
+    ].join("\n"), { revision: chosen.revision, text: found.text, citations: found.citations.map(({ id, source, quote, verified }) => ({ id, source, quote, verified })),
       sources: [...found.sources.values()].map(source => ({ ...source, locator: researchQuery(source.locator) })),
       domains: vocabulary(chosen.domains), connectors: connectors.connectors.map(connector => connector.id) }, NORMALIZE, true);
     if (normalized.stop) { stop(job, normalized.stop); return; }

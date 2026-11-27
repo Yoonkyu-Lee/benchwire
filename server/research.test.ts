@@ -81,7 +81,7 @@ test("판본 선택 전에는 상세 조사하지 않고 무료 재열기에서 
   assert.equal(calls.length, 3);
 });
 
-test("다른 판본·없는 인용·잘못된 값과 단위를 버리고 나머지 주장과 미확인 배선을 살린다", async t => {
+test("판본·출처·스키마가 맞는 주장과 배선은 확인해야 할 초안으로 남긴다", async t => {
   const dir = await dataDir(t);
   const connectors = openLibrary(root, dir).describe().connectors;
   const { client } = fixtureClient([recording.identify, recording.investigate, recording.normalized]);
@@ -89,19 +89,22 @@ test("다른 판본·없는 인용·잘못된 값과 단위를 버리고 나머�
   const ready = await settled(research, research.submit(input));
   const result = await settled(research, research.submit(choose(ready)));
   assert.equal(result.phase, "complete");
-  const { model, discarded, conflicts, proposals } = result.draft!;
+  const { model, discarded, proposals } = result.draft!;
   assert.deepEqual(model.ports.map(port => port.id), ["a"]);
   assert.deepEqual(model.ports[0]!.attachment, {
     value: null, unit: "", condition: "", confidence: "unknown", sources: ["source-1"],
   });
-  assert.equal(model.ports[0]!.connector.value, "usb-c-receptacle");
+  assert.equal(model.ports[0]!.connector.value, null);
+  assert(proposals.claims.some(row => row.field === "connector" && row.claim.value === "usb-c-receptacle"));
   const params = model.ports[0]!.interfaces[0]!.params;
   assert.equal(params.accepts9!.value, null);
   assert.equal(params.reserveW!.value, null);
-  assert.equal(params.accepts5!.value, false);
-  assert.equal(params.maxW!.value, 30);
-  assert.equal(params.pdo5!.value, 3);
-  assert.deepEqual(conflicts, []);
+  assert.equal(params.accepts5!.value, null);
+  assert.equal(params.maxW!.value, null);
+  assert.equal(params.pdo5!.value, null);
+  assert(proposals.claims.some(row => row.field === "accepts5" && row.claim.value === false));
+  assert(proposals.claims.some(row => row.field === "pdo5" && row.claim.value === 3));
+  assert.deepEqual(proposals.definitions.map(row => row.target), ["node", "node", "port", "interface", "resource"]);
   assert(!model.sources.some(source => source.locator.endsWith("fa-25")));
   assert(model.sources.every(source => source.retrievedAt === "2026-11-27"));
   assert.equal(model.edges.length, 0);
@@ -112,7 +115,7 @@ test("다른 판본·없는 인용·잘못된 값과 단위를 버리고 나머�
   assert(discarded.some(message => message.includes("accepts9")));
 });
 
-test("같은 판본의 충돌값마다 출처를 저장하고 본값에서 단위와 조건을 공통으로 읽는다", async t => {
+test("충돌한 조사 값은 각 출처와 경고를 가진 확인 전 제안이다", async t => {
   const dir = await dataDir(t);
   const connectors = openLibrary(root, dir).describe().connectors;
   const { client } = fixtureClient([recording.identify, recording.investigate, recording.conflicting]);
@@ -120,12 +123,14 @@ test("같은 판본의 충돌값마다 출처를 저장하고 본값에서 단�
   const ready = await settled(research, research.submit(input));
   const result = await settled(research, research.submit(choose(ready)));
   assert.equal(result.phase, "complete");
-  const { conflicts, model } = result.draft!;
-  assert.deepEqual(conflicts[0]?.values.map(item => [item.value, item.sources]), [[30, ["source-1"]], [60, ["detail-source-2"]]]);
+  const { proposals, model } = result.draft!;
+  const claims = proposals.claims.filter(row => row.field === "maxW" && !row.claim.condition);
+  assert.deepEqual(claims.map(row => [row.claim.value, row.claim.sources]), [[30, ["source-1"]], [60, ["detail-source-2"]]]);
+  assert(claims.every(row => row.reason.includes("다른 제안")));
   const fact = model.ports[0]?.interfaces[0]?.params.maxW;
-  assert.equal(fact?.value, 30);
+  assert.equal(fact?.value, null);
   assert.equal(fact.unit, "W");
-  assert.deepEqual(fact.conflicts, [{ value: 60, confidence: "review", sources: ["detail-source-2"] }]);
+  assert.equal(fact.conflicts, undefined);
 });
 
 test("예산을 넘길 다음 호출은 실행하지 않고 이미 확인한 판본과 출처를 둔다", async t => {
@@ -188,7 +193,7 @@ function withOfficialQuote(extra: string, changeDocument = true) {
   return message;
 }
 
-test("인용의 30 W를 99 W로 바꾼 정규화 값을 버린다", async t => {
+test("인용의 30 W를 99 W로 바꾼 정규화 값은 경고 있는 확인 전 제안이다", async t => {
   const dir = await dataDir(t);
   const connectors = openLibrary(root, dir).describe().connectors;
   const normalized = structuredClone(recording.normalized);
@@ -202,7 +207,7 @@ test("인용의 30 W를 99 W로 바꾼 정규화 값을 버린다", async t => {
   const research = openResearch(dir, connectors, client);
   const result = await settled(research, research.submit(choose(await settled(research, research.submit(input)))));
   assert.equal(result.draft!.model.ports[0]!.interfaces[0]!.params.maxW!.value, null);
-  assert(result.draft!.discarded.some(row => row.includes("maxW") && row.includes("인용")));
+  assert.match(result.draft!.proposals.claims.find(row => row.field === "maxW")!.reason, /값·단위·조건/);
 });
 
 
@@ -224,9 +229,10 @@ function officialContext(quote: string, before = "", after = "", codePoints = fa
 const maxPowerQuote = "Morrow Finch FA-24. USB-C A: maxW: 99 W.";
 const pdoListQuote = "Morrow Finch FA-24. USB-C A: All source PDOs: 5 V / 3 A, 9 V / 2 A.";
 
-test("적대적 인용 변형은 값이나 PDO 미지원으로 확정하지 않는다", async t => {
+test("적대적 인용 변형은 미확인으로 두고 값과 PDO 생략의 개별 확인을 요구한다", async t => {
   const dir = await dataDir(t);
   const connectors = openLibrary(root, dir).describe().connectors;
+  const distant = "\n\n" + "제품 설명 ".repeat(110) + "\n";
   const cases = [
     { name: "다른 포트", quote: " USB-C A 30 W, USB-C B 99 W.", secondPort: true },
     { name: "영어 조건", quote: " USB-C A: 99 W only when a single port is in use." },
@@ -250,11 +256,19 @@ test("적대적 인용 변형은 값이나 PDO 미지원으로 확정하지 않�
     { name: "열 제목에 단위를 둔 비교표", quote: maxPowerQuote, after: "\n| Ports used | Max W |\n| --- | --- |\n| 1 | 99 |\n| 2 | 30 |", otherValue: true },
     { name: "인용에 20 V가 있는 완전 목록", quote: pdoListQuote + " 1-port operation: 20 V / 3 A.", omission: true, nearbyPdo: true },
     { name: "20 V가 목록 선언보다 먼저 나옴", quote: "Morrow Finch FA-24. 1-port operation: 20V / 3A. USB-C A: All source PDOs: 5 V / 3 A, 9 V / 2 A.", omission: true, nearbyPdo: true },
+    { name: "인용에서 먼 문단의 다른 전력값", quote: maxPowerQuote, after: distant + "2-port operation: 30 W.", otherValue: true },
+    { name: "다른 단위로 쓴 전력값", quote: maxPowerQuote + " 1-port operation: 99,000 mW. 2-port operation: 30,000 mW (0.030 kW).", otherValue: true },
+    { name: "풀어 쓴 단위가 있는 표", quote: maxPowerQuote, after: "\n| Ports used | Output (Watts) |\n| --- | --- |\n| 1 | 99 |\n| 2 | 30 |", otherValue: true },
+    { name: "탭 표", quote: maxPowerQuote, after: "\nPorts used\tOutput (W)\n1\t99\n2\t30", otherValue: true },
+    { name: "숫자 없는 조건문", quote: maxPowerQuote, after: " Available exclusively in standalone operation.", context: true },
     { name: "인용 바로 뒤 표에 20 V가 있음", quote: pdoListQuote, after: "\nPorts used | Voltage (V)\n1 | 20", omission: true, nearbyPdo: true },
+    { name: "인용에서 먼 문단의 20 V", quote: pdoListQuote, after: distant + "1-port operation: 20 V / 3 A.", omission: true, nearbyPdo: true },
+    { name: "밀리볼트로 쓴 20 V", quote: pdoListQuote + " 1-port operation: 20,000 mV / 3 A.", omission: true, nearbyPdo: true },
+    { name: "밀리볼트 표의 20 V", quote: pdoListQuote, after: "\n| Ports used | Voltage (mV) |\n| --- | --- |\n| 1 | 20,000 |", omission: true, nearbyPdo: true },
   ];
   for (const variant of cases) await t.test(variant.name, async child => {
     const isolated = await dataDir(child);
-    const found = variant.otherValue || variant.nearbyPdo
+    const found = variant.otherValue || variant.nearbyPdo || variant.context
       ? officialContext(variant.quote, variant.before, variant.after, variant.codePoints)
       : withOfficialQuote(variant.quote);
     if (variant.splitQuote) {
@@ -297,24 +311,29 @@ test("적대적 인용 변형은 값이나 PDO 미지원으로 확정하지 않�
     const params = draft.model.ports.find(port => port.id === "a")?.interfaces[0]?.params;
     assert.equal(params?.maxW?.value, null);
     assert.equal(params.pdo20?.value, null);
-    assert.deepEqual(draft.omissions, []);
-    if (variant.otherValue || ["다른 포트", "영어 조건", "한국어 조건", "같은 문서의 미식별 판본", "출처 둘의 같은 값",
-      "정규화가 대상과 조건을 비움", "정규화가 경쟁 포트를 누락"].includes(variant.name)) {
+    if (variant.omission) {
+      assert.equal(draft.proposals.omissions.length, 1);
+      const omission = draft.proposals.omissions[0]!;
+      assert.equal(omission.field, "pdo20");
+      assert(omission.reason);
+      if (variant.nearbyPdo) assert.match(omission.reason, /20 V/);
+    } else if (variant.citation === "quote-3") {
+      assert.deepEqual(draft.proposals.claims, []);
+      assert(draft.discarded.some(row => row.includes("maxW")));
+    } else {
       const matches = draft.proposals.claims.filter(row => row.field === "maxW" && row.claim.value === 99);
       assert.equal(matches.length, variant.duplicate ? 2 : 1);
       for (const proposal of matches) {
-        assert.match(proposal.quote, /99\s*W/);
-        if (variant.otherValue) assert.match(proposal.reason, /같은 구간에 다른 값.*99 W.*30 W/);
-        else assert(proposal.reason);
+        assert(proposal.reason);
+        if (variant.otherValue) assert.match(proposal.reason, /같은 문서에 다른 값.*30 W/);
+        if (variant.context) assert.match(proposal.reason, /조건이 붙은 값/);
         assert.equal(proposal.claim.sources.length, 1);
       }
-    } else if (variant.nearbyPdo) {
-      assert(draft.discarded.some(row => row.includes("pdo20") && row.includes("20 V")));
-    } else assert(draft.discarded.some(row => row.includes(variant.omission ? "pdo20" : "maxW")));
+    }
   });
 });
 
-test("확인된 단일 값은 반복, 다른 단위, 다른 대상과 문단의 값이 있어도 유지한다", async t => {
+test("같은 값의 환산 표기와 다른 양·다른 포트가 있어도 일괄 확인할 수 있다", async t => {
   const dir = await dataDir(t);
   const connectors = openLibrary(root, dir).describe().connectors;
   const normalized = structuredClone(recording.normalized);
@@ -323,16 +342,47 @@ test("확인된 단일 값은 반복, 다른 단위, 다른 대상과 문단의 
   doc.claims = [{ ...doc.claims.find((row: { field: string }) => row.field === "maxW"), value: 99 }];
   doc.ports = [{ id: "a", label: "USB-C A", citation: "quote-1" }, { id: "b", label: "USB-C B", citation: "quote-1" }];
   text.text = JSON.stringify(doc);
-  const found = officialContext(maxPowerQuote, "41 W " + "내용 ".repeat(200),
-    " 99.0 W. 30 mW. USB-C B: maxW: 30 W.\r\n| Port | Max. W |\r\n| USB-C A | 99 |\r\n| USB-C B | 42 |\r\n\r\n다른 문단 50 W.");
+  const found = officialContext(maxPowerQuote, "내용 ".repeat(200) + "\n\n",
+    " 99.0 W. 99,000 mW. 0.099 kW. 12 V. USB-C B: maxW: 30 W.\r\n| Port | Max. W |\r\n| USB-C A | 99 |\r\n| USB-C B | 42 |\r\n\r\nUSB-C B: maxW: 50 W.");
   const { client } = fixtureClient([oneCandidate(), found, normalized]);
   const research = openResearch(dir, connectors, client);
   const result = await settled(research, research.submit(input));
   assert.equal(result.phase, "complete", result.stop ?? "");
   const { model, proposals } = result.draft!;
-  assert.deepEqual(model.ports[0]?.interfaces[0]?.params.maxW,
+  assert.equal(model.ports[0]?.interfaces[0]?.params.maxW?.value, null);
+  assert.deepEqual(proposals.claims.find(row => row.field === "maxW")?.claim,
     { value: 99, unit: "W", condition: "", confidence: "official", sources: ["source-1"] });
-  assert.deepEqual(proposals.claims, []);
+  assert.equal(proposals.claims.find(row => row.field === "maxW")?.reason, "");
+});
+
+test("전송률 단위를 환산해 같은 양을 구별하기 전에도 모두 초안으로 남긴다", async t => {
+  const identify = oneCandidate();
+  const identity = identify.content.find(row => row.type === "text")!;
+  const candidates = JSON.parse(identity.text);
+  candidates[0].domains = ["data"];
+  identity.text = JSON.stringify(candidates);
+  const normalized = structuredClone(recording.normalized);
+  const text = normalized.content.find(row => row.type === "text")!;
+  const doc = JSON.parse(text.text);
+  doc.ports = doc.nodes = doc.interfaces = doc.edges = [];
+  doc.resources = [{ id: "transfer", label: "Transfer", kind: "total", domain: "data", unit: "MB/s", citation: "quote-1" }];
+  doc.claims = [{ target: "resource", id: "transfer", field: "capacity", domain: "data", unit: "MB/s", value: 500,
+    citation: "quote-1", confidence: "official", condition: "" }];
+  text.text = JSON.stringify(doc);
+  for (const same of [true, false]) {
+    const dir = await dataDir(t);
+    const quote = "Morrow Finch FA-24. Transfer: capacity: 500 MB/s.";
+    const found = officialContext(quote, "", same ? "\nTransfer capacity: 0.5 GB/s." : "\nTransfer capacity: 0.25 GB/s.");
+    const { client } = fixtureClient([identify, found, normalized]);
+    const connectors = openLibrary(root, dir).describe().connectors;
+    const research = openResearch(dir, connectors, client);
+    const draft = (await settled(research, research.submit(input))).draft!;
+    assert.equal(draft.model.resources[0]?.capacity.value, null);
+    const proposal = draft.proposals.claims[0]!;
+    assert.equal(proposal.claim.value, 500);
+    if (same) assert.equal(proposal.reason, "");
+    else assert.match(proposal.reason, /다른 값.*250 MB\/s/);
+  }
 });
 
 test("인용 메타데이터에만 있는 구간을 실제 열람 본문으로 취급하지 않는다", async t => {
@@ -354,6 +404,7 @@ test("연결되지 않았다는 원문으로 부착을 자동 저장하지 않�
   assert.equal(result.draft!.model.ports[0]!.attachment.value, null);
   assert.deepEqual(result.draft!.model.edges, []);
   assert.match(result.draft!.proposals.attachments[0]!.quote, /are not connected/);
+  assert(result.draft!.proposals.attachments[0]!.reason);
   assert.equal(result.draft!.proposals.edges[0]!.uses[0]!.resource, "supply");
 });
 
@@ -389,7 +440,7 @@ test("다른 포트의 전체 목록으로 미지원 처리하지 않고 PDO 확
   assert(assessment.quests.some(quest => loaded.claims[quest.claim]?.field === "pdo20"));
 });
 
-test("완전한 PDO 목록의 인용이 있을 때만 해당 슬롯의 미선언을 허용한다", async t => {
+test("완전한 PDO 목록의 미지원 제안도 사용자 확인 전에는 미확인이다", async t => {
   const dir = await dataDir(t);
   const connectors = openLibrary(root, dir).describe().connectors;
   const normalized = structuredClone(recording.normalized);
@@ -398,17 +449,21 @@ test("완전한 PDO 목록의 인용이 있을 때만 해당 슬롯의 미선언
   doc.omissions = ["pdo20", "pdo5", "accepts20"].map(field =>
     ({ target: "interface", id: "usb-a", domain: "power", field, citation: "quote-1" }));
   text.text = JSON.stringify(doc);
-  const found = withOfficialQuote("\nUSB-C A: All source PDOs: 5 V / 3 A, 9 V / 2 A");
+  const found = officialContext(pdoListQuote);
   const { client } = fixtureClient([oneCandidate(), found, normalized]);
   const research = openResearch(dir, connectors, client);
   const result = await settled(research, research.submit(input));
   const draft = result.draft!;
   const params = draft.model.ports[0]!.interfaces[0]!.params;
-  assert(!Object.hasOwn(params, "pdo20"));
-  assert.equal(params.pdo5!.value, 3);
+  assert.equal(params.pdo20!.value, null);
+  assert.equal(params.pdo5!.value, null);
   assert.equal(params.accepts20!.value, null);
-  assert.match(draft.omissions[0]!.quote, /All source PDOs/);
-  assert.equal(draft.omissions[0]!.source, "source-1");
+  const missing = draft.proposals.omissions.find(row => row.field === "pdo20")!;
+  assert.match(missing.quote, /All source PDOs/);
+  assert.equal(missing.source, "source-1");
+  assert.equal(missing.reason, "");
+  assert(draft.proposals.omissions.find(row => row.field === "pdo5")?.reason);
+  assert(draft.proposals.omissions.find(row => row.field === "accepts20")?.reason);
 });
 
 test("한 이름에서 판본 두 개를 순서대로 조사하고 각 결과를 다시 연다", async t => {
@@ -431,7 +486,8 @@ test("한 이름에서 판본 두 개를 순서대로 조사하고 각 결과를
   const b = await settled(research, research.submit(choose(again, 1)));
   assert.notEqual(a.id, b.id);
   assert.equal(b.draft?.model.revision, "FA-25");
-  assert.equal(b.draft?.model.ports[0]?.interfaces[0]?.params.maxW?.value, 99);
+  assert.equal(b.draft?.model.ports[0]?.interfaces[0]?.params.maxW?.value, null);
+  assert.equal(b.draft?.proposals.claims.find(row => row.field === "maxW")?.claim.value, 99);
   const reopened = openResearch(dir, connectors, client);
   assert.equal(reopened.submit(choose(again)).id, a.id);
   assert.equal(reopened.submit(choose(again, 1)).id, b.id);

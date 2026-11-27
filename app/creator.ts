@@ -1,4 +1,4 @@
-// 수동 모델의 주장과 구조를 편집하고 검증된 모델을 저장 경로에 넘긴다.
+// 수동 모델을 편집하고 AI 조사 초안은 원문과 대조해 확인한 뒤에만 저장한다.
 import charger from "../catalog/templates/usb-c-charger.json" with { type: "json" };
 import { domains, type DomainRegistration } from "../domains/registry.ts";
 import { modelFile, parseDocument } from "../scene/files.ts";
@@ -14,6 +14,7 @@ type Resource = Model["resources"][number];
 type Node = Model["nodes"][number];
 type Edge = Model["edges"][number];
 type Source = Model["sources"][number];
+type ResearchDraft = NonNullable<ResearchStatus["draft"]>;
 type NamedChoice = readonly [id: string, label: string];
 type PortSeed = { name: string; connector: string; domain: string; protocol: string; role: string; unknownPrefixes: readonly string[] };
 const trust = [["inferred", "추정"], ["official", "공식"], ["review", "리뷰"], ["community", "커뮤니티"]] as const;
@@ -113,7 +114,7 @@ async function researchJson<T>(path: string, payload?: object): Promise<T> {
   return response.json() as Promise<T>;
 }
 
-function mountResearch(root: HTMLElement, fillDraft: (model: Model) => void) {
+function mountResearch(root: HTMLElement, reviewDraft: (draft: ResearchDraft) => void) {
   const model = input(root, "모델명 또는 공개 URL");
   model.maxLength = 250;
   const price = el("p");
@@ -165,108 +166,8 @@ function mountResearch(root: HTMLElement, fillDraft: (model: Model) => void) {
     if (result.draft) {
       const draft = result.draft;
       const use = button("조사 초안 불러오기");
-      const { proposals } = draft;
-      const claims = new Map<string, (typeof proposals.claims)[number]>();
-      const attachments = new Map<string, Claim>();
-      const edges: (() => Edge | undefined)[] = [];
-      use.onclick = () => {
-        const model: Model = structuredClone(draft.model);
-        for (const { target, id, domain, field, claim } of claims.values()) {
-          const chosen = { ...claim, confidence: "inferred" as const };
-          if (target === "item") {
-            const attributes = model.attributes ??= {};
-            attributes[domain] = { ...attributes[domain], [field]: chosen };
-          } else if (target === "interface") {
-            const iface = model.ports.flatMap(port => port.interfaces).find(row => row.id === id)!;
-            iface.params = { ...iface.params, [field]: chosen };
-          } else if (target === "port") model.ports.find(port => port.id === id)!.connector = chosen;
-          else model.resources.find(resource => resource.id === id)![field === "capacity" ? "capacity" : "policy"] = chosen;
-        }
-        for (const port of model.ports) port.attachment = attachments.get(port.id) ?? port.attachment;
-        model.edges.push(...edges.flatMap(read => read() ?? []));
-        fillDraft(model);
-      };
-      details.append(el("p", "초안을 불러오면 생성기의 입력이 바뀝니다. 내용을 확인한 뒤 저장하세요."), use);
-      if (proposals.claims.length || proposals.attachments.length || proposals.edges.length) {
-        const review = section(details, "AI 제안");
-        review.append(el("p", "인용문을 읽고 확인한 값과 배선을 선택한 뒤 초안을 불러오세요. 선택한 값은 추정으로 들어갑니다."));
-        function approve(box: HTMLElement, title: string, quote: string, proof: Claim) {
-          const checkbox = el("input");
-          checkbox.type = "checkbox";
-          field(box, title, checkbox);
-          box.append(el("blockquote", quote), ...proof.sources.map(citation));
-          return checkbox;
-        }
-        const byField = new Map<string, HTMLInputElement[]>();
-        for (const proposal of proposals.claims) {
-          const { target, id, domain, field, label, claim, quote, reason } = proposal;
-          const key = JSON.stringify([target, id, domain, field]);
-          const row = el("div");
-          const value = [String(claim.value), claim.unit].filter(Boolean).join(" ");
-          const control = approve(row, `${label} · ${value}`, quote, claim);
-          row.append(el("p", reason));
-          review.append(row);
-          const related = byField.get(key) ?? [];
-          related.push(control);
-          byField.set(key, related);
-          control.onchange = () => {
-            if (!control.checked) { claims.delete(key); return; }
-            for (const other of related) if (other !== control) other.checked = false;
-            claims.set(key, proposal);
-          };
-        }
-        const byPort = new Map<string, HTMLInputElement[]>();
-        const nodeLabel = (id: string) => draft.model.nodes.find(node => node.id === id)?.label ?? id;
-        for (const { port, attachment, quote } of proposals.attachments) {
-          const label = draft.model.ports.find(row => row.id === port)?.label ?? port;
-          const checkbox = approve(review, `부착 · ${label} → ${nodeLabel(String(attachment.value))}`, quote, attachment);
-          const related = byPort.get(port) ?? [];
-          related.push(checkbox);
-          byPort.set(port, related);
-          checkbox.onchange = () => {
-            if (!checkbox.checked) { attachments.delete(port); return; }
-            for (const other of related) if (other !== checkbox) other.checked = false;
-            attachments.set(port, attachment);
-          };
-        }
-        for (const { quote, uses, ...edge } of proposals.edges) {
-          const accepted = approve(review, `간선 · ${nodeLabel(edge.from)} → ${nodeLabel(edge.to)}`, quote, edge.evidence);
-          const resources = uses.map(({ quote, ...claim }) => {
-            const control = approve(review, "자원 사용 · " + claim.resource, quote, claim.evidence);
-            control.disabled = true;
-            return { claim, control };
-          });
-          accepted.onchange = () => {
-            for (const { control } of resources) {
-              control.disabled = !accepted.checked;
-              if (control.disabled) control.checked = false;
-            }
-          };
-          edges.push(() => accepted.checked ? { ...edge, uses: resources.filter(row => row.control.checked).map(row => row.claim) } : undefined);
-        }
-      }
-      if (draft.omissions.length) {
-        const list = el("ul");
-        for (const omission of draft.omissions) {
-          const row = el("li", omission.field);
-          row.append(el("blockquote", omission.quote), citation(omission.source));
-          list.append(row);
-        }
-        details.append(el("p", "완전한 목록에서 제외된 항목"), list);
-      }
-      if (draft.conflicts.length) {
-        const conflicts = el("ul");
-        for (const conflict of draft.conflicts) {
-          const row = el("li", conflict.field + (conflict.condition ? " · " + conflict.condition : ""));
-          for (const value of conflict.values) {
-            row.append(" · " + [String(value.value), value.unit].filter(Boolean).join(" ") +
-              " (" + (trust.find(([id]) => id === value.confidence)?.[1] ?? value.confidence) + ")");
-            for (const id of value.sources) row.append(" ", citation(id));
-          }
-          conflicts.append(row);
-        }
-        details.append(el("p", "출처 충돌"), conflicts);
-      }
+      use.onclick = () => reviewDraft(draft);
+      details.append(el("p", "생성기에서 인용과 출처를 보고 초안의 값과 배선을 확인하세요."), use);
       if (draft.discarded.length) {
         const dropped = el("details");
         const list = el("ul");
@@ -381,6 +282,139 @@ function duplicateModel(model: Model): Model {
   };
 }
 
+function reviewResearch(root: HTMLElement, draft: ResearchDraft, progress: (pending: number) => void, fillDraft: (model: Model) => void) {
+  const model: Model = structuredClone(draft.model);
+  const sources = new Map(model.sources.map(source => [source.id, source]));
+  const definitions = new Set<string>();
+  const definitionKey = (target: string, id: string) => target + ":" + id;
+  const slot = (target: string, id: string, domain: string, field: string) => JSON.stringify([target, id, domain, field]);
+  type Alternative = { slot: string; group: string };
+  const rows: { control: HTMLSelectElement; reason: string; apply: () => void; alternative: Alternative | undefined }[] = [];
+  root.replaceChildren(el("legend", "조사 초안 확인"));
+  const bulk = button("경고 없는 값 모두 확인");
+  const notice = el("p");
+  notice.setAttribute("role", "status");
+  const warned = el("div");
+  const clean = el("div");
+  root.append(el("p", "원문을 읽고 값과 배선을 확인하거나 미확인으로 비우세요."), bulk, notice, warned, clean);
+
+  function add(label: string, evidence: { quote: string; reason: string }, sourceIds: readonly string[], apply: () => void,
+    alternative?: Alternative) {
+    const row = section(evidence.reason ? warned : clean, label);
+    const quote = el("blockquote", evidence.quote);
+    quote.style.whiteSpace = "pre-wrap";
+    quote.style.overflowWrap = "anywhere";
+    row.append(quote);
+    for (const id of sourceIds) {
+      const source = sources.get(id)!;
+      const link = el("a", source.title);
+      link.href = source.locator;
+      link.target = "_blank";
+      link.rel = "noopener noreferrer";
+      row.append(link);
+    }
+    if (evidence.reason) row.append(el("p", "경고 · " + evidence.reason));
+    const control = select(row, "검토", [["", "확인 전"], ["confirmed", "원문과 대조해 확인"], ["cleared", "미확인으로 비우기"]]);
+    rows.push({ control, reason: evidence.reason, apply, alternative });
+    control.onchange = () => {
+      const incompatible = control.value === "confirmed" && alternative && rows.some(other =>
+        other.control.value === "confirmed" && other.alternative?.slot === alternative.slot && other.alternative.group !== alternative.group);
+      if (incompatible) {
+        control.value = "";
+        notice.textContent = "조건이 다른 값이나 미지원 제안은 같은 항목에 함께 넣을 수 없습니다. 사용할 제안만 확인해 주세요.";
+      } else {
+        notice.textContent = "";
+        update();
+      }
+    };
+  }
+
+  function reviewedClaim(previous: Claim | undefined, claim: ResearchDraft["proposals"]["claims"][number]["claim"]): Claim {
+    if (previous?.value == null) return { ...claim };
+    if (previous.value === claim.value)
+      return { ...previous, sources: [...new Set([...previous.sources, ...claim.sources])] };
+    const conflicts = previous.conflicts ??= [];
+    const same = conflicts.find(row => row.value === claim.value);
+    if (same) same.sources = [...new Set([...same.sources, ...claim.sources])];
+    else conflicts.push({ value: claim.value, confidence: claim.confidence, sources: claim.sources });
+    return previous;
+  }
+
+  const { proposals } = draft;
+  const ports = new Map(model.ports.map(port => [port.id, port]));
+  const interfaces = new Map(model.ports.flatMap(port => port.interfaces).map(iface => [iface.id, iface]));
+  const resources = new Map(model.resources.map(resource => [resource.id, resource]));
+  const labelNode = (id: string) => model.nodes.find(node => node.id === id)?.label ?? id;
+  for (const { target, id, label, source, quote, reason } of proposals.definitions)
+    add(label, { quote, reason }, [source], () => { definitions.add(definitionKey(target, id)); });
+  for (const proposal of proposals.claims) {
+    const { target, id, domain, field, label, claim } = proposal;
+    const value = [String(claim.value), claim.unit].filter(Boolean).join(" ");
+    add([label, value, claim.condition].filter(Boolean).join(" · "), proposal, claim.sources, () => {
+      if (target === "item" || target === "interface") {
+        const fields = target === "item" ? (model.attributes ??= {})[domain] ??= {} : interfaces.get(id)!.params;
+        fields[field] = reviewedClaim(fields[field], claim);
+      } else if (target === "port") {
+        const port = ports.get(id)!;
+        port.connector = reviewedClaim(port.connector, claim);
+      } else {
+        const resource = resources.get(id)!;
+        const key = field === "capacity" ? "capacity" : "policy";
+        resource[key] = reviewedClaim(resource[key], claim);
+      }
+    }, { slot: slot(target, id, domain, field), group: JSON.stringify([claim.unit, claim.condition]) });
+  }
+  for (const omission of proposals.omissions) {
+    const { target, id, domain, field } = omission;
+    add(omission.label, omission, [omission.source], () => {
+      const fields = target === "item" ? model.attributes?.[domain] : interfaces.get(id)?.params;
+      if (fields) delete fields[field];
+    }, { slot: slot(target, id, domain, field), group: "omitted" });
+  }
+  for (const proposal of proposals.attachments) {
+    const { port, attachment } = proposal;
+    add("부착 · " + ports.get(port)!.label + " → " + labelNode(String(attachment.value)), proposal, attachment.sources,
+      () => { ports.get(port)!.attachment = attachment; }, { slot: slot("port", port, "", "attachment"), group: String(attachment.value) });
+  }
+  for (const proposal of proposals.edges) {
+    const { id, from, to, evidence, uses } = proposal;
+    const edge: Edge = { id, from, to, evidence, uses: [] };
+    add("간선 · " + labelNode(from) + " → " + labelNode(to), proposal, evidence.sources, () => { model.edges.push(edge); });
+    for (const use of uses)
+      add("자원 사용 · " + use.resource, use, use.evidence.sources, () => { edge.uses.push({ resource: use.resource, evidence: use.evidence }); });
+  }
+
+  function update() {
+    const pending = rows.filter(row => !row.control.value);
+    bulk.disabled = !pending.some(row => !row.reason);
+    if (pending.length) { progress(pending.length); return; }
+    for (const row of rows) if (row.control.value === "confirmed") row.apply();
+    model.nodes = model.nodes.filter(node => definitions.has(definitionKey("node", node.id)));
+    model.resources = model.resources.filter(resource => definitions.has(definitionKey("resource", resource.id)));
+    model.ports = model.ports.filter(port => definitions.has(definitionKey("port", port.id)));
+    for (const port of model.ports) {
+      port.interfaces = port.interfaces.filter(iface => definitions.has(definitionKey("interface", iface.id)));
+      if (port.attachment.value !== null && !definitions.has(definitionKey("node", String(port.attachment.value))))
+        port.attachment = draft.model.ports.find(row => row.id === port.id)!.attachment;
+    }
+    model.edges = model.edges.filter(edge => definitions.has(definitionKey("node", edge.from)) && definitions.has(definitionKey("node", edge.to)));
+    for (const edge of model.edges) edge.uses = edge.uses.filter(use => definitions.has(definitionKey("resource", use.resource)));
+    fillDraft(model);
+    progress(0);
+  }
+
+  bulk.onclick = () => {
+    notice.textContent = "";
+    for (const row of rows) if (!row.reason && !row.control.value) row.control.value = "confirmed";
+    update();
+  };
+  update();
+  if (!root.hidden) {
+    root.scrollIntoView({ block: "start" });
+    (bulk.disabled ? rows[0]?.control : bulk)?.focus({ preventScroll: true });
+  }
+}
+
 export function mountCreator(dialog: HTMLDialogElement, documents: Documents, save: (model: Model, instanceId: string) => Promise<void>,
   registrations: readonly DomainRegistration[] = domains) {
   dialog.classList.add("creator", "scenario-panel");
@@ -398,10 +432,14 @@ export function mountCreator(dialog: HTMLDialogElement, documents: Documents, sa
   error.className = "scenario-error creator-error";
   error.setAttribute("role", "alert");
   const submit = button("저장하고 배치", "submit");
-  footer.append(error, submit);
+  const reviewStatus = el("p");
+  reviewStatus.setAttribute("role", "status");
+  footer.append(error, reviewStatus, submit);
   form.append(header, body, footer);
   dialog.append(form);
   const research = section(body, "AI 조사");
+  const review = section(body, "조사 초안 확인");
+  review.hidden = true;
   const copySection = section(body, "기존 모델에서 시작");
   const toCopy = select(copySection, "복제할 모델 판본", [["", "선택"], ...Array.from(documents.models, ([key, model]) =>
     [key, `${model.name} · ${key}`] as const)]);
@@ -745,7 +783,18 @@ export function mountCreator(dialog: HTMLDialogElement, documents: Documents, sa
     name.focus({ preventScroll: true });
   }
 
-  mountResearch(research, fillDraft);
+  mountResearch(research, draft => reviewResearch(review, draft, pending => {
+    review.hidden = !pending;
+    submit.disabled = pending > 0;
+    reviewStatus.textContent = pending ? "확인 전 값·배선 " + pending + "개" : "";
+    for (const panel of body.querySelectorAll<HTMLElement>(":scope > fieldset")) {
+      if (panel !== review && panel !== research) panel.hidden = pending > 0;
+    }
+    if (!pending) {
+      identity.scrollIntoView({ block: "start" });
+      name.focus({ preventScroll: true });
+    }
+  }, fillDraft));
 
   const instanceId = "item-" + crypto.randomUUID();
   form.onsubmit = async event => {
@@ -771,6 +820,6 @@ export function mountCreator(dialog: HTMLDialogElement, documents: Documents, sa
       submit.textContent = "저장하고 배치";
     }
   };
-  dialog.oncancel = event => { if (submit.disabled) event.preventDefault(); };
+  dialog.oncancel = event => { if (body.inert) event.preventDefault(); };
   return () => dialog.showModal();
 }

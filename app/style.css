@@ -237,6 +237,7 @@ h1 { margin: 0; font-size: 17px; font-weight: 700; white-space: nowrap; }
 .creator footer { border-top: 1px solid var(--line); }
 .creator h2 { margin: 0; font-size: 17px; }
 .creator footer button { margin-left: auto; white-space: nowrap; }
+.creator button:disabled { opacity: .55; cursor: default; }
 .creator-body { overflow: auto; display: grid; gap: 10px; padding: 12px 18px; }
 .quest-dialog { width: min(590px, calc(100% - 24px)); }
 .quest-dialog[open] { display: grid; grid-template-rows: auto minmax(0, 1fr); }
