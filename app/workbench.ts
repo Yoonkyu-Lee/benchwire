@@ -3,6 +3,7 @@ import { physicalSteps } from "../engine/physical.ts";
 import type { Results, Run } from "../engine/results.ts";
 import { evaluateInWorker, loadAssessment, type Assessment, type Documents, type Variants } from "./assessment.ts";
 import { mountCanvas } from "./canvas.ts";
+import { mountCreator, persistModel } from "./creator.ts";
 import { occupiedPorts } from "./connection.ts";
 import { addConnection, modelKey, place, portKey, type InventoryItem, type Library, type SceneDocument, type SceneIntent } from "./document.ts";
 import { mountEvidence } from "./evidence.ts";
@@ -42,7 +43,7 @@ export function mountWorkbench(root: HTMLElement, initial: SceneDocument, librar
     </header>
     <div class="workspace">
       <aside class="inventory" aria-label="인벤토리">
-        <h2>인벤토리</h2>
+        <div class="inventory-heading"><h2>인벤토리</h2><button type="button" class="creator-open" hidden>새 아이템</button></div>
         <details class="scenario-panel" hidden><summary>시나리오 · 작업</summary><div></div></details>
         <div class="inventory-content"></div>
       </aside>
@@ -60,7 +61,8 @@ export function mountWorkbench(root: HTMLElement, initial: SceneDocument, librar
         <div class="assessment-progress" aria-live="polite"></div>
         <aside id="results-panel" class="results-panel" aria-label="결과와 근거" hidden></aside>
       </main>
-    </div>`;
+    </div>
+    <dialog></dialog>`;
   root.querySelector("h1")!.textContent = options.title || initial.sceneId;
   const count = root.querySelector<HTMLElement>(".scene-count")!;
   const stage = root.querySelector<HTMLElement>(".viewport")!;
@@ -79,12 +81,14 @@ export function mountWorkbench(root: HTMLElement, initial: SceneDocument, librar
     variant(index) { variant = index; redrawResults(); },
     loadVariants,
   });
-  const canvas = mountCanvas(stage, library, {
+  const inventoryRoot = root.querySelector<HTMLElement>(".inventory-content")!;
+  const hiddenLayers = new Set<string>();
+  const makeCanvas = () => mountCanvas(stage, library, {
     intent: edit, status: setStatus,
     selectConnection(id) { panel.choose({ kind: "connection", id }); options.onSelectConnection?.(id); },
     selectWorkload(id) { panel.choose({ kind: "workload", id }); },
   });
-  const inventory = mountInventory(root.querySelector<HTMLElement>(".inventory-content")!, library, {
+  const makeInventory = () => mountInventory(inventoryRoot, library, {
     add(item) {
       const center = canvas.center();
       edit({ kind: "add-item", item, position: { x: center.x - CARD_WIDTH / 2, y: center.y - 48 } });
@@ -95,8 +99,51 @@ export function mountWorkbench(root: HTMLElement, initial: SceneDocument, librar
       setStatus(cable ? `${cable.alias || models.get(modelKey(cable))!.name}에 연결할 두 포트를 선택하세요.` : "케이블 선택을 해제했습니다.");
     },
   });
-  mountLayers(root.querySelector<HTMLElement>(".layers")!, canvas.setLayer);
-  root.querySelector(".fit")!.addEventListener("click", canvas.fit);
+  let canvas = makeCanvas();
+  let inventory = makeInventory();
+  const trigger = root.querySelector<HTMLButtonElement>(".creator-open")!;
+  const dialog = root.querySelector("dialog")!;
+  let openCreator: () => void;
+  if (options.onChange) trigger.hidden = false;
+  trigger.onclick = () => {
+    if (!dialog.childElementCount) openCreator = mountCreator(dialog, documents, async (model, instanceId) => {
+      const item: InventoryItem = { instanceId, modelId: model.modelId, revision: model.revision, state: "owned" };
+      const center = canvas.center();
+      const position = { x: center.x - CARD_WIDTH / 2, y: center.y - 48 };
+      const withModel = { ...documents, models: new Map(models).set(modelKey(model), model) };
+      const draft = () => scene.items.some(row => row.instanceId === instanceId) ? scene
+        : place({ ...scene, items: [...scene.items, item] }, instanceId, position);
+      const before = scene;
+      let next = draft();
+      let loaded = loadAssessment(next, withModel, readScenario());
+      if ("error" in loaded) throw new Error(loaded.error);
+      await persistModel(model, item);
+      if (!root.contains(dialog)) return;
+      if (scene !== before) {
+        next = draft();
+        loaded = loadAssessment(next, withModel, readScenario());
+        if ("error" in loaded) throw new Error(loaded.error);
+      }
+      models.set(modelKey(model), model);
+      stock.set(item.instanceId, item);
+      library.models = [...models.values()];
+      library.inventory = [...stock.values()];
+      // 새 모델 판본을 캔버스와 목록의 색인에 함께 올린다.
+      stage.replaceChildren();
+      inventoryRoot.replaceChildren();
+      canvas = makeCanvas();
+      inventory = makeInventory();
+      for (const layer of hiddenLayers) canvas.setLayer(layer, false);
+      commit(next, { kind: "add-item", item, position }, loaded);
+    });
+    openCreator();
+  };
+  mountLayers(root.querySelector<HTMLElement>(".layers")!, (layer, visible) => {
+    if (visible) hiddenLayers.delete(layer);
+    else hiddenLayers.add(layer);
+    canvas.setLayer(layer, visible);
+  });
+  root.querySelector(".fit")!.addEventListener("click", () => canvas.fit());
   root.querySelector(".zoom-out")!.addEventListener("click", () => canvas.zoom(1 / 1.2));
   root.querySelector(".zoom-in")!.addEventListener("click", () => canvas.zoom(1.2));
   root.querySelector(".results-toggle")!.addEventListener("click", panel.toggle);

@@ -25,10 +25,11 @@ const modes = z.string().refine(value => {
 const fact = <T extends z.ZodType>(value: T, unit = "") => z.strictObject({ value: value.nullable(), unit: z.literal(unit) });
 const quantity = (unit: string) => fact(z.number().nonnegative(), unit);
 const power = quantity(WATTS);
-const poeType = fact(z.literal([0, ...ETHERNET_POE_TYPE_LIMITS.map(row => row.type)]));
+const poeType = fact(z.literal([0, ...ETHERNET_POE_TYPE_LIMITS.map(row => row.type)])).meta({ title: "PoE 유형" });
 
-const ethernet = z.strictObject({ baseTModes: fact(modes), networkRole: fact(z.enum(["lan", "wan", "provider"])) });
-const pse = z.strictObject({ poeType, budgetResource: fact(z.string().min(1)) });
+const ethernet = z.strictObject({ baseTModes: fact(modes).meta({ title: "지원 BASE-T 모드" }),
+  networkRole: fact(z.enum(["lan", "wan", "provider"])).meta({ title: "네트워크 연결 역할" }) });
+const pse = z.strictObject({ poeType, budgetResource: fact(z.string().min(1)).meta({ title: "전력 예산 자원 ID" }) });
 const pd = z.strictObject({ poeType });
 export const params = z.strictObject({});
 export function paramsFor(protocol: string) {
@@ -41,14 +42,14 @@ export function paramsFor(protocol: string) {
 }
 
 export const attributes = z.strictObject({
-  category: fact(z.enum(COPPER_CATEGORIES)),
-  length: quantity("m"),
-  screening: fact(z.enum(["screened", "unscreened"])),
+  category: fact(z.enum(COPPER_CATEGORIES)).meta({ title: "케이블 등급" }),
+  length: quantity("m").meta({ title: "케이블 길이", unit: "m" }),
+  screening: fact(z.enum(["screened", "unscreened"])).meta({ title: "차폐 방식" }),
   poeType,
-  poeLoss: power,
+  poeLoss: power.meta({ title: "PoE 채널 손실", unit: WATTS }),
 });
 
 export const request = z.union([
-  z.strictObject({ throughput: quantity(MBPS) }),
-  z.strictObject({ watts: power }),
+  z.strictObject({ throughput: quantity(MBPS).meta({ title: "요청 처리량", unit: MBPS }) }),
+  z.strictObject({ watts: power.meta({ title: "요청 전력", unit: WATTS }) }),
 ]);

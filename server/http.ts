@@ -36,6 +36,14 @@ async function readJson(request: IncomingMessage, origin: string): Promise<unkno
   }
 }
 
+function pathId(segment: string) {
+  try { return decodeURIComponent(segment); }
+  catch (error) {
+    if (!(error instanceof URIError)) throw error;
+    throw new LibraryError(400, "id", "주소의 ID를 읽을 수 없습니다");
+  }
+}
+
 function staticFile(buildDir: string, path: string, response: ServerResponse): boolean {
   const asset = path === "/" ? "index.html" : path.slice(1);
   const segments = asset.split("/");
@@ -73,9 +81,16 @@ export async function startServer({ port = PORT, dataDir = join(ROOT, "userdata"
       response.end(JSON.stringify(library.describe()));
       return;
     }
-    if (path === "/api/inventory" && method === "PUT") {
-      library.saveInventory(await readJson(request, origin));
-      response.writeHead(204).end();
+    const model = /^\/api\/models\/([^/]+)\/([^/]+)$/.exec(path);
+    if (model && method === "PUT") {
+      const created = library.saveModel(pathId(model[1]!), pathId(model[2]!), await readJson(request, origin));
+      response.writeHead(created ? 201 : 204).end();
+      return;
+    }
+    const inventory = /^\/api\/inventory\/([^/]+)$/.exec(path);
+    if (inventory && method === "PUT") {
+      const created = library.saveInventoryItem(pathId(inventory[1]!), await readJson(request, origin));
+      response.writeHead(created ? 201 : 204).end();
       return;
     }
     if (path.startsWith("/api/scenes/")) {

@@ -15,7 +15,8 @@ export const storageDomain: DomainPlugin = {
   sources: [],
   params: z.strictObject({}),
   attributes: z.strictObject({}),
-  request: z.strictObject({ throughput: rate, viaInstance: reference.optional(), viaNode: reference.optional() })
+  request: z.strictObject({ throughput: rate.meta({ title: "요청 처리량", unit: UNIT }),
+    viaInstance: reference.optional().meta({ title: "경유 실물 ID" }), viaNode: reference.optional().meta({ title: "경유 노드 ID" }) })
     .refine(r => (r.viaInstance === undefined) === (r.viaNode === undefined), {
       path: ["viaNode"], message: "경유 실물 ID와 노드 ID를 함께 지정하세요",
     }),

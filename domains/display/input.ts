@@ -10,18 +10,18 @@ const refresh = fact(z.number().positive().lt(1_000_000 / CVT_RB_V2_MIN_VERTICAL
 const dscBpp = z.number().positive().max(Number.MAX_SAFE_INTEGER);
 
 // 해당 설정의 인코더나 디코더에서 확인한 DSC 목표. 0은 지원하지 않음이다.
-const dscCapability = fact(z.union([z.literal(0), dscBpp]), "bpp");
+const dscCapability = fact(z.union([z.literal(0), dscBpp]), "bpp").meta({ title: "지원 DSC 목표", unit: "bpp" });
 const dpParams = z.strictObject({
-  version: fact(z.string().min(1)),
+  version: fact(z.string().min(1)).meta({ title: "DisplayPort 판본" }),
   // 링크 속도 상한은 하위 속도도 지원한다는 주장이다.
-  maxRate: fact(z.enum(DP_LINK_RATES.map(row => row.rate))),
-  lanes: fact(z.literal([1, 2, DP_MAX_LANES])),
+  maxRate: fact(z.enum(DP_LINK_RATES.map(row => row.rate))).meta({ title: "최고 링크 속도 등급" }),
+  lanes: fact(z.literal([1, 2, DP_MAX_LANES])).meta({ title: "영상 레인 수" }),
   dscBpp: dscCapability,
 });
-const altModeParams = dpParams.extend({ pin: fact(z.enum(DP_ALT_MODE_PIN_ASSIGNMENTS.map(row => row.pin))) });
+const altModeParams = dpParams.extend({ pin: fact(z.enum(DP_ALT_MODE_PIN_ASSIGNMENTS.map(row => row.pin))).meta({ title: "핀 할당" }) });
 const hdmiParams = z.strictObject({
-  tmdsVersion: fact(z.enum(HDMI_TMDS_VERSION_LIMITS.map(row => row.version))),
-  frlCode: fact(z.literal([0, ...HDMI_21_FRL_LINK_RATES.map(row => row.code)])),
+  tmdsVersion: fact(z.enum(HDMI_TMDS_VERSION_LIMITS.map(row => row.version))).meta({ title: "TMDS 판본" }),
+  frlCode: fact(z.literal([0, ...HDMI_21_FRL_LINK_RATES.map(row => row.code)])).meta({ title: "FRL 속도 코드" }),
   dscBpp: dscCapability,
 });
 
@@ -37,13 +37,13 @@ export function paramsFor(protocol: string) {
 }
 
 export const request = z.strictObject({
-  width: fact(z.int().positive(), "px"),
-  height: fact(z.int().positive(), "px"),
-  refresh: refresh,
-  bitsPerComponent: fact(z.int().positive(), "bpc"),
-  chroma: fact(z.enum(VIDEO_CHROMA_SAMPLES.map(row => row.chroma))),
-  dscBpp: fact(dscBpp, "bpp").optional(),
-  fallbackRefresh: refresh.optional(),
+  width: fact(z.int().positive(), "px").meta({ title: "가로", unit: "px" }),
+  height: fact(z.int().positive(), "px").meta({ title: "세로", unit: "px" }),
+  refresh: refresh.meta({ title: "주사율", unit: "Hz" }),
+  bitsPerComponent: fact(z.int().positive(), "bpc").meta({ title: "색 깊이", unit: "bpc" }),
+  chroma: fact(z.enum(VIDEO_CHROMA_SAMPLES.map(row => row.chroma))).meta({ title: "색차 샘플링" }),
+  dscBpp: fact(dscBpp, "bpp").optional().meta({ title: "DSC 목표", unit: "bpp" }),
+  fallbackRefresh: refresh.optional().meta({ title: "대안 주사율", unit: "Hz" }),
 });
 
 export const attributes = z.strictObject({});

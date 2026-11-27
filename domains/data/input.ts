@@ -20,12 +20,12 @@ export function parseModes(value: string): string[] {
 }
 
 const usb3Modes = USB_3_2_PROTOCOL_ESTIMATES.map(row => row.mode);
-const usbParams = z.strictObject({ modes: fact(modeList([USB_2_HIGH_SPEED_MODE, ...usb3Modes])) });
+const usbParams = z.strictObject({ modes: fact(modeList([USB_2_HIGH_SPEED_MODE, ...usb3Modes])).meta({ title: "지원 USB 모드" }) });
 const usb4Params = z.strictObject({
-  modes: fact(modeList(USB4_LINK_MODES.map(row => row.mode))),
-  usb3Modes: fact(modeList(usb3Modes)),
-  pcie: fact(z.boolean()),
-  tunnelGbps: fact(z.number().nonnegative(), "Gbps"),
+  modes: fact(modeList(USB4_LINK_MODES.map(row => row.mode))).meta({ title: "지원 USB4 모드" }),
+  usb3Modes: fact(modeList(usb3Modes)).meta({ title: "지원 USB 3.x 터널 모드" }),
+  pcie: fact(z.boolean()).meta({ title: "PCIe 터널 지원" }),
+  tunnelGbps: fact(z.number().nonnegative(), "Gbps").meta({ title: "터널 한도", unit: "Gbps" }),
 });
 
 export const params = z.strictObject({});
@@ -36,7 +36,7 @@ export function paramsFor(protocol: string) {
 }
 
 export const attributes = z.strictObject({
-  cableDataGbps: fact(z.literal(USB_C_CABLE_DATA_RATINGS_GBPS), "Gbps").optional(),
-  cableUsb4: fact(z.boolean()).optional(),
+  cableDataGbps: fact(z.literal(USB_C_CABLE_DATA_RATINGS_GBPS), "Gbps").optional().meta({ title: "케이블 데이터 정격", unit: "Gbps" }),
+  cableUsb4: fact(z.boolean()).optional().meta({ title: "케이블 USB4 지원" }),
 });
-export const request = z.strictObject({ throughput: fact(z.number().nonnegative(), MB_PER_SECOND) });
+export const request = z.strictObject({ throughput: fact(z.number().nonnegative(), MB_PER_SECOND).meta({ title: "요청 처리량", unit: MB_PER_SECOND }) });

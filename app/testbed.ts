@@ -1,5 +1,9 @@
 // Edge에서 실제 엔진과 편집 동작을 재현할 작은 장면과 50기기 장면을 연다.
 import "./style.css";
+import { z } from "zod";
+import { domains, type DomainRegistration } from "../domains/registry.ts";
+import { mountCreator } from "./creator.ts";
+import { mountScenario } from "./scenario.ts";
 import networkConnectors from "../fixtures/network/connectors.json" with { type: "json" };
 import copper from "../fixtures/network/network-copper@1.json" with { type: "json" };
 import host from "../fixtures/network/network-host@1.json" with { type: "json" };
@@ -106,6 +110,34 @@ function open(scene = fixture.initial) {
   return mountWorkbench(root, scene, fixture.library, { onChange: () => { count++; } });
 }
 let workbench = open();
+
+if (mode === "vocabulary") {
+  const flag = z.strictObject({ value: z.boolean().nullable(), unit: z.literal("") });
+  const added: DomainRegistration = {
+    name: "시험 영역",
+    interfaces: [{ id: "test-protocol", name: "시험 프로토콜", roles: ["source"] }],
+    presets: [{ kind: "exercise", name: "시험 작업", request: { amount: { value: false, unit: "" } } }],
+    plugin: {
+      id: "test-area", sources: [], resourceUnits: [],
+      params: z.strictObject({ enabled: flag.meta({ title: "시험 인터페이스 스위치" }) }),
+      attributes: z.strictObject({ available: flag.meta({ title: "시험 속성 스위치" }) }),
+      request: z.strictObject({ amount: flag.meta({ title: "시험 작업 요청" }) }),
+      negotiate: () => [], demand: () => [], consume: () => [], explain: () => "", quest: key => key,
+    },
+  };
+  const terms = [...domains, added];
+  const host = root.querySelector(".inventory")!;
+  const trigger = document.createElement("button");
+  trigger.textContent = "시험 생성기";
+  const dialog = document.createElement("dialog");
+  root.append(dialog);
+  trigger.onclick = mountCreator(dialog, workbench.documents, async () => {}, terms);
+  const scenario = document.createElement("section");
+  scenario.id = "extra-scenario";
+  scenario.className = "scenario-panel";
+  host.append(trigger, scenario);
+  mountScenario(scenario, workbench.documents, () => {}, terms)({ document: initial, scenarioId: null });
+}
 
 declare global {
   interface Window {

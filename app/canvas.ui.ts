@@ -649,3 +649,148 @@ test("충전 예제에서 세 포트와 소비 상태별 판정을 확인하고 
     assert.equal(await editor.getByLabel("목표 순충전 (W)", { exact: true }).inputValue(), "35");
   });
 });
+
+test("작업 요청을 적용해도 이름·멤버 초안이 남고 시나리오 적용이 작업 초안을 지우지 않는다", async () => {
+  const { page, errors } = await newPage("/testbed.html?example");
+  try {
+    const panel = page.locator(".scenario-panel");
+    await panel.locator("summary").click();
+    const scenarioName = panel.getByLabel("시나리오 이름", { exact: true });
+    await scenarioName.fill("편집 중인 이름");
+    const priority = panel.getByLabel("poe-ethernet 우선순위", { exact: true });
+    await priority.fill("3");
+    const workload = panel.getByLabel("작업", { exact: true });
+    await workload.selectOption("poe-ethernet");
+    const throughput = panel.getByLabel("요청 처리량 (Mbps)", { exact: true });
+    await throughput.fill("625");
+    await panel.getByRole("button", { name: "작업 적용", exact: true }).click();
+    assert.equal(await scenarioName.inputValue(), "편집 중인 이름");
+    assert.equal(await priority.inputValue(), "3");
+    assert.equal(await page.evaluate(() => window.benchwire.read().scenarios[0]!.id), "poe-and-ethernet");
+    await throughput.fill("675");
+    await panel.getByRole("button", { name: "시나리오 적용", exact: true }).click();
+    assert.equal(await throughput.inputValue(), "675");
+    const saved = await page.evaluate(() => window.benchwire.read());
+    assert.equal(saved.scenarios[0]!.id, "편집 중인 이름");
+    assert.equal(saved.workloads.find(row => row.id === "poe-ethernet")!.request.throughput!.value, 625);
+    assert.deepEqual(errors, []);
+  } finally { await page.close(); }
+});
+
+test("USB-C 충전기 초안을 저장·배치하고 재시도와 서버 재시작 뒤 같은 실물로 판정한다", async () => {
+  let instanceId: string;
+  const { page, errors } = await newPage("/");
+  try {
+    assert(await page.evaluate(async () => {
+      const response = await fetch("/api/scenes/three-ports");
+      const scene = await response.json() as ReturnType<Window["benchwire"]["read"]>;
+      const draft = { ...scene, sceneId: "creator-power", items: scene.items.filter(i => ["a", "wire-a"].includes(i.instanceId)),
+        connections: [], workloads: [], scenarios: [],
+        layout: { placements: [{ instanceId: "a", x: 585, y: 90 }, { instanceId: "wire-a", x: 20, y: 220 }] } };
+      const created = await fetch("/api/scenes/" + draft.sceneId, {
+        method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify(draft),
+      });
+      return created.ok;
+    }));
+    await page.reload();
+    await page.locator('[data-instance="a"]').waitFor();
+    await page.getByRole("button", { name: "새 아이템", exact: true }).click();
+    const form = page.getByRole("dialog", { name: "새 아이템" });
+    await form.getByLabel("충전기 포트 수").fill("3");
+    await form.getByRole("button", { name: "USB-C 충전기 불러오기" }).click();
+    await form.getByLabel("브랜드", { exact: true }).fill("수동 입력");
+    await form.getByLabel("모델 이름", { exact: true }).fill("수동 USB-C 충전기");
+    await form.getByLabel("모델 ID", { exact: true }).fill("manual-charger");
+    await form.getByLabel("제목", { exact: true }).fill("충전기 라벨");
+    await form.getByLabel("주소", { exact: true }).fill("https://example.invalid/charger");
+    const firstPort = form.getByRole("group", { name: "포트 1", exact: true });
+    await firstPort.getByText("인터페이스 값", { exact: true }).click();
+    await firstPort.getByLabel("5 V 송전 PDO 전류 (A) 상태", { exact: true }).selectOption("value");
+    await firstPort.getByLabel("5 V 송전 PDO 전류 (A)", { exact: true }).fill("0");
+    await firstPort.getByLabel("9 V 송전 PDO 전류 (A) 상태", { exact: true }).selectOption("omit");
+    await firstPort.getByLabel("5 V 수전 지원 상태", { exact: true }).selectOption("value");
+    await firstPort.getByLabel("5 V 수전 지원", { exact: true }).selectOption({ label: "아니요" });
+    assert.equal(await firstPort.getByLabel("20 V 송전 PDO 전류 (A) 상태", { exact: true }).inputValue(), "unknown");
+    assert.equal(await firstPort.getByLabel("포트 최대 전력 (W) 상태", { exact: true }).inputValue(), "unknown");
+    await firstPort.scrollIntoViewIfNeeded();
+    await page.screenshot({ path: "work/m4-creator.png" });
+
+    const submit = form.getByRole("button", { name: "저장하고 배치", exact: true });
+    await page.route("**/api/inventory/item-*", async route => {
+      const result = await route.fetch();
+      assert.equal(result.status(), 201);
+      await route.abort();
+    }, { times: 1 });
+    await submit.click();
+    await form.getByText(/저장 결과를 확인할 수 없습니다/).waitFor();
+    await submit.click();
+    await form.waitFor({ state: "hidden" });
+    await page.getByText("저장됨", { exact: true }).waitFor();
+    const saved = await page.evaluate(async () => {
+      const response = await (await fetch("/api/library")).json() as import("./document.ts").Library;
+      return { model: response.models.find(m => m.modelId === "manual-charger"),
+        items: response.inventory.filter(item => item.modelId === "manual-charger") };
+    });
+    assert.equal(saved.items.length, 1);
+    instanceId = saved.items[0]!.instanceId;
+    assert(saved.model);
+    assert.equal(saved.model.ports.length, 3);
+    assert.equal(saved.model.ports[0]!.interfaces[0]!.params.pdo5!.value, 0);
+    assert(!Object.hasOwn(saved.model.ports[0]!.interfaces[0]!.params, "pdo9"));
+    assert.equal(saved.model.ports[0]!.interfaces[0]!.params.pdo20!.value, null);
+    assert.equal(saved.model.ports[0]!.interfaces[0]!.params.accepts5!.value, false);
+    assert(saved.model.ports.every(p => p.attachment.value === null));
+    assert.deepEqual(saved.model.edges, []);
+    assert.equal(saved.model.resources[0]!.capacity.value, null);
+    assert.equal(saved.model.resources[0]!.policy.value, null);
+    assert.equal(saved.model.sources[0]!.title, "충전기 라벨");
+    await page.locator(`[data-instance="${instanceId}"]`).waitFor();
+
+    await page.locator('[data-inventory="wire-a"]').getByRole("button", { name: "연결에 사용" }).click();
+    await port(page, instanceId, "port-1").press("Enter");
+    await port(page, "a", "in").press("Space");
+    await page.getByText("저장됨", { exact: true }).waitFor();
+    await waitForAssessment(page);
+    const line = page.locator('[data-connection="connection-1"] [data-direction="forward"][data-unit="W"]');
+    assert.equal(await line.getAttribute("data-verdict"), "unknown");
+    await page.locator('[data-connection="connection-1"] .wire-name').click();
+    const evidence = page.getByRole("region", { name: "선택한 항목 근거" });
+    assert.match(await evidence.locator(".quests").innerText(), /maxW/);
+    await page.screenshot({ path: "work/m4-creator-charge.png" });
+    assert.deepEqual(errors, []);
+  } finally { await page.close(); }
+
+  await closeServer();
+  await openServer();
+  const reopened = (await newPage("/")).page;
+  try {
+    await reopened.locator(`[data-instance="${instanceId}"]`).waitFor();
+    assert.equal(await reopened.locator(`[data-inventory="${instanceId}"]`).count(), 1);
+    assert.equal(await reopened.locator('[data-connection="connection-1"] [data-direction="forward"][data-unit="W"]').getAttribute("data-verdict"), "unknown");
+  } finally { await reopened.close(); }
+});
+
+test("등록한 영역의 어휘와 스키마 필드가 생성기와 시나리오에 나타난다", async () => {
+  const { page, errors } = await newPage("/testbed.html?vocabulary");
+  try {
+    await page.getByRole("button", { name: "시험 생성기" }).click();
+    const creator = page.getByRole("dialog", { name: "새 아이템" });
+    await creator.getByRole("button", { name: "포트 추가" }).click();
+    await creator.getByRole("button", { name: "인터페이스 추가" }).click();
+    await creator.getByLabel("인터페이스 영역", { exact: true }).selectOption("test-area");
+    assert.equal(await creator.getByLabel("프로토콜", { exact: true }).inputValue(), "test-protocol");
+    await creator.getByText("인터페이스 값", { exact: true }).click();
+    assert(await creator.getByLabel("시험 인터페이스 스위치 상태", { exact: true }).isVisible());
+    const attributes = creator.locator("details").filter({ has: page.locator("summary", { hasText: /^시험 영역$/ }) });
+    await attributes.locator("summary").click();
+    assert(await attributes.getByLabel("시험 속성 스위치 상태", { exact: true }).isVisible());
+    await creator.getByRole("button", { name: "닫기" }).click();
+    const scenario = page.locator("#extra-scenario");
+    await scenario.getByRole("button", { name: "새 작업", exact: true }).click();
+    await scenario.getByLabel("작업 프리셋", { exact: true }).selectOption({ label: "시험 작업" });
+    const request = scenario.getByLabel("시험 작업 요청", { exact: true });
+    assert(await request.isVisible());
+    assert.equal(await request.locator("option:checked").textContent(), "아니요");
+    assert.deepEqual(errors, []);
+  } finally { await page.close(); }
+});

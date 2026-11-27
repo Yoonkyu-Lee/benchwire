@@ -159,14 +159,15 @@ test("장면 ID 순서와 관계없이 마지막으로 저장한 사용자 장�
 test("서버는 루프백에만 바인딩하고 외부 출처·호스트·경로 조각을 거절한다", async t => {
   const { address, origin, get, put } = await workspace(t).open();
   assert.equal(address.address, "127.0.0.1");
+  const inventoryPath = "/api/inventory/owned-device";
   for (const foreign of ["https://example.invalid", origin + "0", "null", undefined]) {
     const headers = new Headers({ "Content-Type": "application/json" });
     if (foreign !== undefined) headers.set("Origin", foreign);
-    const response = await fetch(origin + "/api/inventory", { method: "PUT", headers, body: "[]" });
+    const response = await fetch(origin + inventoryPath, { method: "PUT", headers, body: "{}" });
     assert.equal(response.status, 403);
     assert.equal(response.headers.get("access-control-allow-origin"), null);
   }
-  const preflight = await fetch(origin + "/api/inventory", { method: "OPTIONS", headers: { Origin: "https://example.invalid" } });
+  const preflight = await fetch(origin + inventoryPath, { method: "OPTIONS", headers: { Origin: "https://example.invalid" } });
   assert.equal(preflight.status, 404);
   assert.equal(preflight.headers.get("access-control-allow-origin"), null);
   assert.equal((await get("/api/scenes/a%2fb")).status, 400);
@@ -182,33 +183,36 @@ test("서버는 루프백에만 바인딩하고 외부 출처·호스트·경로
   assert.equal(await rawGet("/api/library", "external.invalid"), 403);
 });
 
-test("인벤토리는 판본과 실물 ID를 검증한 뒤 저장하며 잘못된 요청과 큰 본문을 거절한다", async t => {
+test("인벤토리는 한 실물의 판본과 ID를 검증하고 잘못된 요청과 큰 본문을 거절한다", async t => {
   const files = workspace(t);
   const first = await files.open();
-  const path = "/api/inventory";
-  const { models } = await (await first.get("/api/library")).json() as LibraryDocument;
-  const { modelId, revision } = models[0]!;
+  const path = "/api/inventory/owned-device";
+  const before = await (await first.get("/api/library")).json() as LibraryDocument;
+  const { modelId, revision } = before.models[0]!;
   const item = { instanceId: "owned-device", modelId, revision, alias: "내 장치", state: "owned" };
-  assert.equal((await first.put(path, [item])).status, 204);
+  assert.equal((await first.put(path, item)).status, 201);
   for (const [body, field] of [
-    [[{ ...item, state: "unknown" }], "0.state"],
-    [[{ ...item, revision: "missing" }], "0.revision"],
-    [[item, item], "1.instanceId"],
+    [{ ...item, state: "unknown" }, "state"],
+    [{ ...item, revision: "missing" }, "revision"],
+    [{ ...item, instanceId: "other" }, "instanceId"],
   ]) {
     const invalid = await first.put(path, body);
     assert.equal(invalid.status, 422);
     assert.equal((await invalid.json() as { path: string }).path, field);
   }
+  const conflict = await first.put(path, { ...item, alias: "다른 장치" });
+  assert.equal(conflict.status, 409);
+  assert.equal((await conflict.json() as { path: string }).path, "instanceId");
   const rawPut = (body: string, contentType: string) => fetch(first.origin + path, {
     method: "PUT", headers: { Origin: first.origin, "Content-Type": contentType }, body,
   });
-  assert.equal((await rawPut("[]", "text/plain")).status, 415);
-  assert.equal((await rawPut("[", "application/json")).status, 422);
+  assert.equal((await rawPut("{}", "text/plain")).status, 415);
+  assert.equal((await rawPut("{", "application/json")).status, 422);
   assert.equal((await rawPut(" ".repeat(2 * 1024 * 1024 + 1), "application/json")).status, 413);
   await first.close();
   const reopened = await files.open();
   const library = await (await reopened.get("/api/library")).json() as LibraryDocument;
-  assert.deepEqual(library.inventory, [item]);
+  assert.deepEqual(library.inventory, [...before.inventory, item]);
   assert.deepEqual(readdirSync(files.dataDir), ["inventory.json"]);
 });
 
@@ -227,4 +231,38 @@ test("빌드가 없으면 404를 반환하고 빌드 디렉터리의 캔버스�
   assert.match(asset.headers.get("content-type")!, /javascript/);
   assert.equal(await asset.text(), "export const app = true;");
   assert.equal((await get("/package.json")).status, 404);
+});
+
+test("실물 재시도와 모델 재저장은 멱등이며 고정한 판본과 지역 참조를 지킨다", async t => {
+  const files = workspace(t);
+  const first = await files.open();
+  const model = { ...JSON.parse(readFileSync("fixtures/power/receiver@1.json", "utf8")), modelId: "수동-수전", revision: "1" };
+  const path = "/api/models/" + encodeURIComponent(model.modelId) + "/1";
+  const bad = { ...model, ports: model.ports.map((port: { attachment: object }) => ({
+    ...port, attachment: { ...port.attachment, value: "missing" },
+  })) };
+  const invalid = await first.put(path, bad);
+  assert.equal(invalid.status, 422);
+  assert.match((await invalid.json() as { path: string }).path, /ports\.0\.attachment/);
+  assert.equal((await first.put(path, { ...model, revision: "2" })).status, 422);
+  assert.equal((await first.put(path, model)).status, 201);
+  assert.equal((await first.put(path, model)).status, 204);
+  const conflict = await first.put(path, { ...model, name: "다른 이름" });
+  assert.equal(conflict.status, 409);
+  assert.match((await conflict.json() as { message: string }).message, /새 판본/);
+  assert.equal((await first.put(path.replace(/1$/, "2"), { ...model, revision: "2" })).status, 201);
+
+  const item = { instanceId: "manual-receiver", modelId: model.modelId, revision: model.revision, state: "owned" };
+  const itemPath = "/api/inventory/" + item.instanceId;
+  assert.equal((await first.put(itemPath, { ...item, revision: "missing" })).status, 422);
+  const attempts = await Promise.all([first.put(itemPath, item), first.put(itemPath, item)]);
+  assert.deepEqual(attempts.map(receipt => receipt.status).sort(), [201, 204]);
+  await first.close();
+  const restarted = await files.open();
+  assert.equal((await restarted.put(path, model)).status, 204);
+  assert.equal((await restarted.put(path, { ...model, name: "다른 이름" })).status, 409);
+  const library = await (await restarted.get("/api/library")).json() as LibraryDocument;
+  assert.deepEqual(library.models.filter(m => m.modelId === model.modelId).map(m => [m.name, m.revision]),
+    [[model.name, "1"], [model.name, "2"]]);
+  assert.equal(library.inventory.filter(i => i.instanceId === item.instanceId).length, 1);
 });

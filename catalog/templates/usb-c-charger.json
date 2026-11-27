@@ -1,0 +1,14 @@
+{
+  "name": "USB-C 충전기",
+  "kind": "device",
+  "category": "충전기",
+  "port": {
+    "name": "USB-C",
+    "connector": "c-receptacle",
+    "domain": "power",
+    "protocol": "USB PD",
+    "role": "source",
+    "unknownPrefixes": ["pdo"]
+  },
+  "resource": { "id": "total", "kind": "power", "domain": "power", "unit": "W" }
+}

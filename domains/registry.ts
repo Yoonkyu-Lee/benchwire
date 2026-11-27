@@ -1,35 +1,41 @@
-// 제품에서 함께 사용하는 영역 플러그인과 작업 프리셋을 등록한다.
+// 제품의 영역 플러그인과 폼에 쓰는 작업·인터페이스 어휘를 등록한다.
 import type { DomainPlugin } from "../engine/contract.ts";
 import { data } from "./data/data.ts";
-import { dataDomainName, dataPresets } from "./data/presets.ts";
+import { dataDomainName, dataInterfaces, dataPresets } from "./data/vocabulary.ts";
 import { display } from "./display/display.ts";
-import { displayDomainName, displayPresets } from "./display/presets.ts";
+import { displayDomainName, displayInterfaces, displayPresets } from "./display/vocabulary.ts";
 import { network } from "./network/network.ts";
-import { networkDomainName, networkPresets } from "./network/presets.ts";
+import { networkDomainName, networkInterfaces, networkPresets } from "./network/vocabulary.ts";
 import { power } from "./power/power.ts";
-import { powerDomainName, powerPresets } from "./power/presets.ts";
+import { powerDomainName, powerInterfaces, powerPresets } from "./power/vocabulary.ts";
 import { storageDomain } from "./storage/copy.ts";
-import { storageDomainName, storagePresets } from "./storage/presets.ts";
+import { storageDomainName, storagePresets } from "./storage/vocabulary.ts";
 
 interface Preset {
   kind: string;
   name: string;
   request: Readonly<Record<string, { value: string | number | boolean | null; unit: string }>>;
-  labels: Readonly<Record<string, string>>;
+}
+interface InterfaceTerm { id: string; name: string; roles: readonly string[] }
+export interface DomainRegistration {
+  plugin: DomainPlugin; name: string; presets: readonly Preset[]; interfaces: readonly InterfaceTerm[];
 }
 
-const domains: readonly { plugin: DomainPlugin; name: string; presets: readonly Preset[] }[] = [
-  { plugin: data, name: dataDomainName, presets: dataPresets },
-  { plugin: display, name: displayDomainName, presets: displayPresets },
-  { plugin: network, name: networkDomainName, presets: networkPresets },
-  { plugin: power, name: powerDomainName, presets: powerPresets },
-  { plugin: storageDomain, name: storageDomainName, presets: storagePresets },
+export const domains: readonly DomainRegistration[] = [
+  { plugin: data, name: dataDomainName, presets: dataPresets, interfaces: dataInterfaces },
+  { plugin: display, name: displayDomainName, presets: displayPresets, interfaces: displayInterfaces },
+  { plugin: network, name: networkDomainName, presets: networkPresets, interfaces: networkInterfaces },
+  { plugin: power, name: powerDomainName, presets: powerPresets, interfaces: powerInterfaces },
+  { plugin: storageDomain, name: storageDomainName, presets: storagePresets, interfaces: [] },
 ];
 
 export const plugins = domains.map(({ plugin }) => plugin);
 export const domainNames: ReadonlyMap<string, string> = new Map(domains.map(({ plugin, name }) => [plugin.id, name]));
-export const workloadPresets = domains.flatMap(({ plugin, presets }) =>
-  presets.map(preset => ({ ...preset, domain: plugin.id, schema: plugin.request })));
+export function workPresets(registrations: readonly DomainRegistration[]) {
+  return registrations.flatMap(({ plugin, presets }) =>
+    presets.map(preset => ({ ...preset, domain: plugin.id, schema: plugin.request })));
+}
+export const workloadPresets = workPresets(domains);
 
 export function workloadKindName(domain: string, kind: string) {
   return workloadPresets.find(preset => preset.domain === domain && preset.kind === kind)?.name

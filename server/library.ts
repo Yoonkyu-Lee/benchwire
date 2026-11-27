@@ -1,6 +1,6 @@
 // 공용 카탈로그와 예제를 읽고, 검증된 장면과 인벤토리를 사용자 폴더에 원자적으로 저장한다.
 import { createHash, randomUUID } from "node:crypto";
-import { closeSync, mkdirSync, openSync, readFileSync, readdirSync, renameSync, statSync, unlinkSync, writeFileSync } from "node:fs";
+import { closeSync, linkSync, mkdirSync, openSync, readFileSync, readdirSync, renameSync, statSync, unlinkSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { isDeepStrictEqual } from "node:util";
 import { z } from "zod";
@@ -45,17 +45,18 @@ function filesIn(dir: string): string[] {
   }
 }
 
-function replaceJson(file: string, text: string): void {
+function writeJson(file: string, text: string, exclusive = false): void {
   mkdirSync(dirname(file), { recursive: true });
   const temp = join(dirname(file), "." + randomUUID() + ".tmp");
   const fd = openSync(temp, "wx", 0o600);
+  let moved = false;
   try {
     try { writeFileSync(fd, text); }
     finally { closeSync(fd); }
-    renameSync(temp, file);
-  } catch (error) {
-    unlinkSync(temp);
-    throw error;
+    if (exclusive) linkSync(temp, file);
+    else { renameSync(temp, file); moved = true; }
+  } finally {
+    if (!moved) unlinkSync(temp);
   }
 }
 
@@ -123,14 +124,16 @@ export function openLibrary(root: string, dataDir: string) {
   const index = parseDocument(examplesFile, JSON.parse(readFileSync(indexFile, "utf8")), indexFile);
   const scenesDir = join(dataDir, "scenes");
   const inventoryPath = join(dataDir, "inventory.json");
+  const modelsDir = join(dataDir, "models");
+  const modelPath = (key: string) => join(modelsDir, "model-" + key + ".json");
   const fixtureDirs = [...new Set(index.examples.map(example => join(fixtureDir, example.fixture)))];
   const models = new Map<string, z.infer<typeof modelFile>>();
-  for (const dir of [...fixtureDirs, catalogDir]) for (const name of filesIn(dir)) {
-    if (!name.includes("@") || !name.endsWith(".json")) continue;
+  for (const dir of [...fixtureDirs, catalogDir, modelsDir]) for (const name of filesIn(dir)) {
+    if (!name.includes("@") || !name.endsWith(".json") || dir === modelsDir && !name.startsWith("model-")) continue;
     const file = join(dir, name);
     const model = parseDocument(modelFile, JSON.parse(readFileSync(file, "utf8")), file);
     const key = model.modelId + "@" + model.revision;
-    if (name !== key + ".json") throw new Error(`${file} — 모델 판본 이름이 ${key}와 다릅니다`);
+    if (name !== (dir === modelsDir ? "model-" : "") + key + ".json") throw new Error(`${file} — 모델 판본 이름이 ${key}와 다릅니다`);
     mergeRow(models, key, model, file, "모델 판본");
   }
   const connectorFiles = fixtureDirs.map(dir => join(dir, "connectors.json")).map(file => ({ file, text: readFileSync(file, "utf8") }));
@@ -165,6 +168,15 @@ export function openLibrary(root: string, dataDir: string) {
     return text === undefined ? undefined : snapshot(text);
   }
 
+  function readInventory() {
+    const text = readOptional(inventoryPath);
+    return text === undefined ? [...exampleInventory.values()] : parseDocument(inventoryFile, JSON.parse(text), "inventory.json");
+  }
+
+  function sameRevision(previous: z.output<typeof modelFile>, next: z.output<typeof modelFile>) {
+    if (!isDeepStrictEqual(previous, next)) throw new LibraryError(409, "revision", "이미 있는 판본입니다. 새 판본으로 저장하세요");
+  }
+
   return {
     describe() {
       const users = filesIn(scenesDir).flatMap(file => {
@@ -181,9 +193,7 @@ export function openLibrary(root: string, dataDir: string) {
           latest = savedAt;
         }
       }
-      const inventoryText = readOptional(inventoryPath);
-      const inventory = inventoryText === undefined ? [...exampleInventory.values()] : parseDocument(inventoryFile, JSON.parse(inventoryText), "inventory.json");
-      return { defaultSceneId, scenes: [...exampleSummaries, ...users], inventory, models: [...models.values()], connectors };
+      return { defaultSceneId, scenes: [...exampleSummaries, ...users], inventory: readInventory(), models: [...models.values()], connectors };
     },
     readScene,
     saveScene(id: string, body: unknown, ifMatch: string | undefined) {
@@ -202,18 +212,43 @@ export function openLibrary(root: string, dataDir: string) {
         for (let number = 2; readScene(target); number++) target = id + "-copy-" + number;
       }
       const stored = snapshot(JSON.stringify({ ...saved, sceneId: target }, null, 2) + "\n");
-      replaceJson(scenePath(target), stored.text);
+      writeJson(scenePath(target), stored.text);
       return { id: target, created: exampleCopy || before === undefined, ...stored };
     },
-    saveInventory(body: unknown) {
-      const rows = validate(() => parseDocument(inventoryFile, body, "inventory.json"));
-      const instances = new Set<string>();
-      for (const [index, row] of rows.entries()) {
-        if (instances.has(row.instanceId)) throw new LibraryError(422, index + ".instanceId", "실물 ID가 중복됩니다");
-        if (!models.has(row.modelId + "@" + row.revision)) throw new LibraryError(422, index + ".revision", "모델 판본을 찾을 수 없습니다");
-        instances.add(row.instanceId);
+    saveModel(id: string, revision: string, body: unknown) {
+      const model = validate(() => parseDocument(modelFile, body, "model.json"));
+      if (model.modelId !== id) throw new LibraryError(422, "modelId", "URL과 모델 ID가 다릅니다");
+      if (model.revision !== revision) throw new LibraryError(422, "revision", "URL과 판본이 다릅니다");
+      const key = model.modelId + "@" + model.revision;
+      const previous = models.get(key);
+      if (previous) { sameRevision(previous, model); return false; }
+      const instance = { instanceId: "model-check", modelId: id, revision };
+      validate(() => loadSceneDocuments({ sceneId: "model-check", sources: [], items: [instance], connections: [], workloads: [], scenarios: [] },
+        { connectors, models: new Map([[key, model]]) }, plugins));
+      const file = modelPath(key);
+      const text = JSON.stringify(model, null, 2) + "\n";
+      try { writeJson(file, text, true); }
+      catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
+        sameRevision(parseDocument(modelFile, JSON.parse(readFileSync(file, "utf8")), file), model);
+        models.set(key, model);
+        return false;
       }
-      replaceJson(inventoryPath, JSON.stringify(rows, null, 2) + "\n");
+      models.set(key, model);
+      return true;
+    },
+    saveInventoryItem(id: string, body: unknown) {
+      const row = validate(() => parseDocument(inventoryFile.element, body, "inventory.json"));
+      if (row.instanceId !== id) throw new LibraryError(422, "instanceId", "URL과 실물 ID가 다릅니다");
+      if (!models.has(row.modelId + "@" + row.revision)) throw new LibraryError(422, "revision", "모델 판본을 찾을 수 없습니다");
+      const inventory = readInventory();
+      const prior = inventory.find(item => item.instanceId === id);
+      if (prior) {
+        if (!isDeepStrictEqual(prior, row)) throw new LibraryError(409, "instanceId", "같은 ID의 실물이 이미 있습니다");
+        return false;
+      }
+      writeJson(inventoryPath, JSON.stringify([...inventory, row], null, 2) + "\n");
+      return true;
     },
   };
 }

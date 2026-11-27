@@ -1,6 +1,6 @@
 // 시나리오와 작업 초안을 그리고 로더를 통과한 편집만 작업대에 돌려준다.
-import { z } from "zod";
-import { plugins, workloadKindName, workloadPresets } from "../domains/registry.ts";
+import { domains, workloadKindName, workPresets, type DomainRegistration } from "../domains/registry.ts";
+import { claimInput, describe, field, showError } from "./field.ts";
 import { loadSceneDocuments } from "../scene/load.ts";
 import type { Documents } from "./assessment.ts";
 import { modelKey, type SceneDocument } from "./document.ts";
@@ -13,21 +13,20 @@ type Value = Fact["value"];
 type State = { document: SceneDocument; scenarioId: string | null };
 type Intent = { kind: "edit-scenario"; document: SceneDocument; scenarioId: string | null }
   | { kind: "select-scenario"; scenarioId: string };
-type JSONSchema = z.core.JSONSchema.JSONSchema;
 
 // 로더는 전체 요청을 검증한다. 여기서는 프리셋이 속한 스키마의 가지에서 입력 칸을 정한다.
-const presets = workloadPresets.map(preset => {
-  const schema = preset.schema;
-  if (!(schema instanceof z.ZodType)) throw new Error(`${preset.name} 작업의 요청 스키마를 표시할 수 없습니다.`);
-  const json = z.toJSONSchema(schema, { io: "input" });
-  const shape = (json.anyOf ?? [json]).find(branch =>
-    Object.keys(preset.request).every(key => Object.hasOwn(branch.properties ?? {}, key))
-    && (branch.required ?? []).every(key => Object.hasOwn(preset.request, key)));
-  if (!shape?.properties) throw new Error(`${preset.name} 작업의 요청 칸을 찾을 수 없습니다.`);
-  return { ...preset, shape, fields: Object.keys(shape.properties) };
-});
+function describePresets(registrations: readonly DomainRegistration[]) {
+  return workPresets(registrations).map(preset => {
+    const json = describe(preset.schema);
+    const shape = (json.anyOf ?? [json]).find(branch =>
+      Object.keys(preset.request).every(key => Object.hasOwn(branch.properties ?? {}, key))
+      && (branch.required ?? []).every(key => Object.hasOwn(preset.request, key)));
+    if (!shape?.properties) throw new Error(`${preset.name} 작업의 요청 칸을 찾을 수 없습니다.`);
+    return { ...preset, shape, fields: Object.keys(shape.properties) };
+  });
+}
 
-function presetFor(workload: Workload) {
+function presetFor(presets: ReturnType<typeof describePresets>, workload: Workload) {
   const matches = presets.filter(preset => preset.domain === workload.domain
     && Object.keys(workload.request).every(key => preset.fields.includes(key)));
   return matches.find(preset => preset.kind === workload.kind) ?? matches[0];
@@ -42,85 +41,6 @@ function button(label: string, submit = false) {
   node.type = submit ? "submit" : "button";
   node.textContent = label;
   return node;
-}
-
-let fieldId = 0;
-function field(container: HTMLElement, label: string, control: HTMLInputElement | HTMLSelectElement, path = "") {
-  const row = document.createElement("div");
-  row.className = "scenario-field";
-  control.id = "scenario-field-" + ++fieldId;
-  if (label) {
-    const name = document.createElement("label");
-    name.textContent = label;
-    name.htmlFor = control.id;
-    row.append(name);
-  }
-  row.append(control);
-  if (path) {
-    const error = document.createElement("span");
-    error.id = control.id + "-error";
-    error.className = "scenario-error";
-    error.dataset.path = path;
-    error.setAttribute("role", "alert");
-    control.setAttribute("aria-describedby", error.id);
-    row.append(error);
-  }
-  container.append(row);
-  return row;
-}
-
-function showError(form: HTMLFormElement, message: string) {
-  const marker = message.indexOf(" — ");
-  const path = marker < 0 ? "" : message.slice(0, marker).split("#").at(-1)!;
-  const errors = [...form.querySelectorAll<HTMLElement>(".scenario-error")];
-  const nearest = errors.filter(error => {
-    const key = error.dataset.path;
-    return key && (path === key || path.startsWith(key + "."));
-  }).sort((a, b) => b.dataset.path!.length - a.dataset.path!.length)[0];
-  (nearest ?? errors.at(-1)!).textContent = marker < 0 ? message : message.slice(marker + 3);
-}
-
-function requestInput(form: HTMLElement, key: string, property: JSONSchema, required: boolean,
-  label: string, initial: Pick<Fact, "value" | "unit"> | undefined, path: string) {
-  const valueSchema = property.properties!.value as JSONSchema;
-  const variants = valueSchema.anyOf ?? [valueSchema];
-  const canBeUnknown = variants.some(schema => schema.type === "null");
-  const value = variants.find(schema => schema.type !== "null")!;
-  const unit = property.properties!.unit as JSONSchema;
-  const unitLabel = typeof unit.const === "string" ? unit.const : initial?.unit ?? "";
-  const choices = value.enum ?? (value.const !== undefined ? [value.const] : value.type === "boolean" ? [true, false] : undefined);
-  let read: () => Value;
-  let control: HTMLSelectElement | HTMLInputElement;
-  if (choices) {
-    const select = document.createElement("select");
-    select.append(...choices.map(choice => new Option(choice === true ? "예" : choice === false ? "아니요" : String(choice))));
-    select.selectedIndex = Math.max(0, choices.indexOf(initial?.value ?? null));
-    control = select;
-    read = () => choices[select.selectedIndex]!;
-  } else {
-    const input = document.createElement("input");
-    const numeric = value.type === "integer" || value.type === "number";
-    input.type = numeric ? "number" : "text";
-    if (numeric) input.step = value.type === "integer" ? "1" : "any";
-    input.value = initial?.value == null ? "" : String(initial.value);
-    control = input;
-    read = () => numeric ? input.valueAsNumber : input.value;
-  }
-  const caption = unitLabel ? `${label} (${unitLabel})` : label;
-  const row = field(form, caption, control, path + "." + key);
-  const mode = document.createElement("select");
-  mode.setAttribute("aria-label", caption + " 상태");
-  mode.append(new Option("값 지정", "value"));
-  if (canBeUnknown) mode.append(new Option("미확인", "unknown"));
-  if (!required) mode.append(new Option("미지정", "omit"));
-  mode.value = initial === undefined && !required ? "omit" : initial?.value === null ? "unknown" : "value";
-  control.disabled = mode.value !== "value";
-  mode.addEventListener("change", () => { control.disabled = mode.value !== "value"; });
-  if (canBeUnknown || !required) {
-    row.classList.add("scenario-request");
-    row.insertBefore(mode, row.lastElementChild);
-  }
-  return () => mode.value === "omit" ? undefined : { value: mode.value === "unknown" ? null : read(), unit: unitLabel };
 }
 
 function endpoint(form: HTMLElement, items: SceneDocument["items"], documents: Documents,
@@ -166,7 +86,10 @@ function memberId(member: Member) {
   return typeof member === "string" ? member : member.workload;
 }
 
-export function mountScenario(root: HTMLElement, documents: Documents, act: (intent: Intent) => void) {
+export function mountScenario(root: HTMLElement, documents: Documents, act: (intent: Intent) => void,
+  registrations: readonly DomainRegistration[] = domains) {
+  const presets = describePresets(registrations);
+  const plugins = registrations.map(({ plugin }) => plugin);
   root.innerHTML = `
     <div class="scenario-section">
       <div class="scenario-toolbar"><button type="button">새 시나리오</button></div>
@@ -189,6 +112,7 @@ export function mountScenario(root: HTMLElement, documents: Documents, act: (int
   let selectedWorkload = "";
   let creatingScenario = false;
   let creatingWorkload = false;
+  let scenarioDraft: (() => { name: string; members: Map<string, { enabled: boolean; priority: string }> }) | undefined;
 
   function validate(form: HTMLFormElement, scenarioId: string | null,
     changes: (before: SceneDocument, fact: (value: Value, unit: string) => Fact) => SceneDocument,
@@ -221,7 +145,9 @@ export function mountScenario(root: HTMLElement, documents: Documents, act: (int
     act({ kind: "edit-scenario", document: next, scenarioId });
   }
 
-  function renderScenario() {
+  function renderScenario(keepDraft = false) {
+    const draft = keepDraft ? scenarioDraft?.() : undefined;
+    scenarioDraft = undefined;
     const { document: saved, scenarioId } = state;
     const index = creatingScenario ? -1 : saved.scenarios.findIndex(scenario => scenario.id === scenarioId);
     const scenario = saved.scenarios[index];
@@ -235,7 +161,7 @@ export function mountScenario(root: HTMLElement, documents: Documents, act: (int
     if (!scenario && !creatingScenario) return;
     const path = "scenarios." + (index < 0 ? saved.scenarios.length : index);
     const name = document.createElement("input");
-    name.value = scenario?.id ?? "";
+    name.value = draft?.name ?? scenario?.id ?? "";
     field(scenarioForm, "시나리오 이름", name, path + ".id");
     if (saved.workloads.length) {
       const legend = document.createElement("p");
@@ -253,11 +179,12 @@ export function mountScenario(root: HTMLElement, documents: Documents, act: (int
       row.className = "scenario-member";
       const enabled = document.createElement("input");
       enabled.type = "checkbox";
-      enabled.checked = member !== undefined;
+      const edited = draft?.members.get(id);
+      enabled.checked = edited?.enabled ?? (member !== undefined);
       const priority = document.createElement("input");
       priority.type = "number";
       priority.step = "1";
-      priority.value = typeof member === "object" ? String(member.priority.value) : "";
+      priority.value = edited?.priority ?? (typeof member === "object" ? String(member.priority.value) : "");
       priority.placeholder = "자동";
       priority.disabled = !enabled.checked;
       enabled.addEventListener("change", () => { priority.disabled = !enabled.checked; });
@@ -271,6 +198,8 @@ export function mountScenario(root: HTMLElement, documents: Documents, act: (int
     error.className = "scenario-error";
     error.setAttribute("role", "alert");
     scenarioForm.append(button(creatingScenario ? "시나리오 만들기" : "시나리오 적용", true), error);
+    scenarioDraft = () => ({ name: name.value, members: new Map(rows.map(row => [row.workload.id,
+      { enabled: row.enabled.checked, priority: row.priority.value }])) });
     scenarioForm.onsubmit = event => {
       event.preventDefault();
       const id = name.value.trim();
@@ -294,7 +223,7 @@ export function mountScenario(root: HTMLElement, documents: Documents, act: (int
   }
 
   function renderWorkload() {
-    const { document: saved, scenarioId } = state;
+    const saved = state.document;
     const index = saved.workloads.findIndex(workload => workload.id === selectedWorkload);
     const original = creatingWorkload ? undefined : saved.workloads[index];
     workloadSelect.replaceChildren(new Option("작업 선택", ""),
@@ -319,8 +248,8 @@ export function mountScenario(root: HTMLElement, documents: Documents, act: (int
       const from = endpoint(editor, saved.items, documents, "출발", original?.from, path + ".from");
       const to = endpoint(editor, saved.items, documents, "도착", original?.to, path + ".to");
       const fields = Object.entries(preset.shape.properties!).map(([key, property]) => ({
-        key, read: requestInput(editor, key, property as JSONSchema, preset.shape.required?.includes(key) ?? false,
-          preset.labels[key] ?? key, original ? original.request[key] : preset.request[key], path + ".request"),
+        key, read: claimInput(editor, key, property, preset.shape.required?.includes(key) ?? false,
+          original ? original.request[key] : preset.request[key], path + ".request." + key).read,
       }));
       const error = document.createElement("p");
       error.className = "scenario-error";
@@ -329,6 +258,7 @@ export function mountScenario(root: HTMLElement, documents: Documents, act: (int
       workloadForm.onsubmit = event => {
         event.preventDefault();
         const id = original?.id ?? nextId(preset.kind, saved.workloads.map(workload => workload.id));
+        const scenarioId = state.scenarioId;
         validate(workloadForm, scenarioId, (before, fact) => {
           const request = Object.fromEntries(fields.flatMap(({ key, read }) => {
             const draft = read();
@@ -343,13 +273,13 @@ export function mountScenario(root: HTMLElement, documents: Documents, act: (int
             && Object.keys(request).length === Object.keys(original.request).length
             && Object.entries(request).every(([key, value]) => original.request[key] === value)) return before;
           const workloads = original ? saved.workloads.with(index, next) : [...saved.workloads, next];
-          const scenarios = original ? saved.scenarios : saved.scenarios.map(scenario =>
+          const scenarios = original ? before.scenarios : before.scenarios.map(scenario =>
             scenario.id === scenarioId ? { ...scenario, members: [...scenario.members, id] } : scenario);
           return { ...before, workloads, scenarios };
         }, () => { selectedWorkload = id; creatingWorkload = false; });
       };
     }
-    if (original) renderEditor(presetFor(original));
+    if (original) renderEditor(presetFor(presets, original));
     else list.onchange = () => renderEditor(list.value === "" ? undefined : presets[Number(list.value)]);
   }
 
@@ -366,8 +296,9 @@ export function mountScenario(root: HTMLElement, documents: Documents, act: (int
     const previous = state;
     state = next;
     if (previous?.scenarioId !== next.scenarioId || previous?.document.scenarios !== next.document.scenarios
-      || previous?.document.workloads !== next.document.workloads) renderScenario();
-    if (previous?.scenarioId !== next.scenarioId || previous?.document.items !== next.document.items
-      || previous?.document.workloads !== next.document.workloads) renderWorkload();
+      || previous?.document.workloads !== next.document.workloads) {
+      renderScenario(previous?.scenarioId === next.scenarioId && previous?.document.workloads !== next.document.workloads);
+    }
+    if (previous?.document.items !== next.document.items || previous?.document.workloads !== next.document.workloads) renderWorkload();
   };
 }
