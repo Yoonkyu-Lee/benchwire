@@ -16,6 +16,7 @@ npm start
 ```sh
 npm run check   # 형 검사(tsc), 전체 시험(node --test), 게이트(tools/gate.ts)
 npm run test:ui # 설치된 Edge에서 실제 서버와 화면 검증
+npm run perf    # 조용한 상태에서 프레임·편집 지연 측정, 한도 초과 시 실패, work/에 JSON 저장
 ```
 
 ## 의존성

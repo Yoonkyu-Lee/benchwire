@@ -152,7 +152,7 @@ function detail(root: HTMLElement, view: ResultView, selected: Selection) {
 }
 
 export function mountEvidence(root: HTMLElement, change: {
-  run: (run: Run) => void; variant: (index: number) => void; loadVariants: () => Variants;
+  run: (run: Run) => void; variant: (index: number) => void; loadVariants: () => Promise<Variants>;
 }) {
   const heading = el("div");
   heading.className = "results-heading";
@@ -174,10 +174,18 @@ export function mountEvidence(root: HTMLElement, change: {
   choices.className = "variant-options";
   alternatives.append(choices);
   alternatives.addEventListener("toggle", () => {
-    if (alternatives.open && current) {
-      readyVariants = change.loadVariants();
+    const view = current;
+    if (!alternatives.open || !view) return;
+    choices.replaceChildren(el("p", "다른 설정을 계산 중입니다."));
+    void change.loadVariants().then(results => {
+      if (current?.scene !== view.scene || current?.scenario !== view.scenario) return;
+      readyVariants = results;
       renderChoices(current, readyVariants, variant);
-    }
+    }, (error: unknown) => {
+      if (!(error instanceof Error)) throw error;
+      if (current?.scene === view.scene && current.scenario === view.scenario)
+        choices.replaceChildren(el("p", error.message));
+    });
   });
   controls.append(run, alternatives);
   const content = el("div");
@@ -254,7 +262,7 @@ export function mountEvidence(root: HTMLElement, change: {
     choose,
     render(view: ResultView | undefined, variants: Variants, index: number, preserveSelection: boolean) {
       if (!preserveSelection || selection?.kind === "resource") selection = undefined;
-      if (!preserveSelection) alternatives.open = false;
+      if (!preserveSelection || current?.scene !== view?.scene || current?.scenario !== view?.scenario) alternatives.open = false;
       current = view;
       variant = index;
       readyVariants = variants;

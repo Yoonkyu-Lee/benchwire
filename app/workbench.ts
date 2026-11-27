@@ -1,8 +1,9 @@
 // 장면 편집을 확정하고 캔버스·엔진 결과·근거 패널을 연결한다.
-import type { Run } from "../engine/results.ts";
-import { assessDocument, type Assessment, type Documents } from "./assessment.ts";
+import { physicalSteps } from "../engine/physical.ts";
+import type { Results, Run } from "../engine/results.ts";
+import { evaluateInWorker, loadAssessment, type Assessment, type Documents, type Variants } from "./assessment.ts";
 import { mountCanvas } from "./canvas.ts";
-import { occupiedPorts, type ConnectionDecision } from "./connection.ts";
+import { occupiedPorts } from "./connection.ts";
 import { addConnection, modelKey, place, portKey, type InventoryItem, type Library, type SceneDocument, type SceneIntent } from "./document.ts";
 import { mountEvidence } from "./evidence.ts";
 import { INVENTORY_DRAG, mountInventory } from "./inventory.ts";
@@ -21,6 +22,10 @@ export function mountWorkbench(root: HTMLElement, initial: SceneDocument, librar
   let scene = initial;
   let cable: InventoryItem | undefined;
   let assessment: Assessment | undefined;
+  let evaluated: Assessment | undefined;
+  let primary: Results | undefined;
+  const alternatives = new Map<number, Variants>();
+  const owner = {};
   let view: ResultView | undefined;
 
   let scenario: number | null = null;
@@ -52,12 +57,15 @@ export function mountWorkbench(root: HTMLElement, initial: SceneDocument, librar
         <div class="canvas-help">빈 곳 드래그로 이동 · 휠로 확대/축소 · 포트에서 포트로 연결</div>
         <div class="status" role="status"></div>
         <div class="assessment-error" role="alert"></div>
+        <div class="assessment-progress" aria-live="polite"></div>
         <aside id="results-panel" class="results-panel" aria-label="결과와 근거" hidden></aside>
       </main>
     </div>`;
   root.querySelector("h1")!.textContent = options.title || initial.sceneId;
   const count = root.querySelector<HTMLElement>(".scene-count")!;
   const stage = root.querySelector<HTMLElement>(".viewport")!;
+  const display = stage.parentElement!;
+  const progress = root.querySelector<HTMLElement>(".assessment-progress")!;
   const status = root.querySelector<HTMLElement>(".status")!;
   const error = root.querySelector<HTMLElement>(".assessment-error")!;
   const setStatus = (text: string) => { status.textContent = text; };
@@ -69,7 +77,7 @@ export function mountWorkbench(root: HTMLElement, initial: SceneDocument, librar
   const panel = mountEvidence(root.querySelector<HTMLElement>(".results-panel")!, {
     run(next) { run = next; redrawResults(); },
     variant(index) { variant = index; redrawResults(); },
-    loadVariants: () => assessment?.variants(scenario, true) ?? [],
+    loadVariants,
   });
   const canvas = mountCanvas(stage, library, {
     intent: edit, status: setStatus,
@@ -108,6 +116,10 @@ export function mountWorkbench(root: HTMLElement, initial: SceneDocument, librar
     count.textContent = `실물 ${scene.items.length} · 연결 ${scene.connections.length}`;
     canvas.render(scene, view?.wires);
     inventory(scene, cable?.instanceId);
+    updateScenario();
+  }
+
+  function updateScenario() {
     if (assessment) {
       scenarioPanel.hidden = false;
       renderScenario({ document: scene, scenarioId: readScenario() });
@@ -115,25 +127,57 @@ export function mountWorkbench(root: HTMLElement, initial: SceneDocument, librar
   }
 
   function redrawResults(preserveSelection = true) {
-    const variants = assessment?.variants(scenario) ?? [];
-    if (assessment) view = resultView(assessment.scene, (variants[variant]?.result ?? assessment.primary), scenario, run);
+    if (!assessment || assessment !== evaluated || !primary) return;
+    const variants = scenario === null ? [] : alternatives.get(scenario) ?? [];
+    view = resultView(assessment.scene, variants[variant]?.result ?? primary, scenario, run);
     render();
     panel.render(view, variants, variant, preserveSelection);
   }
 
+  async function loadVariants() {
+    const loaded = assessment, row = scenario;
+    if (!loaded || loaded !== evaluated || row === null) return [];
+    const cached = alternatives.get(row);
+    if (cached) return cached;
+    const reply = await evaluateInWorker(owner, { kind: "variants", document: scene, documents, scenario: row });
+    if (!reply || assessment !== loaded || !root.contains(display)) return [];
+    if (reply.kind === "error") throw new Error(reply.message);
+    if (reply.kind !== "variants") return [];
+    alternatives.set(row, reply.results);
+    return reply.results;
+  }
+
   function load(next: SceneDocument, scenarioId = readScenario()) {
-    const loaded = assessDocument(next, documents, scenarioId);
+    const loaded = loadAssessment(next, documents, scenarioId);
     if ("error" in loaded) { error.textContent = loaded.error; return undefined; }
     error.textContent = "";
     return loaded;
   }
 
-  function use(loaded: Assessment) {
+  function use(loaded: Assessment, geometryChanged = true) {
     assessment = loaded;
     scenario = loaded.scenario;
-
     variant = 0;
-    redrawResults();
+    alternatives.clear();
+    display.setAttribute("data-assessing", "");
+    progress.textContent = "판정 계산 중…";
+    if (geometryChanged) render();
+    else updateScenario();
+    void evaluateInWorker(owner, { kind: "primary", document: scene, documents }).then(reply => {
+      if (!reply || assessment !== loaded || !root.contains(display)) return;
+      canvas.afterGesture(() => {
+        if (assessment !== loaded || !root.contains(display)) return;
+        if (reply.kind === "primary") {
+          primary = reply.result;
+          evaluated = loaded;
+          redrawResults();
+        } else if (reply.kind === "error") {
+          error.textContent = reply.message;
+        }
+        display.removeAttribute("data-assessing");
+        progress.textContent = "";
+      });
+    });
   }
 
   function commit(next: SceneDocument, intent: SceneIntent, prepared?: Assessment) {
@@ -144,7 +188,7 @@ export function mountWorkbench(root: HTMLElement, initial: SceneDocument, librar
       const loaded = prepared ?? load(next);
       if (!loaded) return false;
       scene = next;
-      use(loaded);
+      use(loaded, intent.kind !== "edit-scenario");
     }
     options.onChange?.(scene, intent);
     return true;
@@ -175,9 +219,11 @@ export function mountWorkbench(root: HTMLElement, initial: SceneDocument, librar
     });
     const loaded = load(candidate);
     if (!loaded) return;
-    const decision = checkConnection(loaded, candidate.connections.at(-1)!.id);
-    if (!decision.allowed) {
-      setStatus(decision.reason + (decision.required.length ? " 필요한 결합 형태 " + decision.required.join(" · ") : ""));
+    const connection = loaded.scene.connections.findIndex(c => c.id === candidate.connections.at(-1)!.id);
+    const mates = [...physicalSteps(loaded.scene, connection, "forward"), ...physicalSteps(loaded.scene, connection, "reverse")];
+    const required = new Set(mates.filter(step => step.kind === "mate" && step.verdict === "impossible").map(step => step.required));
+    if (required.size) {
+      setStatus("커넥터가 맞지 않습니다. 필요한 결합 형태 " + [...required].join(" · "));
       return;
     }
     cable = undefined;
@@ -195,7 +241,8 @@ export function mountWorkbench(root: HTMLElement, initial: SceneDocument, librar
     if (row !== scenario) {
       scenario = row;
       variant = 0;
-      redrawResults(false);
+      if (assessment === evaluated) redrawResults(false);
+      else updateScenario();
       options.onSelectScenario?.(id);
     }
     return true;
@@ -222,17 +269,4 @@ export function mountWorkbench(root: HTMLElement, initial: SceneDocument, librar
     },
     editScenario,
   };
-}
-
-function checkConnection(assessment: Assessment, id: string): ConnectionDecision {
-  const { primary: result, scene } = assessment;
-  const connection = scene.connections.findIndex(c => c.id === id);
-  const mismatches = new Set(result.physical.filter(p => p.connection === connection && p.kind === "mate" && p.verdict === "impossible")
-    .map(p => p.required));
-  if (!mismatches.size) return { allowed: true };
-  const reported = result.needs.filter(n => {
-    const o = result.outcomes[n.outcome]!;
-    return o.subjectKind === "connection" && o.subjectRow === connection && mismatches.has(n.requiredCapability);
-  }).map(n => n.requiredCapability);
-  return { allowed: false, reason: "커넥터가 맞지 않습니다.", required: [...new Set([...reported, ...mismatches].filter(Boolean))] };
 }

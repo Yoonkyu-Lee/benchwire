@@ -63,6 +63,7 @@ export function mountCanvas(root: HTMLElement, library: Library,
   let camera = { x: 0, y: 0, zoom: 1 };
   let cameraFrame: number | undefined;
   let gesture: Gesture | undefined;
+  let afterPointer: (() => void) | undefined;
   let selected: Socket | undefined;
   let highlighted: string | undefined;
   let drawn = false;
@@ -153,6 +154,7 @@ export function mountCanvas(root: HTMLElement, library: Library,
 
   function render(scene: SceneDocument, assessed?: ReadonlyMap<string, readonly WireMark[]>) {
     const focused = socketAt(document.activeElement);
+    const selectedKey = selected && portKey(selected.ref);
     gesture = undefined;
     surface.classList.remove("panning");
     preview.removeAttribute("d");
@@ -273,6 +275,7 @@ export function mountCanvas(root: HTMLElement, library: Library,
       if (scene.layout?.viewport) lookAt(scene.layout.viewport);
       else fit();
     }
+    if (selectedKey && !occupied.has(selectedKey)) mark(sockets.get(selectedKey));
     if (focused) sockets.get(portKey(focused.ref))?.element.focus({ preventScroll: true });
   }
 
@@ -313,6 +316,17 @@ export function mountCanvas(root: HTMLElement, library: Library,
     if (beginPort(b)) actions.intent({ kind: "connect", from: a.ref, to: b.ref });
   }
 
+  function afterGesture(draw: () => void) {
+    if (gesture) afterPointer = draw;
+    else draw();
+  }
+
+  function finishGesture() {
+    const draw = afterPointer;
+    afterPointer = undefined;
+    draw?.();
+  }
+
   function cancel() {
     if (gesture?.kind === "move") move(gesture.card, gesture.origin);
     if (gesture?.kind === "pan") {
@@ -323,6 +337,7 @@ export function mountCanvas(root: HTMLElement, library: Library,
     gesture = undefined;
     mark(undefined);
     preview.removeAttribute("d");
+    finishGesture();
   }
 
   function highlight(group: SVGGElement) {
@@ -333,7 +348,7 @@ export function mountCanvas(root: HTMLElement, library: Library,
 
   surface.addEventListener("pointerdown", event => {
     if (event.button !== 0 || gesture || !(event.target instanceof Element)) return;
-    const start = local({ x: event.clientX, y: event.clientY });
+    const start = { x: event.clientX, y: event.clientY };
     const socket = socketAt(event.target);
     const connection = event.target.closest<SVGGElement>("[data-connection]");
     const id = event.target.closest<SVGGElement>("[data-instance]")?.dataset.instance;
@@ -360,9 +375,9 @@ export function mountCanvas(root: HTMLElement, library: Library,
 
   surface.addEventListener("pointermove", event => {
     if (!gesture || event.pointerId !== gesture.pointer) return;
-    const p = local({ x: event.clientX, y: event.clientY });
+    const p = { x: event.clientX, y: event.clientY };
     const dx = p.x - gesture.start.x, dy = p.y - gesture.start.y;
-    if (gesture.kind === "connect") preview.setAttribute("d", curve(coords(gesture.source), toWorld(p)));
+    if (gesture.kind === "connect") preview.setAttribute("d", curve(coords(gesture.source), toWorld(local(p))));
     else if (gesture.kind === "move") move(gesture.card, { x: gesture.origin.x + dx / camera.zoom, y: gesture.origin.y + dy / camera.zoom });
     else { camera.x = gesture.origin.x + dx; camera.y = gesture.origin.y + dy; scheduleCamera(); }
   });
@@ -379,13 +394,13 @@ export function mountCanvas(root: HTMLElement, library: Library,
       const target = socketAt(document.elementFromPoint(event.clientX, event.clientY));
       if (target) connect(active.source, target);
     } else if (active.kind === "move") {
-      const p = local({ x: event.clientX, y: event.clientY });
-      const dx = p.x - active.start.x, dy = p.y - active.start.y;
+      const dx = event.clientX - active.start.x, dy = event.clientY - active.start.y;
       if (Math.hypot(dx, dy) > DRAG_DISTANCE)
         actions.intent({ kind: "place", instanceId: active.instanceId,
           position: { x: active.origin.x + dx / camera.zoom, y: active.origin.y + dy / camera.zoom } });
       else move(active.card, active.origin);
     }
+    finishGesture();
   });
 
   surface.addEventListener("lostpointercapture", event => {
@@ -421,5 +436,5 @@ export function mountCanvas(root: HTMLElement, library: Library,
       actions.status("연결할 반대편 포트에서 Enter 또는 Space를 누르세요.");
     }
   });
-  return { render, setLayer, zoom, fit, fromClient: (point: Point) => toWorld(local(point)), center: () => toWorld(center()) };
+  return { render, setLayer, zoom, fit, afterGesture, fromClient: (point: Point) => toWorld(local(point)), center: () => toWorld(center()) };
 }

@@ -1,68 +1,11 @@
-// 설치된 Edge에서 작업대의 편집 동작과 50기기 장면의 프레임 시간을 검증한다.
+// 설치된 Edge에서 작업대의 편집 결과와 저장·복구 동작을 검증한다.
 import assert from "node:assert/strict";
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
-import type { Server } from "node:http";
-import { basename, dirname, join, resolve } from "node:path";
-import { after, before, test } from "node:test";
-import { setTimeout as sleep } from "node:timers/promises";
-import { chromium, type Browser, type BrowserContext, type Locator, type Page } from "playwright";
-import { build } from "vite";
-import { startServer } from "../server/http.ts";
+import { test } from "node:test";
+import type { Page } from "playwright";
+import { center, edgeSession, viewport, waitForAssessment } from "./edge-session.ts";
 
-const viewport = { width: 1440, height: 900 };
-const root = resolve("app");
-const outDir = resolve("work/ui-dist");
-let browser: Browser;
-let server: Server | undefined;
-let dataDir: string;
-let base: string;
-
-async function openServer() {
-  server = await startServer({ port: 0, dataDir, buildDir: outDir });
-  const address = server.address();
-  assert(address && typeof address === "object");
-  base = `http://127.0.0.1:${address.port}`;
-}
-
-async function closeServer() {
-  const closing = server;
-  server = undefined;
-  if (closing) await new Promise<void>((done, fail) => closing.close(error => error ? fail(error) : done()));
-}
-
-before(async () => {
-  await mkdir("work", { recursive: true });
-  dataDir = await mkdtemp(resolve("work/ui-data-"));
-  await build({ root, logLevel: "error", build: { outDir, emptyOutDir: true,
-    rolldownOptions: { input: [join(root, "index.html"), join(root, "testbed.html")] } } });
-  await openServer();
-  browser = await chromium.launch({ channel: "msedge", headless: true });
-});
-
-after(async () => {
-  await Promise.all([browser?.close(), closeServer()]);
-  if (dataDir) {
-    assert.equal(dirname(dataDir), resolve("work"));
-    assert(basename(dataDir).startsWith("ui-data-"));
-    await rm(dataDir, { recursive: true, force: true });
-  }
-});
-
-async function center(locator: Locator) {
-  const box = await locator.boundingBox();
-  assert(box);
-  return { x: box.x + box.width / 2, y: box.y + box.height / 2 };
-}
-
-async function newPage(path: string, context?: BrowserContext) {
-  const page = context ? await context.newPage() : await browser.newPage({ viewport, deviceScaleFactor: 1 });
-  const errors: Error[] = [];
-  page.on("pageerror", error => errors.push(error));
-  await page.goto(base + path);
-  await page.locator(".surface").waitFor();
-  assert.deepEqual(errors, []);
-  return { page, errors };
-}
+const edge = edgeSession();
+const { newPage, openServer, closeServer } = edge;
 
 function port(page: Page, item: string, id: string) {
   return page.locator(`[data-item="${item}"][data-port="${id}"]`);
@@ -112,7 +55,7 @@ async function movePse(page: Page, dx: number, dy: number) {
 }
 
 test("예제의 자동 저장은 사본으로 이어지고 새로고침·다른 탭·서버 재시작에서도 장면을 지킨다", async () => {
-  const tabs = await browser.newContext({ viewport, deviceScaleFactor: 1 });
+  const tabs = await edge.browser.newContext({ viewport, deviceScaleFactor: 1 });
   const { page, errors } = await newPage("/", tabs);
   const picker = page.getByRole("combobox", { name: "장면" });
   const card = page.locator('[data-instance="pse"]');
@@ -397,68 +340,6 @@ test("Mbps·W 작업, 멤버, 우선순위, 미확인 요청을 고쳐 문서 �
   } finally { await page.close(); }
 });
 
-type Motion = "drag" | "pan" | "zoom";
-const duration = 2000;
-
-async function measure(page: Page, motion: Motion) {
-  await page.goto(base + "/testbed.html?performance");
-  const cardTitle = page.locator('[data-instance="grid-12"] .device-name');
-  await cardTitle.waitFor();
-  assert.equal(await page.locator(".device").count(), 50);
-  assert.equal(await page.locator(".port").count(), 400);
-  assert.equal(await page.locator(".wire").count(), 100);
-  assert.equal(await page.locator('.wire-line[data-result-kind="negotiation"]').count(), 200);
-  const target = motion === "drag" ? await center(cardTitle)
-    : motion === "pan" ? { x: 288, y: 134 } : { x: 848, y: 432 };
-  const carrier = motion === "drag" ? page.locator('[data-instance="grid-12"]') : page.locator(".world");
-  const before = await carrier.getAttribute("transform");
-  await page.mouse.move(target.x, target.y);
-  if (motion !== "zoom") await page.mouse.down();
-  await page.waitForTimeout(350);
-  const frameTimes = page.evaluate(ms => new Promise<number[]>(done => {
-    const samples: number[] = [];
-    requestAnimationFrame(start => {
-      let last = start;
-      function sample(now: number) {
-        samples.push(now - last);
-        last = now;
-        if (now - start < ms) requestAnimationFrame(sample);
-        else done(samples);
-      }
-      requestAnimationFrame(sample);
-    });
-  }), duration);
-  const start = performance.now();
-  const steps = motion === "zoom" ? 80 : 120;
-  for (let i = 0; i < steps; i++) {
-    const delay = start + i * duration / steps - performance.now();
-    if (delay > 0) await sleep(delay);
-    if (motion === "zoom") await page.mouse.wheel(0, i % 12 < 7 ? -8 : 8);
-    else await page.mouse.move(target.x + 105 * i / steps, target.y + Math.sin(i / 12) * 38 + 35 * i / steps);
-  }
-  const times = (await frameTimes).sort((a, b) => a - b);
-  if (motion !== "zoom") await page.mouse.up();
-  assert.notEqual(await carrier.getAttribute("transform"), before, motion);
-  const quantile = (q: number) => Number(times[Math.ceil(q * times.length) - 1]!.toFixed(2));
-  return { motion, samples: times.length, inputs: steps, p50: quantile(0.5), p95: quantile(0.95), max: quantile(1) };
-}
-
-test("50기기·400포트·100선 장면의 드래그·팬·줌 프레임 p95가 20 ms 이하다", { timeout: 60_000 }, async context => {
-  const page = await browser.newPage({ viewport, deviceScaleFactor: 1 });
-  try {
-    const samples = [];
-    for (let trial = 1; trial <= 3; trial++) {
-      for (const motion of ["drag", "pan", "zoom"] as const) samples.push({ trial, ...await measure(page, motion) });
-    }
-    const stats = { browser: browser.version(), viewport, duration, samples };
-    await writeFile("work/m3-canvas-perf.json", JSON.stringify(stats, null, 2));
-    for (const sample of samples) {
-      context.diagnostic(JSON.stringify(sample));
-      assert(sample.p95 <= 20, `${sample.motion} ${sample.trial}: p95 ${sample.p95} ms`);
-    }
-  } finally { await page.close(); }
-});
-
 test("PoE 예제의 작업량, 협상 출처와 자원 막대를 열고 의미 편집 후 한 흐름만 지운다", async () => {
   const { page, errors } = await newPage("/testbed.html?example");
   try {
@@ -500,6 +381,7 @@ test("PoE 예제의 작업량, 협상 출처와 자원 막대를 열고 의미 �
       return window.benchwire.edit({ ...scene, workloads: scene.workloads.filter(w => w.id !== "poe-12"),
         scenarios: [{ id: "poe", members: ["poe-ethernet"] }] });
     }), true);
+    await waitForAssessment(page);
     assert.deepEqual(await flow.allTextContents(), flowBefore.filter(text => text.includes("900 Mbps")));
     assert.equal(await wire.locator('[data-result-kind="negotiation"]').count(), 4);
     assert.deepEqual(await page.evaluate(() => window.benchwire.read().layout), layout);
@@ -533,48 +415,52 @@ test("PoE 손실이 미확인이면 케이블 위에 범위·점선을 그리고
   } finally { await page.close(); }
 });
 
-test("예제와 50기기 정적 빌드에서 의미 편집부터 새 판정이 그려지는 시간을 기록한다", { timeout: 60_000 }, async context => {
-  const measurements = [];
-  for (const [mode, id, expected] of [["example", "poe-ethernet", 2], ["performance", "traffic-3", 50]] as const) {
-    const { page, errors } = await newPage("/testbed.html?" + mode);
-    try {
-      assert.equal(await page.locator(".device").count(), expected);
-      if (mode === "performance") {
-        assert.equal(await page.locator(".port").count(), 400);
-        assert.equal(await page.locator(".wire").count(), 100);
-        assert.equal(await page.locator('.wire-line[data-result-kind="negotiation"]').count(), 200);
+test("연속 편집의 최신 판정만 표시하고 판정 도착 중에도 카드 드래그를 마친다", async () => {
+  const { page, errors } = await newPage("/testbed.html?performance");
+  try {
+    const rates = await page.evaluate(async () => {
+      const flow = () => document.querySelector('.wire-result[data-workload="traffic-3"]')?.textContent;
+      const stage = document.querySelector(".stage")!;
+      const captured: (string | null | undefined)[] = [];
+      const observer = new MutationObserver(() => captured.push(flow()));
+      observer.observe(stage, { subtree: true, childList: true });
+      for (const value of [850, 840, 830]) {
+        const scene = window.benchwire.read();
+        const workloads = scene.workloads.map(w => w.id === "traffic-3"
+          ? { ...w, request: { ...w.request, throughput: { ...w.request.throughput!, value } } } : w);
+        if (!window.benchwire.edit({ ...scene, workloads })) throw new Error("편집 실패");
       }
-      await page.getByRole("button", { name: "결과 · 근거" }).click();
-      const samples = await page.evaluate(async id => {
-        const samples: number[] = [];
-        for (let i = 0; i < 23; i++) {
-          const throughput = i % 2 ? 840 : 860;
-          const scene = window.benchwire.read();
-          const workloads = scene.workloads.map(w => w.id !== id ? w : { ...w, request: { ...w.request,
-            throughput: { ...w.request.throughput!, value: throughput },
-          } });
-          const start = performance.now();
-          if (!window.benchwire.edit({ ...scene, workloads })) throw new Error("편집 실패");
-          await new Promise<void>(resolve => requestAnimationFrame(() => requestAnimationFrame(() => resolve())));
-          const elapsed = performance.now() - start;
-          const mark = document.querySelector(`.wire-result[data-workload="${id}"]`);
-          const amount = `${throughput} Mbps`;
-          const list = document.querySelectorAll(".results-panel .result-list[open] button");
-          if (!mark?.textContent?.includes(amount) || ![...list].some(option => option.textContent?.includes(amount)))
-            throw new Error("새 배분량 미표시");
-          if (i >= 2) samples.push(elapsed);
-        }
-        return samples.map(ms => Number(ms.toFixed(2)));
-      }, id);
-      const sorted = [...samples].sort((a, b) => a - b);
-      const percentile = (q: number) => sorted[Math.ceil(q * sorted.length) - 1]!;
-      const stat = { mode, samples, p50: percentile(0.5), p95: percentile(0.95), max: percentile(1) };
-      context.diagnostic(JSON.stringify(stat));
-      measurements.push(stat);
-      assert.deepEqual(errors, []);
-    } finally { await page.close(); }
-  }
-  await writeFile("work/m3-results-perf.json", JSON.stringify({ browser: browser.version(), viewport, measurements }, null, 2));
+      if (!stage.hasAttribute("data-assessing") || !flow()?.includes("900 Mbps")) throw new Error("이전 판정을 흐리게 보존하지 않았습니다.");
+      const opacity = getComputedStyle(stage.querySelector(".wires")!).opacity;
+      if (Number(opacity) >= 1) throw new Error("이전 판정을 흐리게 표시하지 않았습니다.");
+      await window.benchwire.workerBarrier();
+      captured.push(flow());
+      observer.disconnect();
+      return captured;
+    });
+    assert(rates.some(rate => rate?.includes("830 Mbps")));
+    assert(rates.every(rate => !rate?.match(/8[45]0 Mbps/)));
+    const card = page.locator('[data-instance="grid-12"]');
+    const before = await card.getAttribute("transform");
+    const origin = await center(card.locator(".device-name"));
+    await page.mouse.move(origin.x, origin.y);
+    await page.mouse.down();
+    await page.evaluate(async () => {
+      const scene = window.benchwire.read();
+      const workloads = scene.workloads.map(w => w.id === "traffic-3"
+        ? { ...w, request: { ...w.request, throughput: { ...w.request.throughput!, value: 820 } } } : w);
+      window.benchwire.edit({ ...scene, workloads });
+      await window.benchwire.workerBarrier();
+      if (!document.querySelector(".stage[data-assessing]")) throw new Error("드래그 중 판정으로 화면을 바꿨습니다.");
+    });
+    await page.screenshot({ path: "work/m3-perf-pending.png" });
+    await page.mouse.move(origin.x + 65, origin.y + 24, { steps: 6 });
+    await page.mouse.up();
+    await waitForAssessment(page);
+    assert.notEqual(await card.getAttribute("transform"), before);
+    assert.match(await page.locator('.wire-result[data-workload="traffic-3"]').textContent() ?? "", /820 Mbps/);
+    assert.deepEqual(errors, []);
+  } finally { await page.close(); }
 });
 
 test("다른 설정을 고르면 이미 평가한 시나리오의 핀 배정과 흐름을 바꿔 그린다", async () => {

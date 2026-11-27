@@ -8,8 +8,13 @@ import altCable from "../fixtures/t2/t2-cable@1.json" with { type: "json" };
 import altHost from "../fixtures/t2/t2-host@1.json" with { type: "json" };
 import altMonitor from "../fixtures/t2/t2-monitor@1.json" with { type: "json" };
 import { connectorsFile, modelFile, sceneFile } from "../scene/files.ts";
-import type { Connection, InventoryItem, Library, Model, Port, SceneDocument } from "./document.ts";
+import type { InventoryItem, Library, Model, Port, SceneDocument } from "./document.ts";
 import exampleRegistry from "../fixtures/example/connectors.json" with { type: "json" };
+import { benchmark } from "./assessment-fixture.ts";
+import { percentiles, phaseInputs } from "./assessment.profile.ts";
+import { evaluateInWorker, loadAssessment } from "./assessment.ts";
+import { mountCanvas } from "./canvas.ts";
+import { resultView } from "./results.ts";
 import { mountWorkbench } from "./workbench.ts";
 
 const source = { id: "ui", title: "화면 시험", locator: "fixture:ui", retrievedAt: "2026-11-27" };
@@ -49,51 +54,6 @@ const initial: SceneDocument = {
   ], viewport: { cx: 400, cy: 285, zoom: 1 } },
 };
 
-function benchmark(): { initial: SceneDocument; library: Library } {
-  const model: Model = {
-    ...hostModel, modelId: "performance-node", name: "측정 장치",
-    nodes: Array.from({ length: 8 }, (_, i) => ({ id: "nic-" + i, kind: "junction", label: "포트 " + (i + 1) })),
-    ports: Array.from({ length: 8 }, (_, i): Port => ({
-      ...hostPort, id: `p${i}`, label: `포트 ${i + 1}`, interfaces: [{ ...hostPort.interfaces[0]!, id: `lan-${i}` }],
-      attachment: { ...hostPort.attachment, value: "nic-" + i },
-      position: { face: i < 4 ? "front" : "rear", x: i % 2 ? 0.75 : 0.25, y: i % 4 < 2 ? 0.2 : 0.8,
-        confidence: "inferred", sources: [host.sources[0]!.id] },
-    })),
-  };
-  const items = Array.from({ length: 50 }, (_, i) => ({
-    instanceId: `grid-${i}`, modelId: model.modelId, revision: "1", alias: `장치 ${i + 1}`,
-  }));
-  const connections: Connection[] = [];
-  for (let i = 0; i < items.length; i++) {
-    const col = i % 5;
-    const row = Math.floor(i / 5);
-    if (col < 4) edge(i, i + 1, 0);
-    if (row < 9) edge(i, i + 5, 2);
-    if (row < 4 && col < 4 && i !== 0) edge(i, i + 6, 4);
-  }
-  function edge(from: number, to: number, pair: number) {
-    const id = connections.length;
-    connections.push({ id: `wire-${id}`, from: { instanceId: items[from]!.instanceId, id: `p${pair}` },
-      to: { instanceId: items[to]!.instanceId, id: `p${pair + 1}` },
-      parts: [{ instanceId: `cable-${id}`, entry: "a", exit: "b" }], evidence });
-  }
-  const workloads: SceneDocument["workloads"] = connections.filter((_, i) => i % 10 === 0).map((edge, i) => ({
-    id: `traffic-${i}`, kind: "traffic", domain: "network",
-    from: { ...edge.from, id: "nic-" + edge.from.id.slice(1) }, to: { ...edge.to, id: "nic-" + edge.to.id.slice(1) },
-    request: { throughput: { ...evidence, value: 900, unit: "Mbps" } },
-  }));
-  return {
-    initial: {
-      sceneId: "성능 측정", sources: [source], connections, workloads,
-      scenarios: [{ id: "together", members: workloads.map(w => w.id) }],
-      items: [...items, ...connections.map((_, i) => ({ instanceId: `cable-${i}`, modelId: cableModel.modelId, revision: "1" }))],
-      layout: { placements: items.map((item, i) => ({ instanceId: item.instanceId, x: i % 5 * 260, y: Math.floor(i / 5) * 190 })),
-        viewport: { cx: 620, cy: 710, zoom: 0.76 } },
-    },
-    library: { models: [model, cableModel], inventory: [], connectors },
-  };
-}
-
 const mode = location.search.slice(1);
 async function serverExample(unknownLoss: boolean) {
   const response = await fetch("/api/library");
@@ -131,8 +91,43 @@ declare global {
       edit(scene: SceneDocument): boolean;
       changes(): number;
       scenario(id: string): boolean;
+      phases: typeof profile;
+      workerBarrier(): Promise<void>;
     };
   }
+}
+
+async function profile() {
+  const host = document.createElement("div");
+  host.style.cssText = "position:fixed;inset:72px 0 0 262px;background:#f2f6f6";
+  document.body.append(host);
+  try {
+    const inputs = phaseInputs();
+    const canvas = mountCanvas(host, inputs.library, { intent() {}, status() {} });
+    const owner = {};
+    const samples: { load: number; evaluate: number; variants: number; roundTrip: number; draw: number; paint: number }[] = [];
+    for (let i = 0; i < 24; i++) {
+      const loadStart = performance.now();
+      const loaded = loadAssessment(inputs.initial, inputs.documents, null);
+      if ("error" in loaded) throw new Error(loaded.error);
+      const { scene } = loaded;
+      const request = performance.now();
+      const basic = await evaluateInWorker(owner, { kind: "primary", document: inputs.initial, documents: inputs.documents });
+      const roundTrip = performance.now() - request;
+      const variants = await evaluateInWorker(owner, { kind: "variants", document: inputs.initial, documents: inputs.documents, scenario: 0 });
+      if (basic?.kind !== "primary" || variants?.kind !== "variants") throw new Error("단계별 평가 실패");
+      const start = performance.now();
+      const view = resultView(scene, basic.result, 0, "together");
+      canvas.render(inputs.initial, view.wires);
+      const draw = performance.now() - start;
+      await new Promise<void>(done => requestAnimationFrame(() => requestAnimationFrame(() => done())));
+      if (i >= 3) samples.push({ load: request - loadStart, evaluate: basic.elapsed, variants: variants.elapsed,
+        roundTrip, draw, paint: performance.now() - start });
+    }
+    const stages = Object.fromEntries((["load", "evaluate", "variants", "roundTrip", "draw", "paint"] as const)
+      .map(key => [key, percentiles(samples.map(s => s[key]))]));
+    return { samples, stages };
+  } finally { host.remove(); }
 }
 
 window.benchwire = {
@@ -141,4 +136,9 @@ window.benchwire = {
   edit: scene => workbench.editScenario(scene),
   changes: () => count,
   scenario: id => workbench.setScenario(id),
+  phases: profile,
+  async workerBarrier() {
+    const document = { sceneId: "측정 동기화", items: [], connections: [], sources: [], workloads: [], scenarios: [] };
+    await evaluateInWorker({}, { kind: "primary", document, documents: workbench.documents });
+  },
 };

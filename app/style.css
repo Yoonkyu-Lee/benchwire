@@ -213,3 +213,11 @@ h1 { margin: 0; font-size: 17px; font-weight: 700; white-space: nowrap; }
 .quests { color: #64460b; }
 .compact-wires .wire:not(.highlighted):not(:focus-within) .wire-caption { display: none; }
 .wire.highlighted .wire-line[data-result-kind] { stroke-width: var(--flow-width, 3); filter: drop-shadow(0 0 2px var(--focus)); }
+
+.stage[data-assessing] :is(.wires, .results-panel) { opacity: .48; }
+.assessment-progress {
+  position: absolute; top: 14px; left: 14px; padding: 7px 10px;
+  border: 1px solid var(--line); border-radius: 6px; background: #fff; color: var(--muted);
+}
+.assessment-progress:empty { display: none; }
+.assessment-error:not(:empty) + .assessment-progress { top: 56px; }
