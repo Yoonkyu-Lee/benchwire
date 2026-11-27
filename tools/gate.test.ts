@@ -2,7 +2,7 @@
 
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { checkDependencies, checkDeviceNames, checkExcuses, checkHeader, checkImports, checkName, checkSecrets } from "./gate.ts";
+import { checkDependencies, checkDeviceNames, checkExcuses, checkHeader, checkImports, checkName, checkSecrets, checkTestScript } from "./gate.ts";
 import type { Finding } from "./gate.ts";
 
 const fails = (xs: Finding[]): number => xs.filter((x) => x.level === "FAIL").length;
@@ -45,6 +45,13 @@ test("카탈로그의 기기 이름이 엔진 · 플러그인 코드에 나오�
   const names = ["Contoso Dock 9"];
   assert.equal(fails(checkDeviceNames("domains/data/rules.ts", 'if (model === "contoso dock 9") {}', names)), 1);
   assert.equal(fails(checkDeviceNames("fixtures/t4.ts", 'const dock = "Contoso Dock 9";', names)), 0);
+});
+
+test("npm test 경로는 추적하는 모든 시험 파일을 잡는다(추적하지 않는 work/는 잡지 않게 폴더를 나열한다)", () => {
+  const script = 'node --test "{app,engine}/**/*.test.ts"';
+  assert.equal(fails(checkTestScript(script, ["app/a.test.ts", "engine/x/b.test.ts", "README.md"])), 0);
+  assert.equal(fails(checkTestScript(script, ["server/c.test.ts"])), 1);
+  assert.equal(fails(checkTestScript("node --test", ["app/a.test.ts"])), 1);
 });
 
 test("의존성은 README 의존성 표에 까닭과 함께 있다", () => {

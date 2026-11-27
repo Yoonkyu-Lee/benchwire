@@ -74,6 +74,15 @@ export function checkDependencies(pkg: Manifest, readme: string): Finding[] {
     .map((n) => ({ level: "FAIL", path: "package.json", line: 1, message: `의존성 '${n}'의 까닭이 README.md 의존성 표에 없다` }));
 }
 
+// node --test에는 파일 제외가 없어 시험 경로를 개념 폴더로 나열한다. 새 폴더의 시험이 빠지지 않게 확인한다.
+export function checkTestScript(script: string, files: readonly string[]): Finding[] {
+  const glob = /"([^"]+\.test\.ts)"/.exec(script)?.[1];
+  if (!glob) return [{ level: "FAIL", path: "package.json", line: 1, message: "test 스크립트에서 시험 파일 경로를 찾지 못했다" }];
+  return files
+    .filter((f) => f.endsWith(".test.ts") && !posix.matchesGlob(f, glob))
+    .map((f) => ({ level: "FAIL", path: f, line: 1, message: `이 시험 파일은 npm test 경로(${glob})에 잡히지 않는다` }));
+}
+
 export function checkSecrets(path: string, text: string): Finding[] {
   if (/(^|\/)\.env(\.|$)/.test(path) && !path.endsWith(".env.example"))
     return [{ level: "FAIL", path, line: 1, message: ".env는 커밋하지 않는다" }];
@@ -110,7 +119,8 @@ if (import.meta.main) {
   const listed = execFileSync("git", ["ls-files", "--cached", "--others", "--exclude-standard", "-z"], { encoding: "utf8" });
   const files = listed.split("\0").filter((f) => f !== "" && existsSync(f));
   const names = catalogNames(files);
-  const findings = checkDependencies(JSON.parse(readFileSync("package.json", "utf8")), readFileSync("README.md", "utf8"));
+  const manifest = JSON.parse(readFileSync("package.json", "utf8"));
+  const findings = [...checkDependencies(manifest, readFileSync("README.md", "utf8")), ...checkTestScript(manifest.scripts.test, files)];
   for (const f of files) {
     if (BINARY.test(f)) continue;
     const text = readFileSync(f, "utf8");

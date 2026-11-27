@@ -9,7 +9,7 @@
     "start": "npm run build:app && node server/http.ts",
     "check": "npm run typecheck && npm test && npm run gate",
     "typecheck": "tsc --noEmit -p . && tsc --noEmit -p tsconfig.app.json",
-    "test": "node --test \"**/*.test.ts\"",
+    "test": "node --test \"{app,cli,collector,domains,engine,fixtures,scene,server,tools}/**/*.test.ts\"",
     "gate": "node tools/gate.ts",
     "build:app": "vite build app --outDir ../dist/app --emptyOutDir",
     "test:ui": "node --test \"app/*.ui.ts\"",
