@@ -19,19 +19,18 @@ test("개념이 아닌 모음 이름을 막는다", () => {
   assert.equal(fails(checkName("engine/allocate.test.ts")), 0);
 });
 
-test("엔진은 영역 플러그인 · 화면 · 서버를 가져오지 않는다", () => {
+test("엔진은 엔진 안의 파일만 가져온다: 플러그인 · 화면 · node: 모듈 · 패키지 금지 (시험 파일은 예외)", () => {
   assert.equal(fails(checkImports("engine/run.ts", 'import { display } from "../domains/display/rules.ts";')), 1);
-  assert.equal(fails(checkImports("engine/run.ts", 'import type { Scene } from "./scene.ts";')), 0);
-});
-
-test("엔진은 브라우저에서도 돌므로 node: 모듈을 가져오지 않는다 (시험 파일은 예외)", () => {
   assert.equal(fails(checkImports("engine/run.ts", 'import { readFileSync } from "node:fs";')), 1);
+  assert.equal(fails(checkImports("engine/run.ts", 'import { z } from "zod";')), 1);
+  assert.equal(fails(checkImports("engine/run.ts", 'import type { Scene } from "./scene.ts";')), 0);
   assert.equal(fails(checkImports("engine/run.test.ts", 'import { test } from "node:test";')), 0);
 });
 
-test("영역 플러그인은 엔진 계약과 자기 폴더만 가져온다", () => {
-  const ok = 'import type { Domain } from "../../engine/domain.ts";\nimport { LIMITS } from "./constants.ts";';
+test("영역 플러그인은 엔진 계약(engine/contract.ts)과 자기 폴더만 가져온다", () => {
+  const ok = 'import type { Plugin } from "../../engine/contract.ts";\nimport { LIMITS } from "./constants.ts";\nimport { z } from "zod";';
   assert.equal(fails(checkImports("domains/power/rules.ts", ok)), 0);
+  assert.equal(fails(checkImports("domains/power/rules.ts", 'import { allocate } from "../../engine/allocate.ts";')), 1);
   assert.equal(fails(checkImports("domains/power/rules.ts", 'import { usb } from "../data/rules.ts";')), 1);
 });
 

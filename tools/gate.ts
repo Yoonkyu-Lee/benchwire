@@ -11,8 +11,8 @@ const SOURCE = /\.(ts|tsx|mjs|ps1)$/;
 const BINARY = /\.(png|jpe?g|gif|ico|webp|woff2?)$/i;
 // 개념이 아닌 모음 이름(AGENTS.md 평평한 배치).
 const GRAB_BAGS = new Set(["common", "utils", "util", "helpers", "helper", "shared", "misc"]);
-// 엔진은 플러그인 · 화면 · 서버를 모른다(SPEC 5.2, T10).
-const ABOVE_ENGINE = ["domains/", "app/", "server/", "cli/", "collector/"];
+// 플러그인이 엔진에서 읽는 유일한 파일(SPEC 5.2, T10).
+const CONTRACT = "engine/contract.ts";
 const EXCUSE = /\b(TODO|FIXME|HACK|XXX|for now|workaround)\b|일단|임시로|나중에/i;
 // 키 모양. 이 파일이 스스로 걸리지 않게 나눠 쓴다.
 const SECRET = new RegExp("sk-" + "ant-[A-Za-z0-9_-]{16,}");
@@ -42,15 +42,11 @@ export function checkImports(path: string, text: string): Finding[] {
     const spec = m[1] ?? m[2] ?? m[3] ?? "";
     const target = spec.startsWith(".") ? posix.join(posix.dirname(path), spec) : spec;
     const line = lineOf(text, m.index);
-    if (path.startsWith("engine/") && !isTest) {
-      if (ABOVE_ENGINE.some((root) => target.startsWith(root)))
-        out.push({ level: "FAIL", path, line, message: `엔진이 '${target}'를 가져온다. 엔진은 플러그인 · 화면 · 서버를 모른다` });
-      // 엔진은 브라우저에서도 돈다. 파일 · 시계 · 네트워크는 호출자가 맡는다.
-      if (spec.startsWith("node:"))
-        out.push({ level: "FAIL", path, line, message: `엔진이 '${spec}'를 가져온다. 엔진은 브라우저에서도 돌아야 한다` });
-    }
-    if (domain !== undefined && spec.startsWith(".") && !target.startsWith("engine/") && !target.startsWith(`domains/${domain}/`))
-      out.push({ level: "FAIL", path, line, message: `영역 '${domain}'이 '${target}'를 가져온다. 플러그인은 엔진 계약과 자기 폴더만 읽는다` });
+    // 엔진은 의존성 없이 브라우저 · CLI · 시험에서 같이 돈다. 플러그인 · 화면 · 서버 · node: 모듈 · 패키지를 모른다.
+    if (path.startsWith("engine/") && !isTest && !target.startsWith("engine/"))
+      out.push({ level: "FAIL", path, line, message: `엔진이 '${target}'를 가져온다. 엔진은 엔진 안의 파일만 읽는다` });
+    if (domain !== undefined && spec.startsWith(".") && target !== CONTRACT && !target.startsWith(`domains/${domain}/`))
+      out.push({ level: "FAIL", path, line, message: `영역 '${domain}'이 '${target}'를 가져온다. 플러그인은 ${CONTRACT}와 자기 폴더만 읽는다` });
   }
   return out;
 }
