@@ -1,17 +1,24 @@
 // 같은 부착점은 모든 경로·단독·동시 실행에서 같은 노드로 고정하고 배선별 결과를 합친다.
 import type { DomainPlugin, Scene } from "./contract.ts";
-import { portFacts } from "./scene.ts";
+import type { RouteInputs } from "./path.ts";
+import { attachmentCandidates, portFacts } from "./scene.ts";
 import { addReason, type Results } from "./results.ts";
 
 // 연결된 장비의 후보 곱이 커지면 일부 표본 대신 물리 상한을 쓴다.
 const MAX_WIRINGS = 64;
-type Outcome = Results["outcomes"][number];
 type Metric = Results["metrics"][number];
 type Variable = { claim: number; nodes: number[] };
 
-function key(o: Outcome) { return JSON.stringify([o.subjectKind, o.subjectRow, o.scenario, o.direction, o.domain]); }
-function origin(scene: Scene, o: Outcome) {
-  return o.subjectKind === "workload" ? scene.nodes[scene.workloads[o.subjectRow]!.from]!.item : scene.ports[scene.connections[o.subjectRow]!.from]!.item;
+
+// 시나리오 안에서 가능한 경로가 자원을 직접 또는 다른 작업을 통해 함께 쓰는지 본다.
+export function competingWorks(start: number, members: readonly number[], routes: readonly RouteInputs[]) {
+  const group = new Set([start]), seen = new Set<number>();
+  for (const work of group) for (const resource of routes[work]!.resources) {
+    if (seen.has(resource)) continue;
+    seen.add(resource);
+    for (const peer of members) if (routes[peer]!.resources.has(resource)) group.add(peer);
+  }
+  return group;
 }
 function inputs(result: Results, outcome: number) {
   return [...new Set(result.reasonInputs.filter(i => result.reasons[i.reason]!.outcome === outcome).map(i => i.claim))];
@@ -75,12 +82,20 @@ function snapshot(r: Results, row: number) {
   const o = r.outcomes[row]!;
   const metrics = r.metrics.filter(m => m.outcome === row);
   const possible = r.possibleVerdicts.filter(v => v.outcome === row).map(v => v.verdict).sort();
-  const signature = JSON.stringify([o.verdict, o.mode, possible, metrics.map(m => [m.kind,m.unit,m.value,m.low,m.high,m.basis])]);
-  return { o, metrics, possible, signature, inputs: inputs(r, row),
+  return { o, metrics, possible, inputs: inputs(r, row),
     specs: r.reasonSpecs.filter(s => r.reasons[s.reason]!.outcome === row).map(s => s.source),
     quests: r.quests.filter(q => q.outcome === row).map(q => q.claim),
     bindings: r.bindings.filter(b => o.subjectKind === "workload" && b.scenario === o.scenario && b.workload === o.subjectRow),
     needs: r.needs.filter(n => n.outcome === row).map(n => n.requiredCapability) };
+}
+
+function sameOutcome(a: ReturnType<typeof snapshot>, b: ReturnType<typeof snapshot>) {
+  return a.o.verdict === b.o.verdict && a.o.mode === b.o.mode &&
+    a.possible.length === b.possible.length && a.possible.every((v, i) => v === b.possible[i]) &&
+    a.metrics.length === b.metrics.length && a.metrics.every((m, i) => {
+      const n = b.metrics[i]!;
+      return m.kind === n.kind && m.unit === n.unit && m.value === n.value && m.low === n.low && m.high === n.high && m.basis === n.basis;
+    });
 }
 
 function merge(scene: Scene, plugins: readonly DomainPlugin[], r: Results, row: number, variables: Variable[],
@@ -102,7 +117,7 @@ function merge(scene: Scene, plugins: readonly DomainPlugin[], r: Results, row: 
   const changed = variables.flatMap((v, j) => {
     const stride = strides[j]!;
     return samples.some((s,i) => Math.floor(i / stride) % v.nodes.length !== 0 &&
-      s.signature !== samples[i - (Math.floor(i / stride) % v.nodes.length) * stride]!.signature) ? [v.claim] : [];
+      !sameOutcome(s, samples[i - (Math.floor(i / stride) % v.nodes.length) * stride]!)) ? [v.claim] : [];
   });
   for (const id of changed) ask(scene, plugins, r, row, id);
   for (const m of r.metrics.filter(m => m.outcome === row)) {
@@ -131,38 +146,35 @@ function merge(scene: Scene, plugins: readonly DomainPlugin[], r: Results, row: 
 }
 
 export function resolveUnknowns(scene: Scene, plugins: readonly DomainPlugin[], result: Results,
-  evaluateWiring: (s: Scene, p: readonly DomainPlugin[]) => Results) {
+  evaluateWiring: (s: Scene, p: readonly DomainPlugin[]) => Results, routeInputs: readonly RouteInputs[]) {
   completeUnknowns(scene, plugins, result);
-  const ports = new Set([...scene.connections.flatMap(c => [c.from, c.to]), ...scene.parts.flatMap(p => [p.entry, p.exit])]);
-  const unknown = [...ports].filter(p => portFacts(scene,p).node === null);
-  if (!unknown.length) return;
-  const parents = scene.items.map((_,i) => i);
-  function component(item: number) {
-    while (parents[item] !== item) item = parents[item]!;
-    return item;
-  }
-  const connect = (a: number, b: number) => { parents[component(a)] = component(b); };
-  for (const c of scene.connections) connect(scene.ports[c.from]!.item, scene.ports[c.to]!.item);
-  for (const p of scene.parts) connect(p.item, scene.ports[scene.connections[p.connection]!.from]!.item);
-  for (const w of scene.workloads) connect(scene.nodes[w.from]!.item, scene.nodes[w.to]!.item);
-  // 영역이 경로 밖의 자원·포트 주장을 읽은 경우도 같은 배선 조합에서 판정한다.
-  for (const i of result.reasonInputs) {
-    const c = scene.claims[i.claim]!, originItem = origin(scene, result.outcomes[result.reasons[i.reason]!.outcome]!);
-    if (c.ownerKind === "resource") connect(originItem, scene.resources[c.owner]!.item);
-    if (c.ownerKind === "port") connect(originItem, scene.ports[c.owner]!.item);
-  }
+  const candidates = attachmentCandidates(scene, result.demands.flatMap(d => d.via));
+  if (!candidates.size) return;
+  const all = [...candidates].map(([port, nodes]) => ({ claim: portFacts(scene, port).attachment, nodes }));
+  const groups: { variables: Variable[]; affected: number[] }[] = [];
+  result.outcomes.forEach((o, row) => {
+    const claims = new Set<number>();
+    if (o.subjectKind === "connection") {
+      for (const p of scene.parts.filter(p => p.connection === o.subjectRow))
+        for (const port of [p.entry,p.exit]) claims.add(portFacts(scene,port).attachment);
+      for (const opt of result.options.filter(v => v.connection === o.subjectRow && v.direction === o.direction && v.domain === o.domain))
+        for (const id of opt.inputs) claims.add(id);
+    } else {
+      const members = scene.members.filter(m => m.scenario === o.scenario).map(m => m.workload);
+      for (const w of competingWorks(o.subjectRow, members, routeInputs))
+        for (const id of routeInputs[w]!.claims) claims.add(id);
+    }
+    const variables = all.filter(v => claims.has(v.claim));
+    if (!variables.length) return;
+    const group = groups.find(g => g.variables.length === variables.length && g.variables.every((v,i) => v === variables[i]));
+    if (group) group.affected.push(row); else groups.push({ variables, affected: [row] });
+  });
   let world = 0;
-  for (const group of new Set(unknown.map(p => component(scene.ports[p]!.item)))) {
-    const variables = unknown.filter(p => component(scene.ports[p]!.item) === group).map(p => ({
-      claim: portFacts(scene, p).attachment, nodes: scene.nodes.flatMap((n,i) => n.item === scene.ports[p]!.item ? [i] : []),
-    }));
-    const affected = result.outcomes.flatMap((o,i) => component(origin(scene,o)) === group ? [i] : []);
+  for (const { variables, affected } of groups) {
     const count = variables.reduce((n,v) => n * v.nodes.length, 1);
     if (!count || count > MAX_WIRINGS) {
       for (const row of affected) {
         const o = result.outcomes[row]!;
-        // 끝 포트 부착점은 결합·협상 자체를 바꾸지 않는다. 부품 안의 배선은 연결 판정에도 영향을 준다.
-        if (o.subjectKind === "connection" && !scene.parts.some(p => p.connection === o.subjectRow && unknown.some(u => u === p.entry || u === p.exit))) continue;
         o.verdict = "unknown";
         o.label = plugins.find(p => p.id === o.domain)?.explain("unknown", o.mode) ?? "배선 미확인";
         conservative(result, row);
@@ -191,8 +203,8 @@ export function resolveUnknowns(scene: Scene, plugins: readonly DomainPlugin[], 
       });
       const concrete = { ...scene, claims }, answer = evaluateWiring(concrete, plugins);
       completeUnknowns(concrete, plugins, answer);
-      const rows = new Map(answer.outcomes.map((o,j) => [key(o), j]));
-      affected.forEach((row,j) => observations[j]!.push(snapshot(answer, rows.get(key(result.outcomes[row]!))!)));
+      // 결과 행 순서는 장면의 연결·영역·방향과 시나리오 멤버 순서로 고정된다.
+      affected.forEach((row,j) => observations[j]!.push(snapshot(answer, row)));
       worlds.push(world);
     }
     affected.forEach((row,j) => merge(scene, plugins, result, row, variables, observations[j]!, worlds, strides));

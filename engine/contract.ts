@@ -13,6 +13,8 @@ export interface Link {
 }
 export interface Option extends Trace {
   verdict: Verdict; mode: string; limit: number | null; unit: string; condition: string; unused?: number;
+  // limit가 null일 때 같은 단위의 유한한 0 ≤ low ≤ high를 준다. low는 해당 모드에서 보장한 한도다.
+  bounds?: { low: number; high: number };
 }
 export interface Demand extends Trace {
   mode: string; preference: number; elastic: boolean; via: number[]; requested: number | null; unit: string;
@@ -32,6 +34,8 @@ export interface DomainPlugin {
   id: string;
   sources: readonly { id: string; title: string; locator: string }[];
   // 각 스키마는 필드 이름을 키로, {value, unit}을 값으로 받는다. null은 미확인이다.
+  resourceUnits?: readonly string[];
+  paramsFor?(protocol: string): InputSchema | undefined;
   params: InputSchema; attributes: InputSchema; request: InputSchema;
   negotiate(link: Link): Option[];
   demand(scene: Scene, workload: number): Demand[];

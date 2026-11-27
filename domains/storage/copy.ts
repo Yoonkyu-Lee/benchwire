@@ -11,7 +11,7 @@ const reference = z.strictObject({ value: z.string().min(1).nullable(), unit: z.
 const labels = { ok: "성립", conditional: "조건부", impossible: "불가", unknown: "미확인" };
 
 export const storageDomain: DomainPlugin = {
-  id: DOMAIN,
+  id: DOMAIN, resourceUnits: [UNIT],
   sources: [],
   params: z.strictObject({ throughput: rate }),
   attributes: z.strictObject({}),
@@ -42,7 +42,8 @@ export const storageDomain: DomainPlugin = {
     }
     const common = { mode: MODE, unit: UNIT, condition: "", inputs, specs: [] };
     if (unsupported) return [{ ...common, verdict: "impossible", limit: null, rule: "모든 포트에 양방향 복사 인터페이스 필요" }];
-    if (missing && limit !== 0) return [{ ...common, verdict: "unknown", limit: null, rule: "복사 포트의 실효 처리량 미확인" }];
+    if (missing && limit !== 0) return [{ ...common, verdict: "unknown", limit: null,
+      ...(limit === null ? {} : { bounds: { low: 0, high: limit } }), rule: "복사 포트의 실효 처리량 미확인" }];
     return [{ ...common, verdict: "ok", limit, rule: "복사 포트의 실효 처리량 중 최솟값" }];
   },
   demand(scene, workload) {
@@ -64,7 +65,7 @@ export const storageDomain: DomainPlugin = {
     return steps.flatMap(step => step.kind !== "edge" ? [] : scene.resourceUses.flatMap(use => {
       if (use.edge !== step.row) return [];
       const resource = scene.resources[use.resource]!;
-      if (resource.domain !== DOMAIN || resource.unit !== UNIT) return [];
+      if (resource.domain !== DOMAIN) return [];
       return [{ resource: use.resource, fixed: 0, coefficient: 1,
         rule: "통과할 때마다 복사 처리량만큼 자원 소비", inputs: [use.evidence], specs: [] }];
     }));

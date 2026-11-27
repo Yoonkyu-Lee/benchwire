@@ -8,6 +8,15 @@ export const verdictOrder: readonly Verdict[] = ["ok", "conditional", "unknown",
 export function optionVerdict(o: Option, d?: Demand): Verdict {
   if (d && (o.mode !== d.mode || o.unit !== d.unit)) return "impossible";
   if (o.verdict === "impossible" || o.limit === 0) return "impossible";
+  if (o.limit === null && o.bounds) {
+    const { low, high } = o.bounds;
+    if (high === 0 || d && !d.elastic && d.requested !== null && d.requested > high) return "impossible";
+    if (!low || d?.requested != null && d.requested > low) {
+      if (low > 0 && d?.elastic && d.requested !== null && d.requested > high) return "conditional";
+      return "unknown";
+    }
+    return o.condition || o.verdict === "conditional" || d && d.preference > 0 ? "conditional" : "ok";
+  }
   if (o.limit === null || o.verdict === "unknown") return "unknown";
   if (d?.requested != null && o.limit < d.requested)
     return d.elastic ? "conditional" : "impossible";
@@ -42,16 +51,18 @@ export function negotiate(scene: Scene, plugins: readonly DomainPlugin[], result
           const limit = checkedQuantity(result, plugin.id, "negotiate", linkResource, "limit", trace.limit);
           const o = { ...trace, limit };
           if (o.unused !== undefined && checkedQuantity(result, plugin.id, "negotiate", linkResource, "unused", o.unused) === null) delete o.unused;
+          if (o.bounds) {
+            const low = checkedQuantity(result, plugin.id, "negotiate", linkResource, "bounds.low", o.bounds.low);
+            const high = checkedQuantity(result, plugin.id, "negotiate", linkResource, "bounds.high", o.bounds.high);
+            if (limit !== null || low === null || high === null || low < 0 || high < low) delete o.bounds;
+            else if (physical.some(s => s.verdict === "unknown")) o.bounds = { low: 0, high };
+          }
           const verdict = physical.some(s => s.verdict === "impossible") ? "impossible"
             : o.verdict !== "impossible" && physical.some(s => s.verdict === "unknown") ? "unknown" : o.verdict;
           result.options.push({ ...o, ...position, linkResource, verdict,
             inputs: verdict === "impossible" ? [...new Set([...o.inputs, ...absentDomain])] : o.inputs });
         }
-        const viable = result.options.filter(o => o.linkResource === linkResource && o.verdict !== "impossible");
-        const first = viable[0];
-        const unit = first && viable.every(o => o.unit === first.unit) ? first.unit : null;
-        const capacity = first && unit !== null && viable.every(o => o.limit === first.limit && (o.limit === 0 || o.verdict !== "unknown")) ? first.limit : null;
-        result.linkResources.push({ ...position, unit, capacity, absentDomain });
+        result.linkResources.push({ ...position, absentDomain });
       }
     }
   });

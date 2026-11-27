@@ -11,15 +11,15 @@ function tied(a: number, b: number) {
 
 // 배분 안에서만 장면 자원 뒤에 링크 자원의 번호를 이어 붙인다.
 export interface Use extends Consumption { option?: number }
-export interface Flow { workload: number; path: number | null; cap: number | null; elastic: boolean; verdict: Verdict; uses: Use[] }
-export interface Share { workload: number; value: number | null; verdict: Verdict; bindings: number[]; unresolvedPolicies?: number[]; policies?: (PolicyLimit & {resource: number})[] }
+export interface Flow { workload: number; path: number | null; cap: number | null; elastic: boolean; verdict: Verdict; bestCase?: Verdict; uses: Use[] }
+export interface Share { workload: number; value: number | null; verdict: Verdict; range?: { low: number; high: number | null; possible: Verdict[] }; bindings: number[]; unresolvedPolicies?: number[]; policies?: (PolicyLimit & {resource: number})[] }
 
 // 경쟁자가 자원을 전부 양보했을 때도 넘을 수 없는 작업률이다.
 export function throughputUpper(scene: Scene, result: Results, flow: Flow, policies: NonNullable<Share["policies"]> = []) {
   let upper = flow.cap;
   for (const row of new Set(flow.uses.map(u => u.resource))) {
     const uses = flow.uses.filter(u => u.resource === row), first = uses[0]!;
-    const capacity = first.option === undefined ? scene.claims[resourceFacts(scene, row).capacity]!.value : result.options[first.option]!.limit;
+    const capacity = first.option === undefined ? scene.claims[resourceFacts(scene, row).capacity]!.value : result.options[first.option]!.limit ?? result.options[first.option]!.bounds?.high;
     const limit = policies.find(p => p.workload === flow.workload && p.resource === row)?.limit;
     if (typeof capacity !== "number" && limit === undefined) continue;
     const budget = Math.min(typeof capacity === "number" ? capacity : Infinity, limit ?? Infinity);
@@ -126,7 +126,7 @@ function fill(scene: Scene, result: Results, flows: readonly Flow[], fair: Reado
   return { shares, overbooked };
 }
 
-export function allocate(scene: Scene, result: Results, flows: readonly Flow[], fair: ReadonlySet<number> = new Set()): Share[] {
+function allocateKnown(scene: Scene, result: Results, flows: readonly Flow[], fair: ReadonlySet<number>): Share[] {
   const rejected = new Map<number, Share>();
   while (true) {
     const participants = flows.filter(f => !rejected.has(f.workload));
@@ -158,4 +158,70 @@ export function allocate(scene: Scene, result: Results, flows: readonly Flow[], 
     const byWork = new Map(shares.map(s => [s.workload, s]));
     return flows.map(f => rejected.get(f.workload) ?? byWork.get(f.workload)!);
   }
+}
+
+// 다른 작업이 먼저 멈추지 않아도 자기 자원들 중 첫 포화 시점까지는 모두 같은 처리량으로 자란다.
+function guaranteedFloor(scene: Scene, lower: Results, flow: Flow, group: Flow[], fair: ReadonlySet<number>) {
+  if (group.some(f => (f.bestCase ?? f.verdict) === "unknown" || f.cap === null)) return 0;
+  let rate = flow.cap ?? 0;
+  for (const row of new Set(flow.uses.map(u => u.resource))) {
+    const uses = group.flatMap(f => f.uses.filter(u => u.resource === row));
+    const option = uses[0]!.option;
+    let capacity: number;
+    if (option !== undefined) {
+      const link = lower.options[option]!;
+      if (link.limit === null || uses.some(u => lower.options[u.option!]!.limit !== link.limit || lower.options[u.option!]!.unit !== link.unit)) return 0;
+      capacity = link.limit;
+    } else {
+      const facts = resourceFacts(scene, row), available = scene.claims[facts.capacity]!.value;
+      if (typeof available !== "number" || scene.claims[facts.policy]!.value !== "max-min" && !fair.has(row)) return 0;
+      capacity = available;
+    }
+    const remaining = capacity - uses.reduce((n,u) => n + u.fixed, 0);
+    if (remaining < 0) return 0;
+    if (flow.uses.some(u => u.resource === row && u.coefficient > 0))
+      rate = Math.min(rate, remaining / uses.reduce((n,u) => n + u.coefficient, 0));
+  }
+  return flow.elastic || rate === flow.cap ? rate : 0;
+}
+
+// 링크 용량이 구간이면 같은 작업·예약을 양 경계에 배분한다. 다른 링크를 쓰는 경쟁자가 있으면 상한은 독점 시의 값이다.
+export function allocate(scene: Scene, result: Results, flows: readonly Flow[], fair: ReadonlySet<number> = new Set()): Share[] {
+  if (!flows.some(f => f.uses.some(u => u.option !== undefined && result.options[u.option]!.bounds)))
+    return allocateKnown(scene, result, flows, fair);
+  const at = (side: "low" | "high"): Results => ({ ...result,
+    options: result.options.map(o => o.bounds ? { ...o, limit: o.bounds[side] } : o) });
+  const lower = at("low"), upper = at("high");
+  const optimistic = flows.map(f => ({ ...f, verdict: f.verdict === "unknown" ? f.bestCase ?? f.verdict : f.verdict }));
+  const lowShares = allocateKnown(scene, lower, optimistic, fair);
+  const highShares = allocateKnown(scene, upper, optimistic, fair);
+  return flows.map((flow, i) => {
+    const group = allocationGroup(flows, flow);
+    const varying = new Set(group.flatMap(f => f.uses.filter(u => u.option !== undefined &&
+      result.options[u.option]!.bounds && lower.options[u.option]!.limit !== upper.options[u.option]!.limit).map(u => u.resource)));
+    const canBind = [...varying].filter(row => {
+      let used = 0, guaranteed = Infinity;
+      for (const f of group) for (const u of f.uses.filter(u => u.resource === row)) {
+        used += u.fixed + (u.coefficient ? u.coefficient * (f.cap ?? Infinity) : 0);
+        guaranteed = Math.min(guaranteed, lower.options[u.option!]!.limit ?? 0);
+      }
+      return used > guaranteed;
+    });
+    const lo = lowShares[i]!, hi = highShares[i]!;
+    if (!canBind.length || flow.verdict === "impossible") return lo;
+    const shared = canBind.length === 1 && group.every(f => f.elastic && f.uses.every(u => !u.fixed) && f.uses.some(u => u.resource === canBind[0]));
+    const monotone = group.length === 1 || shared;
+    const low = monotone ? lo.value ?? 0 : guaranteedFloor(scene, lower, flow, group, fair);
+    const high = (monotone ? hi.value : null) ?? throughputUpper(scene, upper, optimistic[i]!);
+    const possible: Verdict[] = [];
+    if (low === 0) possible.push("impossible");
+    const conditional = flow.bestCase === "conditional" || flow.verdict === "conditional";
+    if (high === null || high > 0) {
+      if (conditional || flow.elastic && (flow.cap === null || low < flow.cap)) possible.push("conditional");
+      if (!conditional && (flow.cap === null || high === null || high >= flow.cap)) possible.push("ok");
+    }
+    const verdict = possible.length === 1 ? possible[0]! : "unknown";
+    const bindings = monotone ? lo.bindings.filter(b => hi.bindings.includes(b)) : [];
+    return { workload: flow.workload, verdict, value: low === high ? low : null, bindings, range: { low, high, possible } };
+  });
 }

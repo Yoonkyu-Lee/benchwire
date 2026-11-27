@@ -42,6 +42,7 @@ export function uncertainPolicies(scene: Scene, plugins: readonly DomainPlugin[]
     }
     o.verdict = possible.size === 1 ? [...possible][0]! : "unknown";
     o.label = plugin.explain(o.verdict, o.mode);
+    result.possibleVerdicts = result.possibleVerdicts.filter(v => v.outcome !== outcome);
     for (const verdict of possible) result.possibleVerdicts.push({ outcome, verdict });
     const prior = result.reasons.findIndex(r => r.outcome === outcome && r.stage === "judge");
     addReason(result, { outcome, stage: "judge", rule: "정책 미확인의 용량 경계와 균등 분배 가정", targetKind: "workload", targetRow: flow.workload },

@@ -9,7 +9,7 @@ export interface PhysicalStep {
 }
 export interface Results {
   physical: PhysicalStep[];
-  linkResources: { connection: number; domain: string; direction: Direction; capacity: number | null; unit: string | null; absentDomain: number[] }[];
+  linkResources: { connection: number; domain: string; direction: Direction; absentDomain: number[] }[];
   errors: { domain: string; spec: string; field?: string; resource?: number; stage: "negotiate" | "demand" | "consume"; row: number }[];
   possibleVerdicts: { outcome: number; verdict: Verdict }[];
   quests: { outcome: number; claim: number; instruction: string }[];
@@ -18,7 +18,7 @@ export interface Results {
   reasonSpecs: { reason: number; source: number }[];
   options: (Option & { linkResource: number; connection: number; domain: string; direction: Direction })[];
   demands: (Demand & { workload: number })[];
-  paths: { workload: number; demand: number; verdict: Verdict; key: string; truncated: boolean }[];
+  paths: { workload: number; demand: number; verdict: Verdict; bestCase?: Verdict; disconnected?: number[]; key: string; truncated: boolean }[];
   steps: (Step & { path: number; order: number })[];
   allocations: { scenario: number; workload: number; run: Run; value: number | null; unit: string }[];
   bindings: { scenario: number; workload: number; run: Run; resourceKind: "scene" | "link"; resource: number }[];

@@ -34,15 +34,12 @@ export function judgeConnections(scene: Scene, plugins: readonly DomainPlugin[],
   scene.connections.forEach((_, connection) => {
     for (const direction of ["forward", "reverse"] as const) {
       const groups = new Map<string, number[]>();
-      result.options.forEach((o, i) => {
-        if (o.connection !== connection || o.direction !== direction) return;
-        const rows = groups.get(o.domain);
-        if (rows) rows.push(i);
-        else groups.set(o.domain, [i]);
-      });
       for (const link of result.linkResources) {
         if (link.connection === connection && link.direction === direction && !groups.has(link.domain)) groups.set(link.domain, []);
       }
+      result.options.forEach((o, i) => {
+        if (o.connection === connection && o.direction === direction) groups.get(o.domain)!.push(i);
+      });
       if (!groups.size) groups.set("", []);
       for (const [domain, rows] of groups) {
         if (!rows.length) {
@@ -96,7 +93,12 @@ export function judgeWork(scene: Scene, result: Results, plugin: DomainPlugin, s
       result.bindings.push({ scenario, workload: flow.workload, run, resourceKind: link ? "link" : "scene", resource: link ? row - scene.resources.length : row });
     }
     metric(run, share.value);
+    if (share.range) {
+      const m = result.metrics[result.metrics.length - 1]!;
+      Object.assign(m, { low: share.range.low, high: share.range.high, range: "conservative" });
+    }
   }
+  for (const possible of together.range?.possible ?? []) result.possibleVerdicts.push({ outcome, verdict: possible });
   allocation("solo", solo);
   allocation("together", together);
   const drop = solo.value === null || together.value === null ? null : solo.value - together.value;
@@ -106,6 +108,13 @@ export function judgeWork(scene: Scene, result: Results, plugin: DomainPlugin, s
     const o = result.options[s.option]!;
     if (o.unused !== undefined) metric("unused", o.unused, o.unit);
   }
+  function cutReasons(path: Results["paths"][number] | null) {
+    return (path?.disconnected ?? []).map(row => {
+      const c = scene.connections[row]!;
+      return addReason(result, { outcome, stage: "path", rule: "끊긴 경로 양쪽의 포트 부착점", targetKind: "connection", targetRow: row },
+        [c.evidence, portFacts(scene, c.from).attachment, portFacts(scene, c.to).attachment]);
+    });
+  }
   const parents: number[] = [];
   for (const [run, share] of [["단독", solo], ["동시", together]] as const) for (const limit of share.policies ?? []) {
     const facts = resourceFacts(scene, limit.resource);
@@ -114,7 +123,7 @@ export function judgeWork(scene: Scene, result: Results, plugin: DomainPlugin, s
   }
   for (const candidate of refused) {
     const path = result.paths[candidate.flow.path!]!, prior = result.demands[path.demand]!;
-    const limits: number[] = [];
+    const limits = cutReasons(path);
     for (const s of result.steps.filter(s => s.path === candidate.flow.path && s.kind === "connection")) {
       if (s.option === null) limits.push(noOptionReason(scene, result, outcome, s.row, s.direction, plugin.id));
       else {
@@ -134,7 +143,7 @@ export function judgeWork(scene: Scene, result: Results, plugin: DomainPlugin, s
   for (const f of competitors) {
     const path = f.path === null ? null : result.paths[f.path]!;
     const d = path ? result.demands[path.demand]! : null;
-    const trace: number[] = [];
+    const trace = cutReasons(path);
     for (const s of result.steps.filter(s => s.path === f.path)) {
       if (s.option !== null) trace.push(linkReason(scene, result, outcome, s.option));
       if (s.kind === "connection" && s.option === null) {

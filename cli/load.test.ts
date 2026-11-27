@@ -439,7 +439,7 @@ test("배분: 같은 방향의 링크 한도를 고정 예약과 연속 작업�
   assert.equal(scene.connections[link.connection]!.id, "wire-a");
   assert.equal(link.direction, "forward");
   assert.equal(link.domain, "trial");
-  assert.deepEqual([link.capacity, link.unit], [100, "회/s"]);
+  assert.ok(result.options.some(o => o.linkResource === binding.resource && o.limit === 100 && o.unit === "회/s"));
 });
 
 test("배분: 단독으로 성립한 작업도 동시 처리량이 0이면 예약을 다시 배분한다", t => {
@@ -531,7 +531,16 @@ test("경로: 불가인 연결 65개가 유일하게 성립하는 경로를 가�
   const f = sample(t), plugin = trialDomain(), base = plugin.negotiate;
   f.saved.scenarios[0]!.members = ["a"];
   const wire = f.saved.connections[0]!;
-  for (let i = 0; i < 65; i++) f.saved.connections.push({ ...wire, id: "blocked-" + i });
+  for (let i = 0; i < 65; i++) {
+    const id = "blocked-" + i;
+    for (const model of [f.host, f.sink]) {
+      const p = structuredClone(model.ports[0]!);
+      p.id = id;
+      p.interfaces[0]!.id = id;
+      model.ports.push(p);
+    }
+    f.saved.connections.push({ ...wire, id, from: { ...wire.from, id }, to: { ...wire.to, id } });
+  }
   f.save();
   plugin.negotiate = link => base(link).map(o => ({ ...o,
     verdict: link.scene.connections[link.connection]!.id.startsWith("blocked-") ? "impossible" : o.verdict }));
@@ -687,4 +696,40 @@ test("협상: 커넥터가 미확인이어도 알려진 한도 0이면 연결과
   const link = result.outcomes.find(o => o.subjectKind === "connection" && o.direction === "forward" && scene.connections[o.subjectRow]!.id === "wire-a")!;
   assert.equal(link.verdict, "impossible");
   assert.deepEqual(workRows(scene, result).map(w => [w.verdict, w.solo, w.together, w.bindings]), [["impossible", 0, 0, ["wire-a/forward/trial"]]]);
+});
+
+test("T3 연결 끝과 부품에서 같은 포트를 다시 점유하면 두 위치를 알려 준다", t => {
+  const f = sample(t);
+  const second = f.saved.connections[1]!;
+  second.from = { ...f.saved.connections[0]!.from };
+  f.save();
+  assert.throws(() => f.open(), (e: Error) => e.message.includes("#connections.0.from") && e.message.includes("#connections.1.from"));
+  f.saved.items.push({ ...f.saved.items[0]!, instanceId: "part", modelId: "adapter" });
+  f.saved.connections[0]!.parts.push({ instanceId: "part", entry: "entry", exit: "exit" });
+  for (const side of ["entry", "exit"]) {
+    second.from = { instanceId: "part", id: side };
+    f.save();
+    assert.throws(() => f.open(), (e: Error) => e.message.includes("#connections.0.parts.0." + side) && e.message.includes("#connections.1.from"));
+  }
+});
+
+test("T10 프로토콜별 스키마는 기본 매개변수와 개인 주장 양쪽에 적용된다", t => {
+  const f = sample(t), trial = trialDomain();
+  const schema = { safeParse(fields: unknown) {
+    const v = (fields as { rate?: { value: number | null }; lanes?: unknown });
+    return v.lanes !== undefined && v.rate?.value !== 999 ? { success: true as const } :
+      { success: false as const, error: { issues: [{ path: v.lanes === undefined ? ["lanes"] : ["rate","value"], message: "시험 프로토콜 위반" }] } };
+  } };
+  const plugin = { ...trial, paramsFor: (p: string) => p === "special" ? schema : undefined };
+  const iface = f.host.ports[0]!.interfaces[0]!;
+  iface.protocol = "special";
+  f.save();
+  assert.throws(() => f.open([plugin]), /source@1.json#ports.0.interfaces.0.params.lanes/);
+  iface.params.lanes = { ...iface.params.rate!, value: null };
+  f.save();
+  assert.doesNotThrow(() => f.open([plugin]));
+  f.saved.personal.push({ instanceId: "host", ownerKind: "interface", ownerId: iface.id, domain: "trial", field: "rate",
+    claim: { ...iface.params.rate!, value: 999, confidence: "user_verified", sources: ["scene"] } });
+  f.save();
+  assert.throws(() => f.open([plugin]), /scene.json#personal.0.claim.value/);
 });

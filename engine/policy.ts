@@ -28,14 +28,14 @@ export function policyAllocation(scene: Scene, plugins: readonly DomainPlugin[],
   if (!named.size && !fair.size) return allocate(scene, result, flows);
 
   const restricted = flows.map(f => {
-    let cap = f.cap, verdict = f.verdict;
+    let cap = f.cap, verdict = f.verdict, bestCase = f.bestCase ?? f.verdict;
     const bounds: { resource: number; cap: number }[] = [];
     for (const resource of used) {
       const uses = f.uses.filter(u => u.option === undefined && u.resource === resource);
       if (!uses.length || verdict === "impossible") continue;
       const limit = policies.find(p => p.resource === resource && p.workload === f.workload);
       if (!limit) {
-        if (named.has(resource)) verdict = "unknown";
+        if (named.has(resource)) verdict = bestCase = "unknown";
         continue;
       }
       const fixed = uses.reduce((n, u) => n + u.fixed, 0), coefficient = uses.reduce((n, u) => n + u.coefficient, 0);
@@ -49,7 +49,7 @@ export function policyAllocation(scene: Scene, plugins: readonly DomainPlugin[],
     }
     if (cap !== null && f.cap !== null && cap < f.cap && verdict !== "unknown")
       verdict = cap === 0 || !f.elastic || verdict === "impossible" ? "impossible" : "conditional";
-    return { ...f, cap, verdict, bounds };
+    return { ...f, cap, verdict, bestCase: verdict === "unknown" ? bestCase : verdict, bounds };
   });
   const unresolved: number[] = [];
   for (const resource of named) {

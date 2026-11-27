@@ -38,6 +38,9 @@ function validateFields(schema: InputSchema, fields: Record<string, Pick<Fact, "
     fail([at, ...path].join("."), issue.message);
   }
 }
+function interfaceSchema(plugin: DomainPlugin, protocol: string) {
+  return plugin.paramsFor?.(protocol) ?? plugin.params;
+}
 type Model = z.infer<typeof modelFile>;
 interface Local {
   item: number; nodes: Map<string, number>; ports: Map<string, number>; resources: Map<string, number>; interfaces: Map<string, number>;
@@ -141,13 +144,14 @@ export function loadScene(file: string, files: { modelsDir: string; connectorsFi
         unique(signatures, JSON.stringify([domain, protocol, role]), row, where);
         const evidence = claim("interface", row, "model", "", "declaration", iface.evidence, citations, where + ".evidence");
         scene.interfaces.push({ id, domain, protocol, role, port, evidence });
-        fields("interface", row, "model", domain, iface.params, ref(domains, domain, where + ".domain").params, citations, where + ".params");
+        fields("interface", row, "model", domain, iface.params, interfaceSchema(ref(domains, domain, where + ".domain"), protocol), citations, where + ".params");
       });
     });
     model.resources.forEach((r, i) => {
       const where = at + "resources." + i;
       const { id, domain, kind, unit } = r;
-      ref(domains, domain, where + ".domain");
+      const { resourceUnits } = ref(domains, domain, where + ".domain");
+      if (resourceUnits && !resourceUnits.includes(unit)) fail(where + ".unit", domain + " 자원 단위는 " + resourceUnits.join(", ") + "입니다");
       const row = unique(local.resources, id, scene.resources.length, where + ".id");
       for (const key of ["capacity", "policy"] as const) {
         checkResource(key, r[key], unit, where + "." + key);
@@ -195,27 +199,39 @@ export function loadScene(file: string, files: { modelsDir: string; connectorsFi
     } else {
       const plugin = ref(domains, domain, at + ".domain");
       const group = scene.claims.filter(c => c.ownerKind === ownerKind && c.owner === owner && c.domain === domain &&
+        !(ownerKind === "interface" && c.field === "declaration") &&
         (!c.condition || c.condition === p.claim.condition));
       const values = Object.fromEntries(group.map(c => [c.field, { value: c.value, unit: c.unit }]));
-      validateFields(ownerKind === "item" ? plugin.attributes : plugin.params, values, at + ".claim", field);
+      validateFields(ownerKind === "item" ? plugin.attributes : interfaceSchema(plugin, scene.interfaces[owner]!.protocol), values, at + ".claim", field);
     }
   });
   function endpoint(r: { instanceId: string; id: string }, kind: "nodes" | "ports", at: string) {
     return ref(ref(instances, r.instanceId, at + ".instanceId")[kind], r.id, at + ".id");
   }
   const connectionIds = new Map<string, number>();
-  const partItems = new Map<string, number>();
+  const partItems = new Map<string, string>();
+  const occupied = new Map<number, string>();
+  function occupy(port: number, at: string) {
+    const previous = occupied.get(port);
+    if (previous !== undefined) fail(at, "이미 포트를 점유한 위치 " + previous);
+    occupied.set(port, at);
+    return port;
+  }
   saved.connections.forEach((c, connection) => {
     const at = file + "#connections." + connection;
     unique(connectionIds, c.id, connection, at + ".id");
-    scene.connections.push({ id: c.id, from: endpoint(c.from, "ports", at + ".from"), to: endpoint(c.to, "ports", at + ".to"),
+    scene.connections.push({ id: c.id, from: occupy(endpoint(c.from, "ports", at + ".from"), at + ".from"),
+      to: occupy(endpoint(c.to, "ports", at + ".to"), at + ".to"),
       evidence: claim("connection", connection, "scene", "", "connection", c.evidence, sceneSources, at + ".evidence") });
     c.parts.forEach((p, order) => {
       const pos = at + ".parts." + order;
       const local = ref(instances, p.instanceId, pos + ".instanceId");
-      unique(partItems, p.instanceId, connection, pos + ".instanceId");
       const entry = ref(local.ports, p.entry, pos + ".entry"), exit = ref(local.ports, p.exit, pos + ".exit");
-      if (entry === exit) fail(pos + ".exit", "부품의 두 끝은 달라야 합니다");
+      occupy(entry, pos + ".entry");
+      occupy(exit, pos + ".exit");
+      const previous = partItems.get(p.instanceId);
+      if (previous !== undefined) fail(pos + ".instanceId", "이미 부품을 사용한 위치 " + previous);
+      partItems.set(p.instanceId, pos + ".instanceId");
       scene.parts.push({ connection, order, item: local.item, entry, exit });
     });
   });

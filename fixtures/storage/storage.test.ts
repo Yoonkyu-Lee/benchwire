@@ -192,3 +192,26 @@ test("T5 지정한 복사 경유 노드를 확인할 수 없으면 확보한 처
   assert.ok(copy!.proof.some(r => r.stage === "path" && r.rule === "복사 경유 노드 미확인" &&
     r.claims.some(c => c.field === "viaNode" && c.value === null && c.sources.includes("fixture:storage-scene"))));
 });
+
+test("T5 영역과 단위가 다른 매체 자원은 모델 필드에서 거절한다", t => {
+  const f = variant(t, "independent-controllers");
+  f.saved.personal = [];
+  const medium = f.medium.resources[0]!;
+  medium.unit = medium.capacity.unit = "GB/s";
+  medium.capacity.value = 0.1;
+  assert.throws(() => f.open(), /medium@1.json#resources.0.unit/);
+});
+
+test("T5 복사 포트 한도가 50과 미확인이면 100 요청의 범위는 0–50이다", t => {
+  const f = variant(t, "shared-hub");
+  f.hub.ports.find(p => p.id === "a")!.interfaces[0]!.params.throughput!.value = 50;
+  f.medium.ports[0]!.interfaces[0]!.params.throughput!.value = null;
+  const { copies, result, scene } = f.open(), a = copies.find(c => c.id === "copy-a")!;
+  for (const kind of ["solo", "together"]) {
+    const m = result.metrics.find(m => m.outcome === a.outcome && m.kind === kind)!;
+    assert.deepEqual([m.low, m.high, m.value], [0, 50, null]);
+  }
+  assert.deepEqual(result.possibleVerdicts.filter(p => p.outcome === a.outcome).map(p => p.verdict).sort(), ["conditional", "impossible"]);
+  assert.ok(result.quests.some(q => q.outcome === a.outcome && scene.claims[q.claim]!.field === "throughput"));
+  assert.ok(a.proof.some(r => r.claims.some(c => c.value === 50 && c.sources.includes("fixture:storage-hub"))));
+});

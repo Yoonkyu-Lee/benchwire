@@ -87,7 +87,10 @@ test("미확인 부품 진입 부착점의 후보마다 다른 내부 통과 자
 
 test("배선 조합 상한을 넘으면 일부 표본을 최선·최악으로 확정하지 않는다", () => {
   const { scene } = wiring();
-  for (let i = 0; i < 100; i++) scene.nodes.push({ item: 0, id: "extra-" + i, label: "", kind: "junction" });
+  for (let i = 0; i < 100; i++) {
+    const to = scene.nodes.push({ item: 0, id: "extra-" + i, label: "", kind: "junction" }) - 1;
+    scene.edges.push({ ...scene.edges[0]!, id: "extra-edge-" + i, to });
+  }
   const r = evaluate(scene, [trial]), o = output(r, 1);
   assert.equal(o.verdict, "unknown");
   assert.equal(o.metric("together").range, "conservative");
@@ -197,4 +200,23 @@ test("T8 조합표의 개별 한도 합이 물리 예산을 넘으면 잔여 분
   const r = evaluate(scene, [power]), o = output(r, 0), m = o.metric("together");
   assert.deepEqual([o.verdict, m.basis, m.value, m.low, m.high], ["unknown", "assumed", 50, 0, 60]);
   assert.ok(o.quests.some(q => q.claim === policy));
+});
+
+test("T5 경로 열거가 잘려도 다른 장비 묶음의 부착점 퀘스트는 생기지 않는다", () => {
+  const scene = sample();
+  const chosen = scene.workloads[0]!;
+  const source = scene.nodes.push({ item: scene.ports[scene.connections[0]!.to]!.item, id: "local-a", kind: "junction", label: "" }) - 1;
+  const end = scene.nodes.push({ ...scene.nodes[source]!, id: "local-b" }) - 1;
+  chosen.from = source; chosen.to = end;
+  scene.members = scene.members.slice(0,1);
+  for (let i = 0; i < 70; i++) scene.edges.push({ ...scene.edges[0]!, item: scene.nodes[source]!.item, id: "local-" + i, from: source, to: end });
+  const port = scene.connections[2]!.to, claim = portFacts(scene, port).attachment;
+  Object.assign(scene.claims[claim]!, { value: null, reference: null });
+  for (let i = 0; i < 70; i++) {
+    const n = scene.nodes.push({ item: scene.ports[port]!.item, id: "remote-" + i, kind: "junction", label: "" }) - 1;
+    scene.edges.push({ ...scene.edges[0]!, item: scene.ports[port]!.item, from: n, to: scene.workloads[2]!.to });
+  }
+  const r = evaluate(scene, [trial]), a = output(r,0);
+  assert.ok(r.reasons.some(v => v.outcome === a.row && v.rule === "경로 후보 열거 상한"));
+  assert.ok(!a.quests.some(q => q.claim === claim));
 });

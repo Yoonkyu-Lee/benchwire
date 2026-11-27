@@ -54,3 +54,24 @@ export function resourceFacts(scene: Scene, row: number) {
   return { capacity: effectiveClaim(scene, "resource", row, domain, "capacity")!,
     policy: effectiveClaim(scene, "resource", row, domain, "policy")! };
 }
+
+// 간선·포트·작업의 끝과 경유 노드는 서로 구별한다. 나머지 고립 노드는 포트끼리 일치하거나 갈라지는 수만큼 대표한다.
+export function attachmentCandidates(scene: Scene, via: readonly number[]) {
+  const ports = new Set([...scene.connections.flatMap(c => [c.from, c.to]), ...scene.parts.flatMap(p => [p.entry, p.exit])]);
+  const unknown = [...ports].filter(p => portFacts(scene,p).node === null);
+  const candidates = new Map<number, number[]>();
+  if (!unknown.length) return candidates;
+  const relevant = new Set([...scene.edges.flatMap(e => [e.from,e.to]), ...scene.workloads.flatMap(w => [w.from,w.to]), ...via]);
+  for (const port of ports) {
+    const node = portFacts(scene, port).node;
+    if (node !== null) relevant.add(node);
+  }
+  for (const item of new Set(unknown.map(p => scene.ports[p]!.item))) {
+    const pending = unknown.filter(p => scene.ports[p]!.item === item);
+    const local = scene.nodes.flatMap((n,i) => n.item === item ? [i] : []);
+    const isolated = local.filter(n => !relevant.has(n)).slice(0, pending.length);
+    const nodes = [...local.filter(n => relevant.has(n)), ...isolated];
+    for (const p of pending) candidates.set(p, nodes);
+  }
+  return candidates;
+}
