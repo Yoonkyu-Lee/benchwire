@@ -96,7 +96,10 @@ function snapshot(r: Results, row: number, base = r) {
   const o = r.outcomes[row]!;
   const metrics = r.metrics.filter(m => m.outcome === row);
   const possible = r.possibleVerdicts.filter(v => v.outcome === row).map(v => v.verdict).sort();
-  return { o, metrics, possible, inputs: inputs(r, row),
+  const option = o.option === undefined ? null : r.options[o.option]!;
+  const selected = option && JSON.stringify([option.mode, option.profile, option.rule, option.verdict, option.limit,
+    option.bounds, option.unit, option.condition, option.inputs, option.specs]);
+  return { o, selected, metrics, possible, inputs: inputs(r, row),
     measures: r.measures.filter(m => m.outcome === row), assessments: r.assessments.filter(a => a.outcome === row),
     specs: r.reasonSpecs.filter(s => r.reasons[s.reason]!.outcome === row).map(s => s.source),
     quests: r.quests.filter(q => q.outcome === row).map(q => q.claim),
@@ -123,6 +126,10 @@ function sameOutcome(a: ReturnType<typeof snapshot>, b: ReturnType<typeof snapsh
 function merge(scene: Scene, plugins: readonly DomainPlugin[], r: Results, row: number, variables: Variable[],
   samples: ReturnType<typeof snapshot>[], worlds: number[], strides: number[]) {
   const o = r.outcomes[row]!, priorVerdict = o.verdict;
+  if (o.option !== undefined) {
+    const selected = snapshot(r,row).selected;
+    if (!samples.every(s => s.selected === selected)) delete o.option;
+  }
   const possible = new Set(samples.flatMap(s => s.possible));
   const first = samples[0]!;
   o.verdict = possible.size === 1 ? [...possible][0]! : "unknown";
@@ -205,13 +212,37 @@ export function resolveUnknowns(scene: Scene, plugins: readonly DomainPlugin[], 
     const group = groups.find(g => g.variables.length === variables.length && g.variables.every((v,i) => v === variables[i]));
     if (group) group.affected.push(row); else groups.push({ variables, affected: [row] });
   });
+  // 각 배선에서 이미 합산한 사용량끼리 비교한다. 서로 배타적인 작업별 상한을 더할 수 없다.
+  const provisional = result.resourceUsage.map(u => ({ ...u }));
+  const usageKey = (r: Results, u: Results["resourceUsage"][number]) => JSON.stringify([u.scenario,u.unit,
+    u.resourceKind === "scene" ? u.resource : linkKey(r,u.resource)]);
+  const keys = provisional.map(u => usageKey(result,u));
+  const updated = new Set<number>();
   let world = 0;
   for (const { variables, affected } of groups) {
     const count = variables.reduce((n,v) => n * v.nodes.length, 1);
+    const scenarios = new Set(affected.map(i => result.outcomes[i]!.scenario));
+    const scope = provisional.flatMap((u,i) => scenarios.has(u.scenario) || scenarios.has(null) ? [i] : []);
     if (!count || count > MAX_WIRINGS) {
+      for (const i of scope) {
+        const u = result.resourceUsage[i]!;
+        const dependent = affected.some(row => {
+          const o = result.outcomes[row]!;
+          if (o.subjectKind === "workload") return o.scenario === u.scenario;
+          return u.resourceKind === "link" && result.linkResources[u.resource]!.connection === o.subjectRow;
+        });
+        if (!dependent) continue;
+        u.used = null; u.basis = "calculated";
+        if (u.resourceKind === "link" && affected.some(row => {
+          const o = result.outcomes[row]!, link = result.linkResources[u.resource]!;
+          return o.subjectKind === "connection" && o.subjectRow === link.connection && o.domain === link.domain;
+        })) u.capacity = null;
+        updated.add(i);
+      }
       for (const row of affected) {
         const o = result.outcomes[row]!;
         o.verdict = "unknown";
+        delete o.option;
         o.label = plugins.find(p => p.id === o.domain)?.explain("unknown", o.mode) ?? "배선 미확인";
         conservative(result, row);
         for (const m of result.measures.filter(m => m.outcome === row)) m.low = m.high = null;
@@ -235,6 +266,7 @@ export function resolveUnknowns(scene: Scene, plugins: readonly DomainPlugin[], 
     let stride = 1;
     for (const v of variables) { strides.push(stride); stride *= v.nodes.length; }
     const observations = affected.map((): ReturnType<typeof snapshot>[] => []), worlds: number[] = [];
+    const totals = new Map<number, Pick<Results["resourceUsage"][number], "used" | "capacity" | "basis">>();
     for (let i = 0; i < count; i++, world++) {
       const claims = [...scene.claims];
       variables.forEach((v,j) => {
@@ -244,6 +276,18 @@ export function resolveUnknowns(scene: Scene, plugins: readonly DomainPlugin[], 
       });
       const concrete = { ...scene, claims }, answer = evaluateWiring(concrete, plugins);
       completeUnknowns(concrete, plugins, answer);
+      const usage = new Map(answer.resourceUsage.map(u => [usageKey(answer,u), u]));
+      for (const row of scope) {
+        const concreteUsage = usage.get(keys[row]!);
+        const used = concreteUsage?.used ?? null, capacity = concreteUsage?.capacity ?? null;
+        const prior = totals.get(row);
+        if (!prior) totals.set(row,{used, capacity, basis:concreteUsage?.basis ?? "calculated"});
+        else {
+          if (prior.used !== used) prior.used = null;
+          if (prior.capacity !== capacity) prior.capacity = null;
+          if (concreteUsage?.basis === "assumed") prior.basis = "assumed";
+        }
+      }
       // 배선에 따라 협상 서비스 수가 달라지므로 행 번호 대신 판정의 대상을 맞춘다.
       affected.forEach((row,j) => {
         const base = result.outcomes[row]!;
@@ -262,11 +306,24 @@ export function resolveUnknowns(scene: Scene, plugins: readonly DomainPlugin[], 
         }
         // 이 배선에서 해당 예산의 서비스 선언 자체가 사라졌다.
         const absent = snapshot(result, row);
-        observations[j]!.push({ ...absent, o: { ...base, verdict: "unknown", mode: "" },
+        observations[j]!.push({ ...absent, selected: null, o: { ...base, verdict: "unknown", mode: "" },
           possible: ["ok","conditional","impossible"], metrics: [], measures: [], assessments: [], bindings: [], needs: [] });
       });
       worlds.push(world);
     }
     affected.forEach((row,j) => merge(scene, plugins, result, row, variables, observations[j]!, worlds, strides));
+    for (const [i, total] of totals) {
+      const base = provisional[i]!, u = result.resourceUsage[i]!;
+      if (total.used === base.used && total.capacity === base.capacity && total.basis === base.basis) continue;
+      u.used = updated.has(i) && u.used !== total.used ? null : total.used;
+      u.capacity = updated.has(i) && u.capacity !== total.capacity ? null : total.capacity;
+      u.basis = u.used !== null && (u.basis === "assumed" || total.basis === "assumed") ? "assumed" : "calculated";
+      updated.add(i);
+      const outcome = affected.find(row => result.outcomes[row]!.scenario === u.scenario) ?? affected[0]!;
+      const reason = addReason(result,{outcome, stage:"allocate", rule:"배선 후보별 자원 점유량",
+        targetKind:u.resourceKind === "scene" ? "resource" : "linkResource", targetRow:u.resource},
+        variables.map(v => v.claim),u.reasonRows);
+      u.reasonRows = [reason];
+    }
   }
 }

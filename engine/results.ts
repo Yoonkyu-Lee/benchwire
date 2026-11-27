@@ -30,9 +30,11 @@ export interface Results {
   paths: { workload: number; demand: number; verdict: Verdict; bestCase?: Verdict; conditioned?: boolean; disconnected?: number[]; disconnectedEdges?: number[]; key: string; truncated: boolean }[];
   matches: (Trace & { demand: number; option: number; verdict: Verdict })[];
   steps: (Step & { carrier?: { domain: string; mode: string }; path: number; order: number })[];
+  resourceUsage: { scenario: number; resourceKind: "scene" | "link"; resource: number; unit: string;
+    used: number | null; capacity: number | null; basis: "calculated" | "assumed"; reasonRows: number[] }[];
   allocations: { scenario: number; workload: number; run: Run; value: number | null; unit: string }[];
   bindings: { scenario: number; workload: number; run: Run; resourceKind: "scene" | "link"; resource: number }[];
-  outcomes: { subjectKind: "connection" | "workload"; subjectRow: number; path: number | null; soloPath?: number; direction: Direction | null; scenario: number | null; domain: string; unit?: string; pool?: { domain: string; id: string }; verdict: Verdict; mode: string; label: string }[];
+  outcomes: { subjectKind: "connection" | "workload"; subjectRow: number; option?: number; path: number | null; soloPath?: number; direction: Direction | null; scenario: number | null; domain: string; unit?: string; pool?: { domain: string; id: string }; verdict: Verdict; mode: string; label: string }[];
   metrics: { outcome: number; kind: "solo" | "together" | "drop" | "dropPercent" | "unused"; unit: string;
     range?: "witnessed" | "conservative"; lowWorld?: number; highWorld?: number;
     value: number | null; low: number | null; high: number | null; basis: "calculated" | "assumed" }[];

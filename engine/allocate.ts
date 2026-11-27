@@ -11,7 +11,7 @@ function tied(a: number, b: number) {
 }
 
 // 배분 안에서만 장면 자원 뒤에 링크 자원의 번호를 이어 붙인다.
-export interface Use extends Consumption { option?: number; pool?: number }
+export interface Use extends Consumption { option?: number; pool?: number; unknown?: boolean }
 function linkLimit(result: Results, u: Use) {
   return u.pool === undefined ? result.options[u.option!]! : result.linkResources[u.pool]!.pool!;
 }

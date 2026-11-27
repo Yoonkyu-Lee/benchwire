@@ -20,9 +20,17 @@ function physicalReasons(scene: Scene, result: Results, outcome: number, connect
 function linkReason(scene: Scene, result: Results, outcome: number, option: number) {
   const o = result.options[option]!;
   const parents = physicalReasons(scene, result, outcome, o.connection, o.direction);
-  for (const l of result.standingLoads) if (l.kind === "link" && (l.resource === (o.serviceResource ?? o.linkResource) || l.resource === o.poolResource))
-    parents.push(addReason(result,{ outcome, stage: "allocate", rule: l.rule, targetKind: "linkResource", targetRow: l.resource },
-      l.inputs, [], l.domain, l.specs));
+  for (const l of result.standingLoads) {
+    if (l.kind !== "link" || l.resource !== (o.serviceResource ?? o.linkResource) && l.resource !== o.poolResource) continue;
+    const reason = addReason(result,{ outcome, stage: "allocate", rule: l.rule, targetKind: "linkResource", targetRow: l.resource },
+      l.inputs, parents, l.domain, l.specs);
+    parents.push(reason);
+    for (const source of result.standingLoads) {
+      if (source.kind !== "scene" || source.item !== l.item || source.id !== l.id || source.domain !== l.domain) continue;
+      parents.push(addReason(result,{outcome, stage:"allocate", rule:source.rule, targetKind:"resource", targetRow:source.resource},
+        [resourceFacts(scene,source.resource).capacity,...source.inputs], [reason], source.domain, source.specs));
+    }
+  }
   if (o.poolResource !== undefined) {
     const { domain, pool } = result.linkResources[o.poolResource]!;
     parents.push(addReason(result, { outcome, stage: "negotiate", rule: pool!.rule, targetKind: "linkResource", targetRow: o.poolResource },
@@ -79,7 +87,7 @@ export function judgeConnections(scene: Scene, plugins: readonly DomainPlugin[],
           continue;
         }
         const { row: option, option: o, verdict } = bestOption(result, eligible);
-        const outcome = result.outcomes.push({ subjectKind: "connection", subjectRow: connection, path: null, scenario, direction, domain, verdict, mode: o.mode, unit: o.unit,
+        const outcome = result.outcomes.push({ subjectKind: "connection", subjectRow: connection, path: null, scenario, direction, domain, verdict, mode: o.mode, unit: o.unit, option,
           ...(o.pool ? { pool: { domain: o.pool.domain, id: o.pool.id } } : {}),
           label: plugins.find(p => p.id === domain)!.explain(verdict, o.mode) }) - 1;
         if (o.unused !== undefined) result.metrics.push({ outcome, kind: "unused", unit: o.unit,

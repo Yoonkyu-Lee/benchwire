@@ -10,6 +10,7 @@ import { addReason, checkedQuantity, checkedTrace, type Results } from "./result
 import { policyAllocation } from "./policy.ts";
 import { uncertainPolicies } from "./policy-range.ts";
 import { uncertainPreferences } from "./preference.ts";
+import { recordUsage, type GrossLimits } from "./resource-usage.ts";
 import { reserveStanding } from "./standing.ts";
 import { combinations, compareScores, MAX_COMBINATIONS, planModes, profileGroups, reservationAlternatives, type Candidate, type Plan } from "./selection.ts";
 import { resolveUnknowns } from "./unknown.ts";
@@ -89,11 +90,12 @@ function candidatesFor(scene: Scene, plugins: readonly DomainPlugin[], result: R
 }
 
 function prepare(scene: Scene, plugins: readonly DomainPlugin[], locked?: Plan[], modeLock?: number) {
-  const result: Results = { physical: [], options: [], demands: [], paths: [], steps: [], allocations: [], bindings: [], outcomes: [],
+  const result: Results = { physical: [], options: [], demands: [], paths: [], steps: [], resourceUsage: [], allocations: [], bindings: [], outcomes: [],
     reservations: [], choices: [], searches: [], standingErrors: [], standingLoads: [], matches: [], assessments: [], measures: [], possibleVerdicts: [], quests: [], rangeInputs: [], wirings: [],
     metrics: [], reasons: [], reasonInputs: [], reasonParents: [], reasonSpecs: [], needs: [], errors: [], linkResources: [],
     specSources: plugins.flatMap(p => p.sources.map(s => ({ ...s, domain: p.id }))) };
   negotiate(scene, plugins, result);
+  const gross = { options: result.options.map(o => o.limit), pools: result.linkResources.map(l => l.pool?.limit ?? null) };
   reserveStanding(scene,plugins,result);
   const possibleLinks = scene.workloads.map(() => new Set<number>());
   if (!locked && result.options.some(o => o.profile)) {
@@ -133,10 +135,10 @@ function prepare(scene: Scene, plugins: readonly DomainPlugin[], locked?: Plan[]
     return [...plans,...alternatives];
   });
   if (!scenarios.length) candidatesFor(scene,plugins,result,routes,[]);
-  return { result, routes, scenarios };
+  return { result, routes, scenarios, gross };
 }
 
-function render(scene: Scene, plugins: readonly DomainPlugin[], result: Results, routes: RouteInputs[], selected: Plan[]) {
+function render(scene: Scene, plugins: readonly DomainPlugin[], result: Results, routes: RouteInputs[], selected: Plan[], gross: GrossLimits) {
   const configured = new Set(selected.flatMap(p => p.choices.map(c => c.connection)));
   judgeConnections(scene,plugins,result, c => !configured.has(c));
   selected.forEach((plan, scenario) => {
@@ -177,6 +179,7 @@ function render(scene: Scene, plugins: readonly DomainPlugin[], result: Results,
     });
     uncertainPolicies(scene,plugins,result,active,together,active.map(f => chosen[f.workload]!.solo),outcomes);
     uncertainPreferences(plugins,result,active.map(f => f.workload),outcomes,routes,chosen);
+    recordUsage(scene, result, scenario, active, outcomes, gross, chosen);
     for (const row of outcomes) assessWork(scene,plugins.find(p => p.id === result.outcomes[row]!.domain)!,result,row);
   });
   return result;
@@ -189,13 +192,13 @@ function evaluatePlans(scene: Scene, plugins: readonly DomainPlugin[], scenario?
   const selections = [primary, ...alternatives.map(p => primary.map((base,i) => i === scenario ? p : base))];
   return selections.map((selected,i) => {
     const tables = i === selections.length-1 ? prepared.result : structuredClone(prepared.result);
-    const result = render(scene,plugins,tables,routes,selected);
+    const result = render(scene,plugins,tables,routes,selected,prepared.gross);
     resolveUnknowns(scene,plugins,result,(world,domains) => {
       const modeLock = i > 0 && scenario !== undefined && scenarios[scenario]!.some(p => p !== selected[scenario] &&
         p.choices === selected[scenario]!.choices) ? scenario : undefined;
       const next = prepare(world,domains,selected,modeLock);
       const plans = next.scenarios.map(list => list[0]!);
-      return render(world,domains,next.result,next.routes,plans);
+      return render(world,domains,next.result,next.routes,plans,next.gross);
     },routes);
     return { choices: scenario === undefined ? [] : selected[scenario]!.choices, result };
   });

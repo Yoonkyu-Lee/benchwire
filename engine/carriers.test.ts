@@ -67,7 +67,11 @@ test("T4 하나의 28 Gbps 터널에서 16·8 Gbps 예약 뒤 두 탄력 작업�
   const demand = client.demand;
   client.demand = (s,w) => demand(s,w).map(d => w < 2 ? { ...d, unit: "Gbps", elastic: false,
     carriers: [{ domain: "trial", mode: "video" }] } : d);
-  const { values } = run();
+  const { r, values } = run();
+  const pool = r.resourceUsage.find(u => u.scenario === 0 && u.resourceKind === "link" &&
+    r.linkResources[u.resource]!.pool?.id === "wire" && r.linkResources[u.resource]!.connection === 0)!;
+  assert.deepEqual([pool.unit,pool.used,pool.capacity],["Gbps",28,28]);
+  assert.ok(pool.reasonRows.some(row => r.reasonInputs.some(i => i.reason === row)));
   assert.deepEqual(values("solo"), [16,8,800,100]);
   values("together").forEach((v,i) => assert.ok(v !== null && Math.abs(v - [16,8,400,100][i]!) < 1e-9));
 });

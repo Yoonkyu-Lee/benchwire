@@ -8,6 +8,8 @@ import { effectiveClaim, type DomainPlugin, type Scene } from "../engine/contrac
 import type { Results } from "../engine/results.ts";
 import { trialDomain } from "../fixtures/trial.ts";
 import { connectorsFile, modelFile, sceneFile } from "./files.ts";
+import { loadSceneDocuments } from "../scene/load.ts";
+import { plugins as productPlugins } from "../domains/registry.ts";
 import { loadScene } from "./load.ts";
 
 function sample(t: TestContext) {
@@ -746,4 +748,52 @@ test("T4 시나리오의 우선순위가 입력 주장과 출처를 통해 고�
   const claim = scene.members[0]!.evidence!;
   assert.ok(scene.claimSources.some(c => c.claim === claim && scene.sources[c.source]!.locator === "fixture:scene"));
   assert.ok(result.reasonInputs.some(c => c.claim === claim && result.reasons[c.reason]!.rule.includes("우선순위")));
+});
+
+test("T10 메모리 문서와 고정 판본 파일은 같은 장면·근거·제품 영역 판정을 낸다", () => {
+  const dir = "fixtures/network", file = join(dir,"scene.json");
+  const doc = (name: string): unknown => JSON.parse(readFileSync(name,"utf8"));
+  const saved = sceneFile.parse(doc(file)), connectors = doc(join(dir,"connectors.json"));
+  const models = new Map(saved.items.map(item => {
+    const key = item.modelId + "@" + item.revision;
+    return [key, doc(join(dir,key + ".json"))] as const;
+  }));
+  const memory = loadSceneDocuments(saved,{models,connectors},productPlugins);
+  const disk = loadScene(file,{modelsDir:dir,connectorsFile:join(dir,"connectors.json")},productPlugins);
+  assert.deepEqual(memory,disk);
+  assert.deepEqual(evaluate(memory,productPlugins),evaluate(disk,productPlugins));
+  assert.ok(memory.claimSources.length);
+  assert.equal(productPlugins.some(p => p.id === "trial"),false);
+});
+
+test("T10 캔버스 배치·포트 좌표·도형은 출처와 위치를 검증하고 판정에는 영향을 주지 않는다", t => {
+  const f = sample(t), base = f.open();
+  const item = f.saved.items[0]!.instanceId;
+  f.saved.layout = { placements: [{ instanceId:item,x:-12,y:40 }], viewport:{cx:3,cy:-2,zoom:1.5} };
+  const port = f.host.ports[0]!;
+  port.position = { face:"rear",x:1,y:0,confidence:"official",sources:[f.host.sources[0]!.id] };
+  f.catalog.connectors[0]!.glyph = "socket-a";
+  f.save();
+  assert.deepEqual(f.open(),base);
+  const { models, catalog:connectors, saved } = f;
+  const library = { models:new Map(models.map(m => [m.modelId + "@" + m.revision,m])),connectors };
+  const open = () => loadSceneDocuments(saved,library,[trialDomain()]);
+  const placement = saved.layout!.placements![0]!;
+  saved.layout!.placements!.push(placement);
+  assert.throws(open,/scene.json#layout.placements.1.instanceId/);
+  saved.layout!.placements!.pop();
+  placement.instanceId = "없는 실물";
+  assert.throws(open,/scene.json#layout.placements.0.instanceId/);
+  placement.instanceId = item;
+  saved.layout!.viewport!.zoom = 0;
+  assert.throws(open,/scene.json#layout.viewport.zoom/);
+  saved.layout!.viewport!.zoom = 1;
+  port.position.x = 1.1;
+  assert.throws(open,/source@1.json#ports.0.position.x/);
+  port.position.x = 0.5;
+  port.position.sources = ["없는 출처"];
+  assert.throws(open,/source@1.json#ports.0.position.sources.0/);
+  port.position.sources = [f.host.sources[0]!.id];
+  f.host.revision = "2";
+  assert.throws(open,/scene.json#items.0.revision.*source@1.json/);
 });

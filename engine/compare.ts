@@ -1,5 +1,5 @@
 // 두 판정 스냅샷에서 영속 ID로 맞춘 결과의 의미가 달라진 행만 돌려준다.
-import { bestOption } from "./negotiate.ts";
+import { availableOption } from "./pools.ts";
 import type { Results } from "./results.ts";
 import type { Claim, Scene } from "./scene.ts";
 
@@ -18,7 +18,8 @@ function outcomeKey(scene: Scene, outcome: Outcome): string {
     return JSON.stringify(["workload", scene.scenarios[outcome.scenario!]!.id, scene.workloads[outcome.subjectRow]!.id]);
   }
   return JSON.stringify(["connection", scene.connections[outcome.subjectRow]!.id, outcome.direction, outcome.domain,
-    outcome.unit ?? null, outcome.pool?.domain ?? null, outcome.pool?.id ?? null]);
+    outcome.unit ?? null, outcome.pool?.domain ?? null, outcome.pool?.id ?? null,
+    ...(outcome.scenario === null ? [] : [scene.scenarios[outcome.scenario]!.id])]);
 }
 
 export function ownerIdentity(scene: Scene, kind: Claim["ownerKind"], row: number): string[] {
@@ -64,12 +65,8 @@ function bindingIdentity(snapshot: Snapshot, binding: Binding) {
 }
 
 export function connectionOption({ result }: Snapshot, outcome: Outcome) {
-  if (outcome.subjectKind !== "connection" || outcome.unit === undefined) return undefined;
-  const rows = result.options.flatMap((o, row) => o.connection === outcome.subjectRow &&
-    o.direction === outcome.direction && o.domain === outcome.domain && o.unit === outcome.unit && o.mode === outcome.mode &&
-    o.pool?.domain === outcome.pool?.domain && o.pool?.id === outcome.pool?.id ? [row] : []);
-  if (!rows.length) return undefined;
-  const { limit, unit, bounds, condition } = bestOption(result, rows).option;
+  if (outcome.option === undefined) return undefined;
+  const { limit, unit, bounds, condition } = availableOption(result, outcome.option);
   return { limit, unit, condition, ...(limit === null && bounds ? { bounds } : {}) };
 }
 

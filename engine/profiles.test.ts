@@ -3,6 +3,8 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { loadScene } from "../cli/load.ts";
 import { trialDomain } from "../fixtures/trial.ts";
+import { compare, connectionOption } from "./compare.ts";
+import { power } from "../domains/power/power.ts";
 import * as engine from "./evaluate.ts";
 import { effectiveClaim, type Demand, type Option } from "./contract.ts";
 import type { Results } from "./results.ts";
@@ -191,4 +193,96 @@ test("T4 높은 예약의 다른 자원이 미확인이면 낮은 예약을 확�
   plugin.demand = () => [demand("raw",16,false)];
   plugin.consume = (_s,w) => w ? [] : [{resource:0,fixed:16,coefficient:0,rule:"높은 예약의 추가 자원",inputs,specs}];
   assert.deepEqual([0,1].map(w => work(engine.evaluate(scene,[plugin]),w).verdict),["unknown","unknown"]);
+});
+
+function laneScenarios() {
+  const {scene,plugin,option,demand} = setup([16,100]);
+  scene.scenarios[0]!.id = "영상과 허브";
+  scene.scenarios.push({id:"허브만"});
+  scene.members[0]!.priority = 0;
+  scene.members.push({scenario:1,workload:1});
+  plugin.negotiate = () => ["4레인","2레인"].flatMap(profile => [
+    { ...option("영상", profile === "4레인" ? 25.92 : 12.96, profile), unit:"Gbps" },
+    { ...option("USB 3.2", profile === "4레인" ? 40 : 100, profile), unit:"MB/s" },
+  ]);
+  plugin.demand = (_s,w) => w === 1 ? [{ ...demand("USB 3.2",100,true), unit:"MB/s" }]
+    : [demand("영상",16,false),demand("영상",12,false,1)].map(d => ({...d,unit:"Gbps"}));
+  return {scene,plugin};
+}
+
+test("T2 같은 모드의 4레인·2레인 영상 한도 25.92·12.96 Gbps가 연결 비교에 남는다", () => {
+  const {scene,plugin} = laneScenarios();
+  const variants = engine.evaluateVariants(scene,[plugin],0);
+  const snapshots = ["4레인","2레인"].map(profile => ({scene,result:variants.find(v => v.choices[0]?.profile === profile)!.result}));
+  const outcomes = snapshots.map(s => s.result.outcomes.find(o => o.subjectKind === "connection" &&
+    o.scenario === 0 && o.direction === "forward" && o.unit === "Gbps")!);
+  assert.deepEqual(snapshots.map((s,i) => connectionOption(s,outcomes[i]!)?.limit),[25.92,12.96]);
+  assert.deepEqual(snapshots.map((s,i) => s.result.options[outcomes[i]!.option!]!.profile),["4레인","2레인"]);
+  const changes = compare(snapshots[0]!,snapshots[1]!);
+  assert.ok(changes.some(d => d.after === snapshots[1]!.result.outcomes.indexOf(outcomes[1]!) && d.changed.includes("value")));
+  assert.ok(snapshots.every((s,i) => s.result.reasons.some(r => r.outcome === s.result.outcomes.indexOf(outcomes[i]!) && r.stage === "negotiate")));
+});
+
+test("T8 물리 결합이 막힌 입력의 상시 부하는 다른 출력의 45 W를 차감하지 않는다", () => {
+  const dir = "fixtures/power";
+  const scene = loadScene(dir + "/passthrough.json", { modelsDir: dir, connectorsFile: dir + "/connectors.json" }, [power]);
+  scene.claims[effectiveClaim(scene,"resource",0,"power","capacity")!]!.value = 45;
+  scene.connections.find(c => c.id === "down")!.from = scene.ports.findIndex(p => p.item === 0 && p.id === "b");
+  const budget = scene.claims[effectiveClaim(scene,"item",0,"power","budget:a:a")!]!;
+  for (const port of ["a","b"]) scene.claims.push({ ...budget, field: "budget:a+b:" + port });
+  const entry = scene.parts.find(p => p.connection === 0)!.entry;
+  const c = scene.claims[effectiveClaim(scene,"port",entry,"","connector")!]!;
+  Object.assign(c, { value: "c-receptacle", reference: scene.connectors.findIndex(c => c.id === "c-receptacle") });
+  const result = engine.evaluate(scene,[power]);
+  const upstream = result.outcomes.find(o => o.subjectKind === "connection" && o.subjectRow === 0 && o.direction === "forward")!;
+  assert.equal(upstream.verdict,"impossible");
+  const direct = result.outcomes.findIndex(o => o.subjectKind === "workload");
+  assert.equal(result.metrics.find(m => m.outcome === direct && m.kind === "together")!.value,45);
+  assert.equal(result.standingLoads.length,0);
+  assert.ok(result.reasonInputs.some(i => result.reasons[i.reason]!.outcome === result.outcomes.indexOf(upstream) && i.claim === scene.claims.indexOf(c)));
+});
+
+test("T4 동률 예약의 상한을 합산하지 않고 대안별로 실제로 들어간 예약만 센다", () => {
+  const { scene,plugin,option,demand } = setup([16,16]);
+  plugin.negotiate = () => [option("raw",24)];
+  plugin.demand = () => [demand("raw",16,false)];
+  const variants = engine.evaluateVariants(scene,[plugin],0);
+  const used = variants.map(({result:r}) => r.resourceUsage.find(u => u.scenario === 0 && u.resourceKind === "link" &&
+    r.linkResources[u.resource]!.direction === "forward"));
+  assert.deepEqual(used.map(u => u!.used),[null,16,16]);
+  assert.ok(used.every(u => u!.capacity === 24 && u!.reasonRows.length));
+});
+
+test("T3 같은 작업이 두 내부 경로 중 하나를 쓰면 경로별 소비는 미확인이고 공통 링크는 확정이다", () => {
+  const { scene,plugin,option,demand,inputs,specs } = setup([40]);
+  const port = scene.connections[0]!.from;
+  const attachment = effectiveClaim(scene,"port",port,"","attachment")!;
+  Object.assign(scene.claims[attachment]!,{value:null,reference:null});
+  const root = scene.workloads[0]!.from, item = scene.ports[port]!.item;
+  const end = scene.nodes.push({item,id:"다른끝",kind:"bus",label:""}) - 1;
+  scene.edges.push({ ...scene.edges[0]!, id:"돌아오는길", from:root, to:scene.edges[0]!.from });
+  const edge = scene.edges.push({ ...scene.edges[0]!,id:"다른길",item,from:root,to:end }) - 1;
+  plugin.negotiate = () => [option("bulk",100)];
+  plugin.demand = () => [demand("bulk",40,true)];
+  plugin.consume = (_s,_w,steps) => steps.some(s => s.kind === "edge" && s.row === edge)
+    ? [{resource:0,fixed:0,coefficient:1,rule:"다른길만 점유",inputs,specs}] : [];
+  const r = engine.evaluate(scene,[plugin]);
+  assert.equal(r.resourceUsage.find(u => u.scenario === 0 && u.resourceKind === "scene" && u.resource === 0)!.used,null);
+  const metric = r.metrics.find(m => r.outcomes[m.outcome]!.subjectKind === "workload" && m.kind === "together")!;
+  const link = r.resourceUsage.find(u => u.scenario === 0 && u.resourceKind === "link" && r.linkResources[u.resource]!.direction === "forward")!;
+  assert.equal(metric.value,40);
+  assert.equal(link.used,40);
+  assert.ok(r.wirings.length > 0 && r.reasonInputs.length > 0);
+});
+
+test("T9 같은 연결 옵션도 영상과 허브만의 시나리오 저장 순서를 바꾸면 비교 차이가 없다", () => {
+  const {scene,plugin} = laneScenarios();
+  const reordered = structuredClone(scene);
+  reordered.scenarios.reverse();
+  reordered.members.forEach(m => { m.scenario = 1 - m.scenario; });
+  const a = {scene,result:engine.evaluate(scene,[plugin])};
+  const b = {scene:reordered,result:engine.evaluate(reordered,[plugin])};
+  assert.deepEqual(a.result.choices.map(c => c.profile),["4레인","2레인"]);
+  assert.deepEqual(b.result.choices.map(c => c.profile),["2레인","4레인"]);
+  assert.deepEqual(compare(a,b),[]);
 });

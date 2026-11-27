@@ -21,6 +21,9 @@ export function reserveStanding(scene: Scene, plugins: readonly DomainPlugin[], 
     const { item, id, unit, rule, inputs } = load;
     const issue = (field: string) => result.standingErrors.push({ domain: plugin.id, item, id, field });
     if (!scene.items[item]) { issue("item"); continue; }
+    // 입력이 끊기면 같은 실물 부하에 딸린 입력·상위 자원 예약이 함께 사라진다.
+    if (load.targets.some(t => "connection" in t && result.physical.some(p =>
+      p.connection === t.connection && p.direction === t.direction && p.verdict === "impossible"))) continue;
     const specs = load.specs.filter(spec => result.specSources.some(s => s.domain === plugin.id && s.id === spec));
     for (const spec of load.specs) if (!specs.includes(spec)) issue("spec:" + spec);
     const amount = load.amount !== null && Number.isFinite(load.amount) && load.amount >= 0 ? load.amount : null;

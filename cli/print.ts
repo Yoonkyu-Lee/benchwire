@@ -1,4 +1,5 @@
 // 판정 표와 장면 표를 따라 터미널에 읽을 수 있는 성능·병목·근거를 만든다.
+import { evidenceRows } from "../engine/evidence.ts";
 import type { Claim, Scene, Verdict } from "../engine/contract.ts";
 import type { Results, Target } from "../engine/results.ts";
 
@@ -119,13 +120,12 @@ export function printResults(scene: Scene, result: Results): string {
       lines.push(`${indent}확인할 것 · ${q.instruction} (${targetName(c.ownerKind, c.owner)} · ${c.field})${impact}`);
     }
 
-    const seen = new Set<number>();
-    function writeReason(reason: number, pad: string) {
-      if (seen.has(reason)) {
+    for (const { reason, depth, reference } of evidenceRows(result, { outcome: row })) {
+      const pad = indent + "  ".repeat(depth);
+      if (reference) {
         evidence.push(`${pad}↳ 근거 #${reason + 1}`);
-        return;
+        continue;
       }
-      seen.add(reason);
       const r = result.reasons[reason]!;
       const run = r.run ? runs[r.run] + " " : "";
       evidence.push(`${pad}#${reason + 1} [${stages[r.stage]}] ${run}${r.rule} · ${targetName(r.targetKind, r.targetRow)}`);
@@ -134,13 +134,7 @@ export function printResults(scene: Scene, result: Results): string {
         const s = result.specSources[source]!;
         evidence.push(`${pad}  규격 ${s.title} (${s.locator})`);
       }
-      for (const { prior } of result.reasonParents.filter(p => p.reason === reason)) writeReason(prior, pad + "  ");
     }
-
-    const priors = new Set(result.reasonParents.filter(p => result.reasons[p.reason]!.outcome === row).map(p => p.prior));
-    result.reasons.forEach((r, reason) => {
-      if (r.outcome === row && !priors.has(reason)) writeReason(reason, indent);
-    });
   }
 
   function writeConnection(o: Results["outcomes"][number], row: number, indent: string) {
