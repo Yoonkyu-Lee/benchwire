@@ -27,6 +27,16 @@ function source(title: string, locator: string) {
   return row;
 }
 
+function appendClaimSources(row: HTMLElement, scene: ResultView["scene"], claim: number) {
+  const citations = el("ul");
+  citations.className = "citations";
+  for (const link of scene.claimSources) if (link.claim === claim) {
+    const s = scene.sources[link.source]!;
+    citations.append(source(s.title, s.locator));
+  }
+  if (citations.childElementCount) row.append(citations);
+}
+
 function tree(view: ResultView, start: Parameters<typeof evidenceRows>[1]) {
   const { scene, result } = view;
   const root = el("ul");
@@ -53,13 +63,7 @@ function tree(view: ResultView, start: Parameters<typeof evidenceRows>[1]) {
         const claim = scene.claims[input.claim]!;
         const value = claim.value === null ? "미확인" : String(claim.value);
         const claimRow = el("li", [claim.field, [value, claim.unit].filter(Boolean).join(" "), confidence[claim.confidence], claim.condition].filter(Boolean).join(" · "));
-        const citations = el("ul");
-        citations.className = "citations";
-        for (const link of scene.claimSources) if (link.claim === input.claim) {
-          const s = scene.sources[link.source]!;
-          citations.append(source(s.title, s.locator));
-        }
-        if (citations.childElementCount) claimRow.append(citations);
+        appendClaimSources(claimRow, scene, input.claim);
         claims.append(claimRow);
       }
       detail.append(claims);
@@ -96,6 +100,40 @@ function outcomeNotes(root: HTMLElement, result: Results, rows: readonly number[
   list(root, "필요한 결합 형태", result.needs.filter(row => selected.has(row.outcome)).map(row => row.requiredCapability));
 }
 
+function limitWitnesses(view: ResultView, outcome: number) {
+  const metric = view.limits.get(outcome);
+  if (!metric || metric.low === metric.high) return undefined;
+  const { scene, result } = view;
+  const bounds = el("dl");
+  bounds.className = "limit-witnesses";
+  for (const [label, limit, world] of [
+    ["하한", metric.low, metric.lowWorld], ["상한", metric.high, metric.highWorld],
+  ] as const) {
+    if (world === undefined || limit === null) continue;
+    const candidates = [
+      ...result.profileWorlds.filter(v => v.world === world),
+      ...result.wirings.filter(v => v.world === world).map(v => ({ claim: v.claim, value: scene.nodes[v.node]!.id })),
+    ];
+    if (!candidates.length) continue;
+    const claims = el("ul");
+    for (const { claim: index, value } of candidates) {
+      const claim = scene.claims[index]!;
+      const iface = claim.ownerKind === "interface" ? scene.interfaces[claim.owner] : undefined;
+      const port = iface ? scene.ports[iface.port] : claim.ownerKind === "port" ? scene.ports[claim.owner] : undefined;
+      const item = port ? scene.items[port.item] : claim.ownerKind === "item" ? scene.items[claim.owner] : undefined;
+      const owner = [item?.alias || item?.id, port?.label, iface?.id].filter(Boolean).join(" / ");
+      const fact = [owner, `${claim.field} = ${value}${claim.unit ? " " + claim.unit : ""}`, claim.condition].filter(Boolean).join(" · ");
+      const row = el("li", fact);
+      appendClaimSources(row, scene, index);
+      claims.append(row);
+    }
+    const entry = el("dd");
+    entry.append(claims);
+    bounds.append(el("dt", `${label} ${quantity(limit, metric.unit)} · 후보값`), entry);
+  }
+  return bounds.childElementCount ? bounds : undefined;
+}
+
 function detail(root: HTMLElement, view: ResultView, selected: Selection) {
   const { scene, result } = view;
   if (selected.kind === "connection") {
@@ -109,6 +147,8 @@ function detail(root: HTMLElement, view: ResultView, selected: Selection) {
       negotiation.className = "negotiation-evidence";
       negotiation.append(el("summary", marks[index]!.title), tree(view, { outcome: row }));
       root.append(negotiation);
+      const witnesses = limitWitnesses(view, row);
+      if (witnesses) root.append(witnesses);
     });
   } else if (selected.kind === "workload") {
     const workload = view.workloads.find(w => w.id === selected.id);

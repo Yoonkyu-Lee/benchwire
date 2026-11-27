@@ -69,11 +69,26 @@ async function serverExample(unknownLoss: boolean) {
   return { initial, library: { ...library, models } };
 }
 const profileCase = {
-  initial: sceneFile.parse({ ...altScene, scenarios: [...altScene.scenarios, { id: "hub-only", members: ["hub"] }] }),
-  library: { models: [altHost, altMonitor, altCable].map(model => modelFile.parse(model)), inventory: [], connectors: connectorsFile.parse(altConnectors) },
+  initial: sceneFile.parse({
+    ...altScene,
+    scenarios: [...altScene.scenarios, { id: "hub-only", members: ["hub"] }],
+    ...(mode === "limit" && { layout: { placements: [
+      { instanceId: "host", x: 20, y: 170 },
+      { instanceId: "monitor", x: 480, y: 260 },
+    ], viewport: { cx: 550, cy: 300, zoom: 1 } } }),
+  }),
+  library: {
+    models: [altHost, altMonitor, altCable].map(model => modelFile.parse(mode === "limit" && model.modelId === altHost.modelId
+      ? { ...altHost, ports: altHost.ports.map(port => ({
+        ...port, interfaces: port.interfaces.map(iface => iface.id === "video" ? {
+          ...iface, params: { ...iface.params, pin: { ...iface.params.pin, value: null, confidence: "unknown" } },
+        } : iface),
+      })) } : model)),
+    inventory: [], connectors: connectorsFile.parse(altConnectors),
+  },
 };
 const editCase = { initial, library: { models: [testModel, peer, mismatch, cableModel], inventory, connectors } };
-const fixture = mode === "performance" ? benchmark() : mode === "profile" ? profileCase
+const fixture = mode === "performance" ? benchmark() : mode === "profile" || mode === "limit" ? profileCase
   : mode === "example" || mode === "unknown" ? await serverExample(mode === "unknown") : editCase;
 const root = document.querySelector<HTMLElement>("#app")!;
 let count = 0;

@@ -463,6 +463,28 @@ test("연속 편집의 최신 판정만 표시하고 판정 도착 중에도 카
   } finally { await page.close(); }
 });
 
+test("미확인 핀의 연결 한도 범위를 그리고 두 후보값·출처·퀘스트를 표시한다", async () => {
+  const { page, errors } = await newPage("/testbed.html?limit");
+  try {
+    const wire = page.locator('[data-connection="display-hub"]');
+    const video = wire.locator('path[data-result-kind="negotiation"][data-direction="forward"][data-unit="Gbps"]');
+    assert.equal(await video.getAttribute("data-verdict"), "ok");
+    assert.match(await video.locator("title").textContent() ?? "", /12\.96–25\.92 Gbps/);
+    assert(await video.evaluate(path => getComputedStyle(path).strokeDasharray !== "none"));
+    const text = wire.locator(".wire-result").filter({ hasText: /영상 성립 12\.96–25\.92 Gbps/ });
+    assert(await text.isVisible());
+    await wire.locator(".wire-name").click();
+    const detail = page.getByRole("region", { name: "선택한 항목 근거" });
+    const limits = detail.locator(".limit-witnesses").filter({ hasText: "하한 12.96 Gbps" });
+    assert.match(await limits.innerText(), /하한 12\.96 Gbps[\s\S]*pin = A[\s\S]*fixture:t2\/host/);
+    assert.match(await limits.innerText(), /상한 25\.92 Gbps[\s\S]*pin = C[\s\S]*fixture:t2\/host/);
+    assert.match(await detail.locator(".quests").innerText(), /DP Alt Mode 핀 할당을 확인하세요\.[^\n]*범위에 영향/);
+    await limits.scrollIntoViewIfNeeded();
+    await page.screenshot({ path: "work/m3-limit.png" });
+    assert.deepEqual(errors, []);
+  } finally { await page.close(); }
+});
+
 test("다른 설정을 고르면 이미 평가한 시나리오의 핀 배정과 흐름을 바꿔 그린다", async () => {
   const { page, errors } = await newPage("/testbed.html?profile");
   try {

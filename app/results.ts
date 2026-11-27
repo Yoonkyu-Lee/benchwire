@@ -14,6 +14,7 @@ export interface WireMark {
 }
 export type Selection = { kind: "connection" | "workload"; id: string } | { kind: "resource"; row: number };
 type Outcome = Results["outcomes"][number];
+type Metric = Results["metrics"][number];
 
 function domainName(domain: string) {
   return domainNames.get(domain) ?? (domain || "물리 연결");
@@ -39,18 +40,21 @@ function outcomeVerdict(result: Results, row: number, run: Run): Verdict | null 
   return assessed.length ? assessed.length === 1 ? assessed[0]!.verdict : "unknown" : null;
 }
 
-function connectionMarks(result: Results, rows: readonly number[]): WireMark[] {
+function connectionMarks(result: Results, rows: readonly number[], limits: ReadonlyMap<number, Metric>): WireMark[] {
   return rows.map(row => {
     const o = result.outcomes[row]!;
     const option = o.option === undefined ? undefined : result.options[o.option];
-    const unit = o.unit ?? "";
-    const capacity = option?.bounds ? interval(option.bounds, unit) : option?.limit != null ? quantity(option.limit, unit) : "";
+    const limit = limits.get(row);
+    const unit = limit?.unit ?? o.unit ?? "";
+    const capacity = limit ? interval(limit, unit) : option?.bounds ? interval(option.bounds, unit)
+      : option?.limit != null ? quantity(option.limit, unit) : "";
+    const ranged = limit ? limit.value === null || limit.low !== limit.high : !!option?.bounds;
     const arrow = o.direction === "reverse" ? "←" : "→";
     const pool = o.pool ? `${o.pool.domain}/${o.pool.id}` : undefined;
     const text = [verdictIcon[o.verdict], arrow, o.label, capacity].filter(Boolean).join(" ");
     return { kind: "negotiation", direction: o.direction, layer: layerFor(o.domain, unit), verdict: o.verdict, text, unit,
       title: [text, domainName(o.domain), pool, option?.condition].filter(Boolean).join(" · "),
-      ...(pool && { pool }), dashed: o.verdict === "unknown" || !!option?.bounds };
+      ...(pool && { pool }), dashed: o.verdict === "unknown" || ranged };
   });
 }
 
@@ -66,13 +70,14 @@ export function resultView(scene: Scene, result: Results, scenario: number | nul
       connections.set(outcome.subjectRow, entries);
     }
   }
+  const limits = new Map(result.metrics.filter(metric => metric.kind === "limit").map(metric => [metric.outcome, metric]));
   const wires = new Map<string, WireMark[]>();
   const negotiations = new Map<string, number[]>();
   for (const [row, entries] of connections) {
     const selected = entries.some(i => result.outcomes[i]!.scenario === scenario)
       ? entries.filter(i => result.outcomes[i]!.scenario === scenario) : entries;
     const id = scene.connections[row]!.id;
-    wires.set(id, connectionMarks(result, selected));
+    wires.set(id, connectionMarks(result, selected, limits));
     negotiations.set(id, selected);
   }
   const maxima = new Map<string, number>();
@@ -99,7 +104,7 @@ export function resultView(scene: Scene, result: Results, scenario: number | nul
   const resources = result.resourceUsage.filter(r => r.scenario === scenario).map(r => ({
     ...r, label: resourceName(scene, result, r.resourceKind, r.resource),
   }));
-  return { scene, result, scenario, run, wires, negotiations, workloads, resources };
+  return { scene, result, scenario, run, wires, negotiations, limits, workloads, resources };
 }
 
 export type ResultView = ReturnType<typeof resultView>;
