@@ -1,0 +1,11 @@
+node_modules/
+dist/
+# 지시문, 보고, 그림, 임시 산출물. 추적하지 않는다.
+work/
+# 키와 시크릿
+.env
+.env.*
+!.env.example
+# 사용자 장비 데이터와 수집 결과 (개인 정보)
+userdata/
+*.log
