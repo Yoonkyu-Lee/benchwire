@@ -1,5 +1,6 @@
 // 양 끝과 부품의 협상 결과를 방향별로 모으고 연결 및 경로에 같은 옵션 선택 규칙을 적용한다.
 import type { Demand, DomainPlugin, Option, Scene, Verdict } from "./contract.ts";
+import { availableOption, bindPools, registerPool } from "./pools.ts";
 import { physicalSteps } from "./physical.ts";
 import { checkedQuantity, checkedTrace, type Results } from "./results.ts";
 
@@ -23,9 +24,14 @@ export function optionVerdict(o: Option, d?: Demand): Verdict {
   return o.condition || d && d.preference > 0 ? "conditional" : o.verdict;
 }
 
-export function bestOption(result: Results, rows: number[], demand?: Demand) {
-  return rows.map(row => ({ row, option: result.options[row]!, verdict: optionVerdict(result.options[row]!, demand) }))
-    .sort((a, b) => verdictOrder.indexOf(a.verdict) - verdictOrder.indexOf(b.verdict) ||
+export function bestOption(result: Results, rows: number[], demand?: Demand,
+  matches: ReadonlyMap<number, { verdict: Verdict }> = new Map()) {
+  return rows.map(row => {
+    const option = availableOption(result, row);
+    const verdict = optionVerdict(option, demand);
+    const matched = matches.get(row)?.verdict;
+    return { row, option, verdict: matched && verdictOrder.indexOf(matched) > verdictOrder.indexOf(verdict) ? matched : verdict };
+  }).sort((a, b) => verdictOrder.indexOf(a.verdict) - verdictOrder.indexOf(b.verdict) ||
       Number(!!demand && a.option.mode !== demand.mode) - Number(!!demand && b.option.mode !== demand.mode) ||
       Number(!!demand && a.option.unit !== demand.unit) - Number(!!demand && b.option.unit !== demand.unit) ||
       (b.option.limit ?? 0) - (a.option.limit ?? 0) || a.option.mode.localeCompare(b.option.mode) || a.option.rule.localeCompare(b.option.rule))[0]!;
@@ -39,7 +45,8 @@ export function negotiate(scene: Scene, plugins: readonly DomainPlugin[], result
       const ports = physical.filter(s => s.kind === "mate").flatMap(s => [s.entry, s.exit]);
       const domains = new Set(scene.interfaces.filter(i => ports.includes(i.port)).map(i => i.domain));
       for (const plugin of plugins.filter(p => domains.has(p.id))) {
-        const options = plugin.negotiate({ scene, connection, direction, ports });
+        const link = { scene, connection, direction, ports };
+        const options = plugin.negotiate(link);
         const position = { connection, domain: plugin.id, direction };
         const linkResource = result.linkResources.length;
         const absentDomain = ports.flatMap(port => {
@@ -63,7 +70,9 @@ export function negotiate(scene: Scene, plugins: readonly DomainPlugin[], result
             inputs: verdict === "impossible" ? [...new Set([...o.inputs, ...absentDomain])] : o.inputs });
         }
         result.linkResources.push({ ...position, absentDomain });
+        for (const pool of plugin.pools?.(link) ?? []) registerPool(result, linkResource, pool);
       }
     }
   });
+  bindPools(result);
 }

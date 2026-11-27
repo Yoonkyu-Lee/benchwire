@@ -1,6 +1,7 @@
 // 후보마다 단독 성립 여부와 성능을 비교한 뒤 같은 배선으로 시나리오를 계산한다.
 import type { DomainPlugin, Scene } from "./contract.ts";
 import { allocationGroup, type Flow, type Use } from "./allocate.ts";
+import { assessWork } from "./assess.ts";
 import { negotiate, verdictOrder } from "./negotiate.ts";
 import { paths, type RouteInputs } from "./path.ts";
 import { judgeConnections, judgeWork } from "./judge.ts";
@@ -13,7 +14,7 @@ import { resolveUnknowns } from "./unknown.ts";
 
 function evaluateWiring(scene: Scene, plugins: readonly DomainPlugin[], routeInputs: RouteInputs[] = []): Results {
   const result: Results = { physical: [], options: [], demands: [], paths: [], steps: [], allocations: [], bindings: [], outcomes: [],
-    possibleVerdicts: [], quests: [], wirings: [], metrics: [], reasons: [], reasonInputs: [], reasonParents: [], reasonSpecs: [], needs: [], errors: [], linkResources: [],
+    matches: [], assessments: [], measures: [], possibleVerdicts: [], quests: [], wirings: [], metrics: [], reasons: [], reasonInputs: [], reasonParents: [], reasonSpecs: [], needs: [], errors: [], linkResources: [],
     specSources: plugins.flatMap(p => p.sources.map(s => ({ ...s, domain: p.id }))) };
   negotiate(scene, plugins, result);
   paths(scene, plugins, result, routeInputs);
@@ -38,8 +39,14 @@ function evaluateWiring(scene: Scene, plugins: readonly DomainPlugin[], routeInp
         .filter(u => u.coefficient > 0 || u.fixed > 0 || u.unknown);
       for (const s of steps) if (s.option !== null && p.verdict !== "impossible") {
         const o = result.options[s.option]!;
-        uses.push({ resource: scene.resources.length + o.linkResource, option: s.option, coefficient: d.elastic ? 1 : 0,
+        uses.push({ resource: scene.resources.length + (o.serviceResource ?? o.linkResource), option: s.option, coefficient: d.elastic ? 1 : 0,
           fixed: d.elastic ? 0 : d.requested ?? 0, rule: "같은 방향의 링크 한도", inputs: o.inputs, specs: o.specs });
+        if (o.poolResource !== undefined) {
+          const pool = result.linkResources[o.poolResource]!.pool!, scale = o.pool!.perUnit;
+          uses.push({ resource: scene.resources.length + o.poolResource, option: s.option, pool: o.poolResource,
+            coefficient: d.elastic ? scale : 0, fixed: d.elastic ? 0 : (d.requested ?? 0) * scale,
+            rule: pool.rule, inputs: pool.inputs, specs: pool.specs });
+        }
       }
       const flow: Flow = { workload, path, cap: d.requested, elastic: d.elastic, uses,
         verdict: unknownConsumption ? "unknown" : p.verdict,
@@ -48,8 +55,12 @@ function evaluateWiring(scene: Scene, plugins: readonly DomainPlugin[], routeInp
       if (p.verdict === "impossible") {
         for (const step of steps) if (step.option !== null) {
           const o = result.options[step.option]!;
-          if (o.verdict !== "impossible" && o.limit === 0 && o.mode === d.mode && o.unit === d.unit)
-            solo.bindings.push(scene.resources.length + o.linkResource);
+          if (o.verdict === "impossible" || o.unit !== d.unit || o.mode !== (step.carrier?.mode ?? d.mode)) continue;
+          if (o.limit === 0) solo.bindings.push(scene.resources.length + (o.serviceResource ?? o.linkResource));
+          if (o.poolResource !== undefined) {
+            const pool = result.linkResources[o.poolResource]!.pool!;
+            if ((pool.limit ?? pool.bounds?.high) === 0) solo.bindings.push(scene.resources.length + o.poolResource);
+          }
         }
       }
       if (p.verdict !== "impossible") {
@@ -94,6 +105,10 @@ function evaluateWiring(scene: Scene, plugins: readonly DomainPlugin[], routeInp
     });
     uncertainPolicies(scene, plugins, result, active, together, active.map(f => chosen[f.workload]!.solo), outcomes);
     uncertainPreferences(plugins, result, active.map(f => f.workload), outcomes, routeInputs, chosen);
+    for (const row of outcomes) {
+      const plugin = plugins.find(p => p.id === result.outcomes[row]!.domain)!;
+      assessWork(scene, plugin, result, row);
+    }
   });
   return result;
 }

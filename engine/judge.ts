@@ -2,7 +2,7 @@
 import type { Scene, DomainPlugin, Direction } from "./contract.ts";
 import { addReason, type Results, type Run } from "./results.ts";
 import type { Flow, Share, Use } from "./allocate.ts";
-import { bestOption, optionVerdict } from "./negotiate.ts";
+import { bestOption } from "./negotiate.ts";
 import { portFacts, resourceFacts } from "./scene.ts";
 
 function physicalReasons(scene: Scene, result: Results, outcome: number, connection: number, direction: Direction) {
@@ -19,8 +19,14 @@ function physicalReasons(scene: Scene, result: Results, outcome: number, connect
 }
 function linkReason(scene: Scene, result: Results, outcome: number, option: number) {
   const o = result.options[option]!;
+  const parents = physicalReasons(scene, result, outcome, o.connection, o.direction);
+  if (o.poolResource !== undefined) {
+    const { domain, pool } = result.linkResources[o.poolResource]!;
+    parents.push(addReason(result, { outcome, stage: "negotiate", rule: pool!.rule, targetKind: "linkResource", targetRow: o.poolResource },
+      pool!.inputs, [], domain, pool!.specs));
+  }
   return addReason(result, { outcome, stage: "negotiate", rule: o.condition || o.rule, targetKind: "connection", targetRow: o.connection },
-    o.inputs, physicalReasons(scene, result, outcome, o.connection, o.direction), o.domain, o.specs);
+    o.inputs, parents, o.domain, o.specs);
 }
 function noOptionReason(scene: Scene, result: Results, outcome: number, connection: number, direction: Direction, domain: string) {
   const link = result.linkResources.find(l => l.connection === connection && l.direction === direction && l.domain === domain);
@@ -33,15 +39,23 @@ function noOptionReason(scene: Scene, result: Results, outcome: number, connecti
 export function judgeConnections(scene: Scene, plugins: readonly DomainPlugin[], result: Results) {
   scene.connections.forEach((_, connection) => {
     for (const direction of ["forward", "reverse"] as const) {
-      const groups = new Map<string, number[]>();
-      for (const link of result.linkResources) {
-        if (link.connection === connection && link.direction === direction && !groups.has(link.domain)) groups.set(link.domain, []);
-      }
-      result.options.forEach((o, i) => {
-        if (o.connection === connection && o.direction === direction) groups.get(o.domain)!.push(i);
+      // 같은 영역에서도 독립인 단위와 물리 예산마다 연결 판정을 하나씩 낸다.
+      const groups: { domain: string; rows: number[] }[] = [];
+      result.linkResources.forEach((link, resource) => {
+        if (link.service || link.pool || link.connection !== connection || link.direction !== direction) return;
+        const budgets = new Map<string, number[]>();
+        result.options.forEach((o, i) => {
+          if (o.linkResource !== resource) return;
+          const key = JSON.stringify([o.unit, o.pool?.domain, o.pool?.id]);
+          const rows = budgets.get(key) ?? [];
+          rows.push(i);
+          budgets.set(key, rows);
+        });
+        if (!budgets.size) groups.push({ domain: link.domain, rows: [] });
+        for (const key of [...budgets.keys()].sort()) groups.push({ domain: link.domain, rows: budgets.get(key)! });
       });
-      if (!groups.size) groups.set("", []);
-      for (const [domain, rows] of groups) {
+      if (!groups.length) groups.push({ domain: "", rows: [] });
+      for (const { domain, rows } of groups) {
         if (!rows.length) {
           const steps = result.physical.filter(s => s.connection === connection && s.direction === direction);
           const link = result.linkResources.find(l => l.connection === connection && l.direction === direction && l.domain === domain);
@@ -52,7 +66,8 @@ export function judgeConnections(scene: Scene, plugins: readonly DomainPlugin[],
           continue;
         }
         const { row: option, option: o, verdict } = bestOption(result, rows);
-        const outcome = result.outcomes.push({ subjectKind: "connection", subjectRow: connection, path: null, scenario: null, direction, domain, verdict, mode: o.mode,
+        const outcome = result.outcomes.push({ subjectKind: "connection", subjectRow: connection, path: null, scenario: null, direction, domain, verdict, mode: o.mode, unit: o.unit,
+          ...(o.pool ? { pool: { domain: o.pool.domain, id: o.pool.id } } : {}),
           label: plugins.find(p => p.id === domain)!.explain(verdict, o.mode) }) - 1;
         if (o.unused !== undefined) result.metrics.push({ outcome, kind: "unused", unit: o.unit,
           value: o.unused, low: o.unused, high: o.unused, basis: "calculated" });
@@ -64,9 +79,9 @@ export function judgeConnections(scene: Scene, plugins: readonly DomainPlugin[],
 
 function useReason(scene: Scene, result: Results, outcome: number, domain: string, use: Use, parents: number[]) {
   if (use.option !== undefined) {
-    const link = result.options[use.option]!.linkResource;
+    const link = use.resource - scene.resources.length;
     return addReason(result, { outcome, stage: "allocate", rule: use.rule, targetKind: "linkResource", targetRow: link },
-      use.inputs, parents, domain, use.specs);
+      use.inputs, parents, result.linkResources[link]!.domain, use.specs);
   }
   const r = resourceFacts(scene, use.resource);
   return addReason(result, { outcome, stage: "allocate", rule: use.rule, targetKind: "resource", targetRow: use.resource },
@@ -121,6 +136,23 @@ export function judgeWork(scene: Scene, result: Results, plugin: DomainPlugin, s
     }
     return reasons;
   }
+  function connectionProof(step: Results["steps"][number], workDomain: string) {
+    if (step.option === null) return [noOptionReason(scene, result, outcome, step.row, step.direction, step.carrier?.domain ?? workDomain)];
+    const option = result.options[step.option]!, demand = result.paths[step.path]!.demand;
+    const reasons: number[] = [];
+    for (const match of result.matches) {
+      if (match.demand !== demand) continue;
+      const other = result.options[match.option]!;
+      if (other.linkResource !== option.linkResource || other.mode !== option.mode || other.unit !== option.unit) continue;
+      if (match.option !== step.option && match.verdict !== "impossible") continue;
+      const prior = linkReason(scene, result, outcome, match.option);
+      reasons.push(addReason(result, { outcome, stage: "path", rule: match.rule, targetKind: "connection", targetRow: step.row },
+        match.inputs, [prior], workDomain, match.specs));
+    }
+    if (!result.matches.some(m => m.demand === demand && m.option === step.option))
+      reasons.push(linkReason(scene, result, outcome, step.option));
+    return reasons;
+  }
   const parents: number[] = [];
   for (const [run, share] of [["단독", solo], ["동시", together]] as const) for (const limit of share.policies ?? []) {
     const facts = resourceFacts(scene, limit.resource);
@@ -131,11 +163,7 @@ export function judgeWork(scene: Scene, result: Results, plugin: DomainPlugin, s
     const path = result.paths[candidate.flow.path!]!, prior = result.demands[path.demand]!;
     const limits = cutReasons(path);
     for (const s of result.steps.filter(s => s.path === candidate.flow.path && s.kind === "connection")) {
-      if (s.option === null) limits.push(noOptionReason(scene, result, outcome, s.row, s.direction, plugin.id));
-      else {
-        const verdict = optionVerdict(result.options[s.option]!, prior);
-        if (verdict === "impossible" || verdict === "unknown") limits.push(linkReason(scene, result, outcome, s.option));
-      }
+      limits.push(...connectionProof(s, plugin.id));
     }
     for (const limit of candidate.solo.policies ?? []) if (candidate.solo.bindings.includes(limit.resource))
       limits.push(addReason(result, { outcome, stage: "allocate", rule: limit.rule, targetKind: "resource", targetRow: limit.resource },
@@ -151,10 +179,7 @@ export function judgeWork(scene: Scene, result: Results, plugin: DomainPlugin, s
     const d = path ? result.demands[path.demand]! : null;
     const trace = cutReasons(path);
     for (const s of result.steps.filter(s => s.path === f.path)) {
-      if (s.option !== null) trace.push(linkReason(scene, result, outcome, s.option));
-      if (s.kind === "connection" && s.option === null) {
-        trace.push(noOptionReason(scene, result, outcome, s.row, s.direction, scene.workloads[f.workload]!.domain));
-      }
+      if (s.kind === "connection") trace.push(...connectionProof(s, scene.workloads[f.workload]!.domain));
       if (s.kind === "edge") trace.push(addReason(result, { outcome, stage: "path", rule: "유향 내부 경로", targetKind: "edge", targetRow: s.row },
         [scene.edges[s.row]!.evidence]));
     }

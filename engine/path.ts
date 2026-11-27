@@ -1,26 +1,49 @@
-// 같은 모드가 이어지는 경로 후보를 모두 보존해 단독 배분과 미확인 배선 비교에 쓴다.
-import type { Demand, DomainPlugin, Scene, Step, Verdict } from "./contract.ts";
+// 구간별 운반 서비스가 이어지는 경로 후보를 모두 보존해 단독 배분과 미확인 배선 비교에 쓴다.
+import type { DomainPlugin, Scene, Verdict } from "./contract.ts";
 import { bestOption, optionVerdict, verdictOrder } from "./negotiate.ts";
+import { availableOption } from "./pools.ts";
 import { attachmentCandidates, portFacts } from "./scene.ts";
 import { checkedQuantity, checkedTrace, type Results } from "./results.ts";
 import { routes, MAX_PATHS, type Arc } from "./route.ts";
 
-interface PathArc extends Arc { steps: Step[]; verdict: Verdict; bestCase?: Verdict; truncated: boolean }
+type PathStep = Omit<Results["steps"][number], "path" | "order">;
+interface PathArc extends Arc { steps: PathStep[]; verdict: Verdict; bestCase?: Verdict; truncated: boolean }
 
-function connectionArcs(scene: Scene, result: Results, domain: string, demand: Demand): PathArc[] {
+function connectionArcs(scene: Scene, result: Results, plugin: DomainPlugin, demandRow: number, carrier: { domain: string; mode: string }): PathArc[] {
   const arcs: PathArc[] = [];
+  const demand = result.demands[demandRow]!;
+  const service = { ...demand, mode: carrier.mode };
   const pending = attachmentCandidates(scene, demand.via);
   result.linkResources.forEach((link, resource) => {
-    if (link.domain !== domain) return;
+    if (link.pool || link.service || link.domain !== carrier.domain) return;
     const { connection, direction } = link, c = scene.connections[connection]!;
     const rows = result.options.flatMap((o, i) => o.linkResource === resource ? [i] : []);
     const physical = result.physical.filter(s => s.connection === connection && s.direction === direction);
-    const best = rows.length ? bestOption(result, rows, demand) : {
+    const matches = new Map<number, Results["matches"][number]>();
+    if (plugin.match) {
+      const ports = physical.filter(p => p.kind === "mate").flatMap(p => [p.entry, p.exit]);
+      for (const row of rows) {
+        const option = result.options[row]!;
+        if (option.mode !== carrier.mode || option.unit !== demand.unit) continue;
+        let match = result.matches.find(m => m.demand === demandRow && m.option === row);
+        if (!match) {
+          const raw = plugin.match({ scene, connection, direction, ports }, option, demand, demand.workload);
+          match = { ...checkedTrace(result, plugin.id, "demand", demand.workload, raw), demand: demandRow, option: row };
+          result.matches.push(match);
+        }
+        matches.set(row, match);
+      }
+    }
+    const best = rows.length ? bestOption(result, rows, service, matches) : {
       row: null, verdict: link.absentDomain.length || physical.some(s => s.verdict === "impossible") ? "impossible" as const : "unknown" as const,
     };
-    const o = best.row === null ? undefined : result.options[best.row];
-    const bestCase = o?.bounds && o.limit === null ? optionVerdict({ ...o, limit: o.bounds.high,
-      verdict: o.verdict === "unknown" ? "ok" : o.verdict }, demand) : best.verdict;
+    const raw = best.row === null ? undefined : result.options[best.row];
+    const o = best.row === null ? undefined : availableOption(result, best.row);
+    const match = best.row === null ? undefined : matches.get(best.row);
+    const unknownService = raw?.verdict === "unknown" && !raw.bounds;
+    let bestCase = !unknownService && o?.bounds && o.limit === null ? optionVerdict({ ...o, limit: o.bounds.high,
+      verdict: o.verdict === "unknown" ? "ok" : o.verdict }, service) : best.verdict;
+    if (match && verdictOrder.indexOf(match.verdict) > verdictOrder.indexOf(bestCase)) bestCase = match.verdict;
     const start = direction === "forward" ? c.from : c.to, end = direction === "forward" ? c.to : c.from;
     const a = portFacts(scene, start), b = portFacts(scene, end);
     let variants: number[][] = [[]], truncated = false;
@@ -32,8 +55,8 @@ function connectionArcs(scene: Scene, result: Results, domain: string, demand: D
     }
     for (const edges of variants) {
       for (const from of pending.get(start) ?? [a.node!]) for (const to of pending.get(end) ?? [b.node!]) {
-        const steps: Step[] = [{ kind: "connection", row: connection, from, to, direction, option: best.row },
-          ...edges.map((row): Step => ({ kind: "edge", row, from: scene.edges[row]!.from, to: scene.edges[row]!.to, direction: "forward", option: null }))];
+        const steps: PathStep[] = [{ kind: "connection", row: connection, from, to, direction, option: best.row, carrier },
+          ...edges.map((row): PathStep => ({ kind: "edge", row, from: scene.edges[row]!.from, to: scene.edges[row]!.to, direction: "forward", option: null }))];
         const attachmentUnknown = a.node === null || b.node === null;
         const key = JSON.stringify([c.id, direction, scene.nodes[from]!.id, scene.nodes[to]!.id, edges.map(e => scene.edges[e]!.id)]);
         arcs.push({ from, to, steps, truncated, key,
@@ -57,12 +80,12 @@ function reachable(arcs: PathArc[], start: number, reverse: boolean) {
   return seen;
 }
 
-function through(scene: Scene, arcs: PathArc[], stops: number[]) {
-  const possible = arcs.filter(a => a.verdict !== "impossible");
-  const sections = stops.slice(1).map((end, i) => routes(possible, stops[i]!, end));
+function through(scene: Scene, legs: PathArc[][], stops: number[]) {
+  const possible = legs.map(arcs => arcs.filter(a => a.verdict !== "impossible"));
+  const sections = stops.slice(1).map((end, i) => routes(possible[i]!, stops[i]!, end));
   if (sections.some(s => !s.found.length)) {
     // 성립 후보가 없을 때만 거절 이유를 보여 줄 통로 하나를 되짚는다.
-    const witness = sections.map((s, i) => s.found[0] ?? routes(arcs, stops[i]!, stops[i + 1]!, 1).found[0]);
+    const witness = sections.map((s, i) => s.found[0] ?? routes(legs[i]!, stops[i]!, stops[i + 1]!, 1).found[0]);
     if (witness.every(s => s !== undefined)) return { found: [witness.flat()], truncated: false };
     const disconnected = new Set<number>();
     const disconnectedEdges = new Set<number>();
@@ -74,6 +97,7 @@ function through(scene: Scene, arcs: PathArc[], stops: number[]) {
       scene.connections.forEach((c, row) => {
         if ([c.from, c.to].some(port => terminalItems.includes(scene.ports[port]!.item))) disconnected.add(row);
       });
+      const arcs = legs[i]!;
       const forward = reachable(arcs, start, false), backward = reachable(arcs, end, true);
       const incident = new Set([...forward, ...backward]);
       scene.edges.forEach((edge, row) => {
@@ -114,14 +138,22 @@ export function paths(scene: Scene, plugins: readonly DomainPlugin[], result: Re
       const requested = checkedQuantity(result, plugin.id, "demand", workload, "requested", trace.requested);
       const d = { ...trace, requested };
       const demand = result.demands.push({ ...d, workload }) - 1;
-      const arcs = [...internal, ...connectionArcs(scene, result, w.domain, d)];
       const stops = [w.from, ...d.via, w.to];
-      const { found, truncated, disconnected, disconnectedEdges } = through(scene, arcs, stops);
+      const carriers = d.carriers ?? stops.slice(1).map(() => ({ domain: w.domain, mode: d.mode }));
+      const invalid = d.via.some(node => !Number.isInteger(node) || !scene.nodes[node]) ? "via"
+        : carriers.length !== stops.length - 1 || carriers.some(c => !plugins.some(p => p.id === c.domain) || !c.mode) ? "carriers" : null;
+      if (invalid) {
+        result.errors.push({ domain: plugin.id, stage: "demand", row: workload, field: invalid, spec: "" });
+        result.paths.push({ workload, demand, verdict: "unknown", key: "", truncated: false });
+        continue;
+      }
+      const legs = carriers.map(carrier => [...internal, ...connectionArcs(scene, result, plugin, demand, carrier)]);
+      const { found, truncated, disconnected, disconnectedEdges } = through(scene, legs, stops);
       const relevant = new Set(found.filter(route => route.every(a => a.verdict !== "impossible")).flat());
       if (truncated) {
         // 열거에서 잘린 후보도 이 구간의 출발점에서 닿고 도착점까지 이어지는 호에만 의존한다.
-        const viable = arcs.filter(a => a.verdict !== "impossible");
         for (const [i, end] of stops.slice(1).entries()) {
+          const viable = legs[i]!.filter(a => a.verdict !== "impossible");
           const forward = reachable(viable, stops[i]!, false), backward = reachable(viable, end, true);
           for (const a of viable) if (forward.has(a.from) && backward.has(a.to)) relevant.add(a);
         }
@@ -133,7 +165,13 @@ export function paths(scene: Scene, plugins: readonly DomainPlugin[], result: Re
         }
         const c = scene.connections[step.row]!;
         for (const port of [c.from,c.to]) inputs.claims.add(portFacts(scene,port).attachment);
-        if (step.option !== null) inputs.resources.add(scene.resources.length + result.options[step.option]!.linkResource);
+        if (step.option !== null) {
+          const o = result.options[step.option]!;
+          inputs.resources.add(scene.resources.length + (o.serviceResource ?? o.linkResource));
+          if (o.poolResource !== undefined) inputs.resources.add(scene.resources.length + o.poolResource);
+        }
+        for (const m of result.matches) if (m.demand === demand && m.option === step.option)
+          for (const claim of m.inputs) inputs.claims.add(claim);
         for (const part of scene.parts.filter(p => p.connection === step.row)) {
           for (const port of [part.entry,part.exit]) inputs.claims.add(portFacts(scene,port).attachment);
           for (const u of scene.resourceUses) if (scene.edges[u.edge]!.item === part.item) inputs.resources.add(u.resource);

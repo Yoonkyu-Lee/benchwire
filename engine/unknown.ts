@@ -78,20 +78,35 @@ function range(metric: Metric, samples: (Metric | undefined)[], worlds: number[]
   metric.basis = common && samples.some(m => m?.basis === "assumed") ? "assumed" : "calculated";
 }
 
-function snapshot(r: Results, row: number) {
+function linkKey(r: Results, row: number) {
+  const link = r.linkResources[row]!, service = link.service;
+  const owner = service?.poolResource === undefined ? undefined : r.linkResources[service.poolResource];
+  return JSON.stringify([link.connection, link.domain, link.pool?.scope === "connection" ? null : link.direction,
+    link.pool?.id, link.pool?.scope, service?.mode, service?.unit, owner?.domain, owner?.pool?.id]);
+}
+
+function snapshot(r: Results, row: number, base = r) {
   const o = r.outcomes[row]!;
   const metrics = r.metrics.filter(m => m.outcome === row);
   const possible = r.possibleVerdicts.filter(v => v.outcome === row).map(v => v.verdict).sort();
   return { o, metrics, possible, inputs: inputs(r, row),
+    measures: r.measures.filter(m => m.outcome === row), assessments: r.assessments.filter(a => a.outcome === row),
     specs: r.reasonSpecs.filter(s => r.reasons[s.reason]!.outcome === row).map(s => s.source),
     quests: r.quests.filter(q => q.outcome === row).map(q => q.claim),
-    bindings: r.bindings.filter(b => o.subjectKind === "workload" && b.scenario === o.scenario && b.workload === o.subjectRow),
+    bindings: r.bindings.filter(b => o.subjectKind === "workload" && b.scenario === o.scenario && b.workload === o.subjectRow).flatMap(b => {
+      if (r === base || b.resourceKind === "scene") return [b];
+      const key = linkKey(r, b.resource), resource = base.linkResources.findIndex((_,i) => linkKey(base, i) === key);
+      return resource < 0 ? [] : [{ ...b, resource }];
+    }),
     needs: r.needs.filter(n => n.outcome === row).map(n => n.requiredCapability) };
 }
 
 function sameOutcome(a: ReturnType<typeof snapshot>, b: ReturnType<typeof snapshot>) {
   return a.o.verdict === b.o.verdict && a.o.mode === b.o.mode &&
     a.possible.length === b.possible.length && a.possible.every((v, i) => v === b.possible[i]) &&
+    a.assessments.length === b.assessments.length && a.assessments.every(x => b.assessments.some(y => y.run === x.run && y.verdict === x.verdict)) &&
+    a.measures.length === b.measures.length && a.measures.every(x => b.measures.some(y =>
+      y.run === x.run && y.kind === x.kind && y.unit === x.unit && y.low === x.low && y.high === x.high)) &&
     a.metrics.length === b.metrics.length && a.metrics.every((m, i) => {
       const n = b.metrics[i]!;
       return m.kind === n.kind && m.unit === n.unit && m.value === n.value && m.low === n.low && m.high === n.high && m.basis === n.basis;
@@ -125,6 +140,20 @@ function merge(scene: Scene, plugins: readonly DomainPlugin[], r: Results, row: 
     const values = samples.map(s => s.metrics.filter(x => x.kind === m.kind && x.unit === m.unit)[ordinal]);
     range(m, values, worlds);
   }
+  r.assessments = r.assessments.filter(a => a.outcome !== row);
+  r.measures = r.measures.filter(m => m.outcome !== row);
+  for (const sample of samples) {
+    for (const a of sample.assessments) if (!r.assessments.some(x => x.outcome === row && x.run === a.run && x.verdict === a.verdict))
+      r.assessments.push({ ...a, outcome: row });
+    for (const m of sample.measures) {
+      const same = (x: typeof m) => x.run === m.run && x.kind === m.kind && x.unit === m.unit;
+      if (r.measures.some(x => x.outcome === row && same(x))) continue;
+      const values = samples.map(s => s.measures.find(same));
+      const lows = values.map(x => x?.low ?? null), highs = values.map(x => x?.high ?? null);
+      r.measures.push({ ...m, outcome: row, low: lows.every(x => x !== null) ? Math.min(...lows) : null,
+        high: highs.every(x => x !== null) ? Math.max(...highs) : null });
+    }
+  }
   if (o.subjectKind === "workload") {
     const belongs = (b: { scenario: number; workload: number }) => b.scenario === o.scenario && b.workload === o.subjectRow;
     r.bindings = r.bindings.filter(b => !belongs(b));
@@ -153,7 +182,7 @@ export function resolveUnknowns(scene: Scene, plugins: readonly DomainPlugin[], 
   const all = [...candidates].map(([port, nodes]) => ({ claim: portFacts(scene, port).attachment, nodes }));
   const groups: { variables: Variable[]; affected: number[] }[] = [];
   result.outcomes.forEach((o, row) => {
-    const claims = new Set<number>();
+    const claims = new Set(inputs(result, row));
     if (o.subjectKind === "connection") {
       for (const p of scene.parts.filter(p => p.connection === o.subjectRow))
         for (const port of [p.entry,p.exit]) claims.add(portFacts(scene,port).attachment);
@@ -178,6 +207,11 @@ export function resolveUnknowns(scene: Scene, plugins: readonly DomainPlugin[], 
         o.verdict = "unknown";
         o.label = plugins.find(p => p.id === o.domain)?.explain("unknown", o.mode) ?? "배선 미확인";
         conservative(result, row);
+        for (const m of result.measures.filter(m => m.outcome === row)) m.low = m.high = null;
+        const runs = new Set(result.assessments.filter(a => a.outcome === row).map(a => a.run));
+        result.assessments = result.assessments.filter(a => a.outcome !== row);
+        for (const run of runs) for (const verdict of ["ok","conditional","impossible"] as const)
+          result.assessments.push({ outcome: row, run, verdict });
         if (o.subjectKind === "workload") {
           for (const a of result.allocations) if (a.workload === o.subjectRow && a.scenario === o.scenario) a.value = null;
           result.bindings = result.bindings.filter(b => b.workload !== o.subjectRow || b.scenario !== o.scenario);
@@ -203,8 +237,27 @@ export function resolveUnknowns(scene: Scene, plugins: readonly DomainPlugin[], 
       });
       const concrete = { ...scene, claims }, answer = evaluateWiring(concrete, plugins);
       completeUnknowns(concrete, plugins, answer);
-      // 결과 행 순서는 장면의 연결·영역·방향과 시나리오 멤버 순서로 고정된다.
-      affected.forEach((row,j) => observations[j]!.push(snapshot(answer, row)));
+      // 배선에 따라 협상 서비스 수가 달라지므로 행 번호 대신 판정의 대상을 맞춘다.
+      affected.forEach((row,j) => {
+        const base = result.outcomes[row]!;
+        const sameSubject = (o: typeof base) => o.subjectKind === base.subjectKind && o.subjectRow === base.subjectRow &&
+          o.scenario === base.scenario && o.direction === base.direction && o.domain === base.domain;
+        const exact = answer.outcomes.findIndex(o => sameSubject(o) && o.unit === base.unit &&
+          o.pool?.domain === base.pool?.domain && o.pool?.id === base.pool?.id);
+        if (exact >= 0) {
+          observations[j]!.push(snapshot(answer, exact, result));
+          return;
+        }
+        const silent = answer.outcomes.findIndex(o => sameSubject(o) && o.unit === undefined);
+        if (silent >= 0) {
+          observations[j]!.push(snapshot(answer, silent, result));
+          return;
+        }
+        // 이 배선에서 해당 예산의 서비스 선언 자체가 사라졌다.
+        const absent = snapshot(result, row);
+        observations[j]!.push({ ...absent, o: { ...base, verdict: "unknown", mode: "" },
+          possible: ["ok","conditional","impossible"], metrics: [], measures: [], assessments: [], bindings: [], needs: [] });
+      });
       worlds.push(world);
     }
     affected.forEach((row,j) => merge(scene, plugins, result, row, variables, observations[j]!, worlds, strides));

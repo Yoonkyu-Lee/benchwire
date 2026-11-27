@@ -10,7 +10,10 @@ function tied(a: number, b: number) {
 }
 
 // 배분 안에서만 장면 자원 뒤에 링크 자원의 번호를 이어 붙인다.
-export interface Use extends Consumption { option?: number }
+export interface Use extends Consumption { option?: number; pool?: number }
+function linkLimit(result: Results, u: Use) {
+  return u.pool === undefined ? result.options[u.option!]! : result.linkResources[u.pool]!.pool!;
+}
 export interface Flow { workload: number; path: number | null; cap: number | null; elastic: boolean; verdict: Verdict; bestCase?: Verdict; uses: Use[] }
 export interface Share { workload: number; value: number | null; verdict: Verdict; range?: { low: number; high: number | null; possible: Verdict[] }; bindings: number[]; unresolvedPolicies?: number[]; policies?: (PolicyLimit & {resource: number})[] }
 
@@ -19,7 +22,7 @@ export function throughputUpper(scene: Scene, result: Results, flow: Flow, polic
   let upper = flow.cap;
   for (const row of new Set(flow.uses.map(u => u.resource))) {
     const uses = flow.uses.filter(u => u.resource === row), first = uses[0]!;
-    const capacity = first.option === undefined ? scene.claims[resourceFacts(scene, row).capacity]!.value : result.options[first.option]!.limit ?? result.options[first.option]!.bounds?.high;
+    const capacity = first.option === undefined ? scene.claims[resourceFacts(scene, row).capacity]!.value : linkLimit(result, first).limit ?? linkLimit(result, first).bounds?.high;
     const limit = policies.find(p => p.workload === flow.workload && p.resource === row)?.limit;
     if (typeof capacity !== "number" && limit === undefined) continue;
     const budget = Math.min(typeof capacity === "number" ? capacity : Infinity, limit ?? Infinity);
@@ -52,7 +55,7 @@ function fill(scene: Scene, result: Results, flows: readonly Flow[], fair: Reado
     active.add(i);
     for (const u of f.uses) {
       let pool = pools.get(u.resource);
-      const option = u.option === undefined ? null : result.options[u.option]!;
+      const option = u.option === undefined ? null : linkLimit(result, u);
       if (!pool) {
         const facts = option ? null : resourceFacts(scene, u.resource);
         const capacity = facts ? scene.claims[facts.capacity]!.value : option!.limit;
@@ -83,6 +86,18 @@ function fill(scene: Scene, result: Results, flows: readonly Flow[], fair: Reado
     for (const i of p.fixed.keys()) if (!active.has(i)) p.fixed.delete(i);
     for (const i of p.coefficients.keys()) if (!active.has(i)) p.coefficients.delete(i);
     const users = new Set([...p.fixed.keys(), ...p.coefficients.keys()]);
+    if (result.linkResources[row - scene.resources.length]?.pool && p.coefficients.size > 1) {
+      const elastic = [...p.coefficients.keys()].map(i => flows[i]!);
+      const units = new Set(elastic.map(f => result.demands[result.paths[f.path!]!.demand]!.unit));
+      if (units.size > 1) {
+        for (const i of p.coefficients.keys()) {
+          uncertain.add(i);
+          const workload = flows[i]!.workload, field = "pool.elasticUnit";
+          if (!result.errors.some(e => e.stage === "demand" && e.row === workload && e.field === field))
+            result.errors.push({ domain: scene.workloads[workload]!.domain, stage: "demand", row: workload, spec: "", field });
+        }
+      }
+    }
     p.reserved = [...p.fixed.values()].reduce((sum, x) => sum + x, 0);
     if (p.capacity !== null && p.reserved > p.capacity && !tied(p.reserved, p.capacity)) {
       for (const i of p.fixed.keys()) overbooked.add(i);
@@ -169,8 +184,8 @@ function guaranteedFloor(scene: Scene, lower: Results, flow: Flow, group: Flow[]
     const option = uses[0]!.option;
     let capacity: number;
     if (option !== undefined) {
-      const link = lower.options[option]!;
-      if (link.limit === null || uses.some(u => lower.options[u.option!]!.limit !== link.limit || lower.options[u.option!]!.unit !== link.unit)) return 0;
+      const link = linkLimit(lower, uses[0]!);
+      if (link.limit === null || uses.some(u => linkLimit(lower, u).limit !== link.limit || linkLimit(lower, u).unit !== link.unit)) return 0;
       capacity = link.limit;
     } else {
       const facts = resourceFacts(scene, row), available = scene.claims[facts.capacity]!.value;
@@ -187,10 +202,24 @@ function guaranteedFloor(scene: Scene, lower: Results, flow: Flow, group: Flow[]
 
 // 링크 용량이 구간이면 같은 작업·예약을 양 경계에 배분한다. 다른 링크를 쓰는 경쟁자가 있으면 상한은 독점 시의 값이다.
 export function allocate(scene: Scene, result: Results, flows: readonly Flow[], fair: ReadonlySet<number> = new Set()): Share[] {
-  if (!flows.some(f => f.uses.some(u => u.option !== undefined && result.options[u.option]!.bounds)))
+  // 경계가 없는 공용 예산도 활성 작업이 전부 요청한 양 이상에서는 배분이 달라지지 않는다.
+  const requested = new Map<number, number>();
+  for (const f of flows) for (const u of f.uses) {
+    if (u.pool === undefined) continue;
+    const pool = result.linkResources[u.pool]!.pool!;
+    if (pool.limit !== null || pool.bounds) continue;
+    const use = f.cap === null ? Infinity : u.fixed + u.coefficient * f.cap;
+    requested.set(u.pool, (requested.get(u.pool) ?? 0) + use);
+  }
+  if (requested.size) result = { ...result, linkResources: result.linkResources.map((r,i) => {
+    const high = requested.get(i);
+    return high !== undefined && Number.isFinite(high) ? { ...r, pool: { ...r.pool!, bounds: { low: 0, high } } } : r;
+  }) };
+  if (!flows.some(f => f.uses.some(u => u.option !== undefined && linkLimit(result, u).bounds)))
     return allocateKnown(scene, result, flows, fair);
   const at = (side: "low" | "high"): Results => ({ ...result,
-    options: result.options.map(o => o.bounds ? { ...o, limit: o.bounds[side] } : o) });
+    options: result.options.map(o => o.bounds ? { ...o, limit: o.bounds[side] } : o),
+    linkResources: result.linkResources.map(r => r.pool?.bounds ? { ...r, pool: { ...r.pool, limit: r.pool.bounds[side] } } : r) });
   const lower = at("low"), upper = at("high");
   const optimistic = flows.map(f => ({ ...f, verdict: f.verdict === "unknown" ? f.bestCase ?? f.verdict : f.verdict }));
   const lowShares = allocateKnown(scene, lower, optimistic, fair);
@@ -198,12 +227,12 @@ export function allocate(scene: Scene, result: Results, flows: readonly Flow[], 
   return flows.map((flow, i) => {
     const group = allocationGroup(flows, flow);
     const varying = new Set(group.flatMap(f => f.uses.filter(u => u.option !== undefined &&
-      result.options[u.option]!.bounds && lower.options[u.option]!.limit !== upper.options[u.option]!.limit).map(u => u.resource)));
+      linkLimit(result, u).bounds && linkLimit(lower, u).limit !== linkLimit(upper, u).limit).map(u => u.resource)));
     const canBind = [...varying].filter(row => {
       let used = 0, guaranteed = Infinity;
       for (const f of group) for (const u of f.uses.filter(u => u.resource === row)) {
         used += u.fixed + (u.coefficient ? u.coefficient * (f.cap ?? Infinity) : 0);
-        guaranteed = Math.min(guaranteed, lower.options[u.option!]!.limit ?? 0);
+        guaranteed = Math.min(guaranteed, linkLimit(lower, u).limit ?? 0);
       }
       return used > guaranteed;
     });
