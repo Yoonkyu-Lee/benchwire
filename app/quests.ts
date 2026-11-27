@@ -1,6 +1,7 @@
 // 판정의 미확인 주장과 현재 연결을 검증하고 실물·배선의 측정으로 기록한다.
 import { domains, type QuestTemplate } from "../domains/registry.ts";
-import type { Claim, MeasurementContext, Value } from "../engine/contract.ts";
+import type { Claim, Value } from "../engine/contract.ts";
+import { recordMeasurement, type MeasurementTarget } from "../scene/measurement.ts";
 import { connectionPorts } from "../engine/scene.ts";
 import { claimInput, describe, field, showError, type FieldValue, type JSONSchema } from "./field.ts";
 import type { Connection, Item, SceneDocument } from "./document.ts";
@@ -206,42 +207,6 @@ export function verificationSource(locator: string) {
   return locator.startsWith(SOURCE_SCHEME) ? new URLSearchParams(locator.slice(SOURCE_SCHEME.length)) : undefined;
 }
 
-function context(item: MeasurementContext) {
-  return { firmware: item.firmware, measurementCondition: item.measurementCondition };
-}
-
-function measuredDocument(saved: SceneDocument, quest: Quest, value: FieldValue, condition: string,
-  items: SceneDocument["items"], source: SceneDocument["sources"][number]) {
-  const claim = { ...value, confidence: "user_verified" as const, sources: [source.id] };
-  const sources = [...saved.sources, source];
-  if (quest.connection) {
-    const { row, domain, field, ports } = quest.connection;
-    const original = saved.connections[row]!;
-    const captured = ports.map(port => ({ ...port, ...context(items.find(i => i.instanceId === port.instanceId)!) }));
-    const observations = original.observations ?? [];
-    const at = observations.findIndex(o => o.domain === domain && o.field === field &&
-      o.ports.length === captured.length && o.ports.every((s, i) => {
-        const p = captured[i]!;
-        return s.id === p.id && s.instanceId === p.instanceId && s.firmware === p.firmware && s.measurementCondition === p.measurementCondition;
-      }));
-    if (at >= 0 && observations[at]!.claim.value === value.value && (observations[at]!.claim.unit ?? "") === value.unit) return saved;
-    const observation = { ports: captured, domain, field, claim };
-    const connection = { ...original, observations: at < 0 ? [...observations, observation] : observations.with(at, observation) };
-    return { ...saved, items, sources, connections: saved.connections.with(row, connection) };
-  }
-  const target = quest.target!;
-  const personal = saved.personal ?? [];
-  const scope = context(items.find(i => i.instanceId === target.instanceId)!);
-  const at = personal.findIndex(p => p.instanceId === target.instanceId && p.ownerKind === target.ownerKind && p.ownerId === target.ownerId
-    && p.domain === target.domain && p.field === target.field && (p.claim.condition ?? "") === condition
-    && p.firmware === scope.firmware && p.measurementCondition === scope.measurementCondition);
-  if (at >= 0 && personal[at]!.claim.value === value.value && (personal[at]!.claim.unit ?? "") === value.unit) {
-    return items.every((item, i) => item === saved.items[i]) ? saved : { ...saved, items };
-  }
-  const row: Personal = { ...target, ...scope, claim: { ...claim, condition } };
-  return { ...saved, sources, items, personal: at < 0 ? [...personal, row] : personal.with(at, row) };
-}
-
 async function attach(note: string, file?: File) {
   const body = new FormData();
   if (note) body.set("note", note);
@@ -380,7 +345,11 @@ function card(view: ResultView, saved: SceneDocument, q: Quest, save: Save, edit
     ]) if (key && value) metadata.set(key, value);
     const source = { id: "verification-" + crypto.randomUUID(), title: "검증 퀘스트", locator: SOURCE_SCHEME + metadata,
       retrievedAt: new Date().toISOString().slice(0, 10) };
-    const next = measuredDocument(saved, q, value, settings, items, source);
+    const target: MeasurementTarget = q.connection
+      ? {connection:q.connection.row,domain:q.connection.domain,field:q.connection.field}
+      : {...q.target!,condition:settings};
+    const scoped = items.every((item,i) => item === saved.items[i]) ? saved : {...saved,items};
+    const next = recordMeasurement(scoped,target,value,source,"manual");
     if (next === saved) { status.textContent = "이미 같은 값이 저장되어 있습니다."; return; }
     const problem = save(saved, next, true);
     if (problem) { showError(form, problem); return; }

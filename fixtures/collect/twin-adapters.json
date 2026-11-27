@@ -1,0 +1,101 @@
+{
+  "version": 1,
+  "capturedAt": "2026-01-02T03:04:05Z",
+  "osBuild": "fixture-build",
+  "devices": [
+    {
+      "id": "HUB\\A",
+      "name": "가상 부모 A",
+      "parent": null,
+      "children": [
+        "USB\\TEST_A"
+      ],
+      "locations": [
+        "ROOT#A"
+      ],
+      "hardwareIds": [],
+      "driver": null
+    },
+    {
+      "id": "USB\\TEST_A",
+      "name": "가상 복합 어댑터",
+      "parent": "HUB\\A",
+      "children": [],
+      "locations": [
+        "ROOT#A#USB(1)"
+      ],
+      "hardwareIds": [
+        "USB\\VID_CAFE&PID_0001"
+      ],
+      "driver": "fixture-1"
+    },
+    {
+      "id": "HUB\\B",
+      "name": "가상 부모 B",
+      "parent": null,
+      "children": [
+        "USB\\TEST_B"
+      ],
+      "locations": [
+        "ROOT#B"
+      ],
+      "hardwareIds": [],
+      "driver": null
+    },
+    {
+      "id": "USB\\TEST_B",
+      "name": "가상 복합 어댑터",
+      "parent": "HUB\\B",
+      "children": [],
+      "locations": [
+        "ROOT#B#USB(2)"
+      ],
+      "hardwareIds": [
+        "USB\\VID_CAFE&PID_0001"
+      ],
+      "driver": "fixture-1"
+    }
+  ],
+  "readings": [
+    {
+      "device": "USB\\TEST_A",
+      "kind": "linkSpeed",
+      "value": 1000,
+      "unit": "Mbps",
+      "medium": "802.3"
+    },
+    {
+      "device": "USB\\TEST_B",
+      "kind": "linkSpeed",
+      "value": 100,
+      "unit": "Mbps",
+      "medium": "802.3"
+    },
+    {
+      "device": "USB\\TEST_A",
+      "kind": "usbMode",
+      "value": "Gen 1x1",
+      "unit": ""
+    },
+    {
+      "device": "USB\\TEST_B",
+      "kind": "usbMode",
+      "value": null,
+      "unit": "",
+      "reason": "Add-Type 사용 불가"
+    },
+    {
+      "device": null,
+      "kind": "batteryRate",
+      "value": null,
+      "unit": "W",
+      "reason": "배터리가 없습니다."
+    },
+    {
+      "device": "USB\\TEST_A",
+      "kind": "usbParent",
+      "value": "HUB\\A",
+      "unit": ""
+    }
+  ]
+}

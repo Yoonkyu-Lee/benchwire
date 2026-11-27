@@ -106,6 +106,20 @@ npm run perf    # 조용한 상태에서 프레임·편집 지연 측정, 한도
 
 닿지 않는 것: DisplayPort 링크 속도와 레인 수는 공개 Windows API가 없고 NVIDIA NVAPI · AMD ADLX 같은 제조사 SDK에만 있다. USB4 터널 대역폭도 공개 API가 없다(ETW 이벤트에 링크 속도와 터널 유무만 있고 관리자 권한이 필요하다). 이런 값은 `unknown`으로 두고 검증 퀘스트로 보낸다. AppLocker나 WDAC가 걸린 기계에서는 `Add-Type`이 막혀 표의 '됨' 줄만 쓸 수 있다. [Language modes](https://learn.microsoft.com/en-us/powershell/module/microsoft.powershell.core/about/about_language_modes?view=powershell-5.1)
 
+### Windows 수집 파일 가져오기
+
+1. 캔버스 인벤토리의 **수집기 → 실행 방법과 대본 전문**에서 읽을 항목과 출력 위치를 확인한다. 실행을 원하면 저장소 폴더에서 Windows PowerShell로 다음 명령을 실행한다.
+
+   ```powershell
+   powershell.exe -NoProfile -File .\collector\collect.ps1 -Out "$env:TEMP\benchwire-collect.json"
+   ```
+
+   `-Out`을 생략하면 같은 임시 경로를 쓴다. 기존 파일을 보존하려면 다른 JSON 경로를 지정한다. 정책이 Restricted이거나 AllSigned에서 서명 검사를 통과하지 못하면 장치 관리자와 고급 디스플레이 설정에서 값을 확인해 퀘스트에 입력한다.
+2. **수집 JSON 가져오기**에서 파일을 고른다. 로컬 서버가 검증한 원본을 `userdata/collect/`에 보관한다. 이름·VID/PID·부모·위치 경로로 행을 찾아 장면의 실물과 포트를 직접 고른다. USB 부모와 출력 GPU의 내부 배선을 기록할 때는 측정된 부모 또는 GPU가 선택한 포트에 직접 붙은 내부 노드인지도 확인한다.
+3. 수집 당시와 현재 배선이 같은지 확인한 뒤 끝점과 중간 부품의 펌웨어와 측정 조건을 입력한다. 실제로 적용할 항목이 없는 칸만 **해당 없음**을 고른다. **확인한 측정 적용**으로 장면에 저장한다. 예제는 개인 사본으로 열린다. 같은 파일을 다시 열면 여전히 같은 배선·조건인 맞춤을 보여 준다.
+
+현재 NIC·USB·화면 모드는 연결 관측, 확인한 내부 부착점은 실물의 개인 주장이다. PCIe 링크 폭, EDID, 충방전 W 등은 원본에서 볼 수 있다. 배터리가 없거나 접근 권한이 부족한 행에는 수집하지 못한 이유가 남는다. 가상 예제는 `fixtures/collect/twin-adapters.json`이다.
+
 ### 되돌리기 어려운 결정
 
 1. 엔진 언어(TypeScript). 성능이나 메모리 문제가 측정되면 Rust로 옮긴다(위 갈림길). 표와 계약이 언어 중립이면 옮기는 비용은 엔진과 플러그인 본문에 그친다.

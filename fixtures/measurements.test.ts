@@ -206,14 +206,21 @@ test("T5 생략한 범위와 확인한 해당 없음을 구별하고 이력에 �
   const cablePorts=obs.ports.slice(1,-1);
   function inactive(){return f.load().claims.find(c=>c.field==="usbMode")!.inactive;}
   delete cable.firmware; for(const p of cablePorts) delete p.firmware;
-  assert.equal(inactive(),"firmware");
-  cable.firmware=null; for(const p of cablePorts) p.firmware=null;
+  assert.equal(inactive(),"unknownFirmware");
+  let history = f.load();
+  assert.match(printResults(history,evaluate(history,plugins)),/적용 안 됨: 펌웨어 미확인/u);
+  cable.firmware=null;
+  assert.equal(inactive(),"unknownFirmware");
+  for(const p of cablePorts) p.firmware=null;
   assert.equal(inactive(),undefined);
   delete cable.measurementCondition; for(const p of cablePorts) delete p.measurementCondition;
-  assert.equal(inactive(),"measurementCondition");
+  assert.equal(inactive(),"unknownMeasurementCondition");
+  history = f.load();
+  assert.match(printResults(history,evaluate(history,plugins)),/적용 안 됨: 측정 조건 미확인/u);
   cable.measurementCondition=null; for(const p of cablePorts) p.measurementCondition=null;
   assert.equal(inactive(),undefined);
   d.items[0].firmware="v2"; const scene=f.load(),text=printResults(scene,evaluate(scene,plugins));
+  assert.match(text,/적용 안 됨: 펌웨어 다름/u);
   assert.match(text,/측정 당시[^\n]*left\/usb[^\n]*v1[^\n]*대기[^\n]*cable\/a[^\n]*해당 없음/u);
   assert.match(text,/현재 배선[^\n]*left\/usb[^\n]*v2[^\n]*대기/u);
 });

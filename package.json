@@ -12,7 +12,7 @@
     "test": "node --test \"**/*.test.ts\"",
     "gate": "node tools/gate.ts",
     "build:app": "vite build app --outDir ../dist/app --emptyOutDir",
-    "test:ui": "node --test app/canvas.ui.ts",
+    "test:ui": "node --test \"app/*.ui.ts\"",
     "perf": "node --test app/canvas.perf.ts"
   },
   "devDependencies": {

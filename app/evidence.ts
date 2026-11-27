@@ -1,4 +1,5 @@
 // 선택한 선·작업·자원의 근거 나무와 실제 출처를 펼친다.
+import { inactiveReason } from "../scene/measurement.ts";
 import { evidenceRows } from "../engine/evidence.ts";
 import type { Claim, Value } from "../engine/contract.ts";
 import type { Results, Run } from "../engine/results.ts";
@@ -90,12 +91,11 @@ function measurements(root: HTMLElement, { scene, result }: ResultView, rows: re
   const key = ({ ownerKind, owner, domain, field, condition }: Claim) => JSON.stringify([ownerKind, owner, domain, field, condition]);
   const subjects = new Set([...recorded].map(index => key(scene.claims[index]!)));
   const list = el("ul");
-  const inactive = { firmware: "펌웨어 다름", measurementCondition: "측정 조건 다름", wiring: "배선 다름" };
   scene.claims.forEach((claim, index) => {
     if (claim.scope !== "personal" || claim.confidence !== "user_verified") return;
     const observation = claim.ownerKind === "connection" && connections.has(claim.owner);
     if (!observation && !(claim.inactive ? subjects.has(key(claim)) : recorded.has(index))) return;
-    const state = claim.inactive ? "적용 안 됨 · " + inactive[claim.inactive]
+    const state = claim.inactive ? "적용 안 됨 · " + inactiveReason[claim.inactive]
       : !recorded.has(index) ? "현재 배선에서 기록한 관측" : "";
     const iface = claim.ownerKind === "interface" ? scene.interfaces[claim.owner] : undefined;
     const port = claim.ownerKind === "port" ? scene.ports[claim.owner] : iface && scene.ports[iface.port];

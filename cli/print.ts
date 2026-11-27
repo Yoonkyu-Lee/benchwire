@@ -1,5 +1,6 @@
 // 판정 표와 장면 표를 따라 터미널에 읽을 수 있는 성능·병목·근거를 만든다.
 import { connectionPorts, type MeasurementContext } from "../engine/scene.ts";
+import { inactiveReason } from "../scene/measurement.ts";
 import { evidenceRows } from "../engine/evidence.ts";
 import type { Claim, Scene, Verdict } from "../engine/contract.ts";
 import type { Results, Target } from "../engine/results.ts";
@@ -219,9 +220,8 @@ export function printResults(scene: Scene, result: Results): string {
   const history = scene.claims.flatMap((claim,row) => claim.inactive ? [{row,why:claim.inactive}] : []);
   if (history.length) {
     evidence.push("", "개인 측정 이력");
-    const why = {firmware:"펌웨어 다름",measurementCondition:"측정 조건 다름",wiring:"배선 다름"};
     for (const h of history) {
-      evidence.push("  적용 안 됨: " + why[h.why]);
+      evidence.push("  적용 안 됨: " + inactiveReason[h.why]);
       const claim = scene.claims[h.row]!;
       if (claim.observedPorts) {
         evidence.push("    측정 당시 " + measuredPorts(claim.observedPorts),

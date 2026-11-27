@@ -2,6 +2,7 @@
 import type { Results, Run } from "../engine/results.ts";
 import { evaluateInWorker, loadAssessment, type Assessment, type Documents, type Variants } from "./assessment.ts";
 import { mountCanvas } from "./canvas.ts";
+import { mountCollector } from "./collector.ts";
 import { mountCreator, persistModel } from "./creator.ts";
 import { occupiedPorts, requiredMateCapabilities } from "./connection.ts";
 import { addConnection, modelKey, place, portKey, type InventoryItem, type Library, type SceneDocument, type SceneIntent } from "./document.ts";
@@ -130,6 +131,7 @@ export function mountWorkbench(root: HTMLElement, initial: SceneDocument, librar
   }
   const trigger = root.querySelector<HTMLButtonElement>(".creator-open")!;
   const dialog = root.querySelector<HTMLDialogElement>("dialog:not(.quest-dialog)")!;
+  if (options.onChange) mountCollector(root, () => scene.sceneId);
   let openCreator: () => void;
   if (options.onChange) trigger.hidden = false;
   trigger.onclick = () => {

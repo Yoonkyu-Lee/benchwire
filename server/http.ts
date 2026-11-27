@@ -5,6 +5,7 @@ import { readFileSync, realpathSync } from "node:fs";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { extname, join, sep } from "node:path";
 import { fileURLToPath } from "node:url";
+import { collect } from "./collect.ts";
 import { evidence } from "./evidence.ts";
 import { LibraryError, openLibrary, sceneIdPattern } from "./library.ts";
 import { configuredResearchClient, openResearch } from "./research.ts";
@@ -20,7 +21,7 @@ const STATIC_TYPES: Record<string, string> = {
   ".svg": "image/svg+xml", ".png": "image/png", ".webp": "image/webp", ".ico": "image/x-icon", ".woff2": "font/woff2",
 };
 
-async function readJson(request: IncomingMessage, origin: string): Promise<unknown> {
+async function readJson(request: IncomingMessage, origin: string, limit = JSON_LIMIT): Promise<unknown> {
   if (request.headers.origin !== origin) throw new LibraryError(403, "Origin", "같은 출처에서만 저장할 수 있습니다");
   if (request.headers["content-type"]?.split(";", 1)[0]?.trim().toLowerCase() !== "application/json")
     throw new LibraryError(415, "Content-Type", "application/json 본문이 필요합니다");
@@ -28,7 +29,7 @@ async function readJson(request: IncomingMessage, origin: string): Promise<unkno
   let size = 0;
   for await (const chunk of request.iterator({ destroyOnReturn: false }) as AsyncIterable<Buffer>) {
     size += chunk.length;
-    if (size > JSON_LIMIT) throw new LibraryError(413, "", "JSON 본문이 2 MiB를 넘습니다");
+    if (size > limit) throw new LibraryError(413, "", `JSON 본문이 ${limit / 1024 / 1024} MiB를 넘습니다`);
     chunks.push(chunk);
   }
   try { return JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(Buffer.concat(chunks, size))); }
@@ -94,6 +95,12 @@ export async function startServer({ port = PORT, dataDir = join(ROOT, "userdata"
     if (path === "/api/library" && method === "GET") {
       response.writeHead(200, { "Content-Type": JSON_TYPE });
       response.end(JSON.stringify(library.describe()));
+      return;
+    }
+    if (path === "/api/collect" && method === "POST") {
+      const body = await readJson(request, origin, 16 * 1024 * 1024);
+      const result = collect(dataDir, library, body, request.headers["if-match"]);
+      response.writeHead(200, {"Content-Type":JSON_TYPE}).end(JSON.stringify(result));
       return;
     }
     const model = /^\/api\/models\/([^/]+)\/([^/]+)$/.exec(path);

@@ -6,7 +6,7 @@ export type Owner = "item" | "port" | "interface" | "edge" | "resource" | "mate"
 export interface MeasurementContext { firmware?: string | null | undefined; measurementCondition?: string | null | undefined }
 export interface Claim extends MeasurementContext {
   observedPorts?: ({instanceId:string; id:string} & MeasurementContext)[];
-  inactive?: "firmware" | "measurementCondition" | "wiring";
+  inactive?: "firmware" | "unknownFirmware" | "measurementCondition" | "unknownMeasurementCondition" | "wiring";
   id: string; scope: "model" | "personal" | "scene" | "catalog"; ownerKind: Owner; owner: number;
   // 같은 모델 판본의 같은 주장에 기대는 실물은 후보 세계 안에서도 값을 공유한다.
   conflictGroup?: number; inferredFrom?: string;

@@ -23,8 +23,13 @@ function readDistinct<T>(rows: T[], read: (value: T, index: number) => void) {
   });
 }
 function contextDifference(measured: MeasurementContext, current: MeasurementContext, requireKnown = false) {
-  if (measured.firmware !== current.firmware || requireKnown && measured.firmware === undefined) return "firmware";
-  if (measured.measurementCondition !== current.measurementCondition || requireKnown && measured.measurementCondition === undefined) return "measurementCondition";
+  for (const field of ["firmware","measurementCondition"] as const) {
+    const recorded = measured[field], now = current[field];
+    if (recorded === now && (!requireKnown || recorded !== undefined)) continue;
+    if (recorded === undefined || now === undefined)
+      return field === "firmware" ? "unknownFirmware" : "unknownMeasurementCondition";
+    return field;
+  }
   return undefined;
 }
 function ref<T>(map: Map<string, T>, id: string, at: string): T {
