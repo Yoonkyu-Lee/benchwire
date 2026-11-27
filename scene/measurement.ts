@@ -50,7 +50,7 @@ export function sceneWithMeasurementContext(scene: Scene, current: Document["ite
     } else {
       const item = ownerKind === "item" ? owner : ownerKind === "port" ? scene.ports[owner]!.item
         : ownerKind === "interface" ? scene.ports[scene.interfaces[owner]!.port]!.item : scene.resources[owner]!.item;
-      applies = sameContext(claim, items[item]!, claim.firmware !== undefined || claim.measurementCondition !== undefined);
+      applies = sameContext(claim, items[item]!) && (claim.firmware === undefined || claim.measurementCondition !== undefined);
     }
     if (applies === !claim.inactive) return claim;
     const updated = { ...claim };

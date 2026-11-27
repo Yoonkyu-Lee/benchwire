@@ -95,7 +95,7 @@ test("판본·출처·스키마가 맞는 주장과 배선은 확인해야 할 �
     value: null, unit: "", condition: "", confidence: "unknown", sources: ["source-1"],
   });
   assert.equal(model.ports[0]!.connector.value, null);
-  assert(proposals.claims.some(row => row.field === "connector" && row.claim.value === "usb-c-receptacle"));
+  assert(proposals.claims.some(row => row.field === "connector" && row.claim.value === "c-receptacle"));
   const params = model.ports[0]!.interfaces[0]!.params;
   assert.equal(params.accepts9!.value, null);
   assert.equal(params.reserveW!.value, null);

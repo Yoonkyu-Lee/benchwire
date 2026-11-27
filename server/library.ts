@@ -17,7 +17,6 @@ const examplesFile = z.strictObject({
   examples: z.array(z.strictObject({ title: z.string().min(1), scene: fileStem, fixture: fileStem })).nonempty(),
   inventory: inventoryFile.default([]),
 });
-type ConnectorRegistry = z.infer<typeof connectorsFile>;
 
 export class LibraryError extends Error {
   readonly status: number;
@@ -117,42 +116,44 @@ function mergeRow<T>(rows: Map<string, T>, key: string, row: T, file: string, la
   else if (!isDeepStrictEqual(previous, row)) throw new Error(`${file} — ${label} 정의가 충돌합니다: ${key}`);
 }
 
-function readConnectors(files: readonly { file: string; text: string }[]): ConnectorRegistry {
-  const sources = new Map<string, ConnectorRegistry["sources"][number]>();
-  const connectors = new Map<string, ConnectorRegistry["connectors"][number]>();
-  const mates = new Map<string, ConnectorRegistry["mates"][number]>();
-  for (const { file, text } of files) {
-    const registry = parseDocument(connectorsFile, JSON.parse(text), file);
-    const localIds = new Map<string, string>();
-    // 출처 ID는 파일마다 지역 이름이다. 같은 출처만 합친 표에서 한 행을 공유한다.
-    for (const { id: localId, ...source } of registry.sources) {
-      if (localIds.has(localId)) throw new Error(`${file} — 중복 출처 ID: ${localId}`);
-      const key = JSON.stringify(source);
-      const id = sources.get(key)?.id ?? String(sources.size + 1);
-      sources.set(key, { ...source, id });
-      localIds.set(localId, id);
-    }
-    function cite(id: string) {
-      const row = localIds.get(id);
-      if (row === undefined) throw new Error(`${file} — 찾을 수 없는 출처: ${id}`);
-      return row;
-    }
-    function citations(fact: Fact): Fact {
-      return { ...fact, sources: fact.sources.map(cite), ...(fact.conflicts && {
-        conflicts: fact.conflicts.map(c => ({ ...c, sources: c.sources.map(cite) })),
-      }) };
-    }
-    for (const row of registry.connectors) {
-      const connector = { ...row, endForm: citations(row.endForm) };
-      mergeRow(connectors, row.id, connector, file, "커넥터");
-    }
-    for (const row of registry.mates) {
-      const [a, b] = row.a <= row.b ? [row.a, row.b] : [row.b, row.a];
-      const mate = { a, b, evidence: citations(row.evidence) };
-      mergeRow(mates, JSON.stringify([a, b]), mate, file, "결합쌍");
-    }
+// 예전 영상 예제의 형태 ID는 사용자 문서 입구에서 공용 ID로 읽는다.
+function connectorId(value: Fact["value"]) {
+  return value === "usb-c-plug" ? "c-plug" : value === "usb-c-receptacle" ? "c-receptacle" : value;
+}
+
+function canonicalConnector(fact: Fact): Fact {
+  const value = connectorId(fact.value);
+  if (value === fact.value && !fact.conflicts?.some(c => connectorId(c.value) !== c.value)) return fact;
+  const { conflicts: alternatives, ...base } = fact;
+  const current = { ...base, value };
+  const conflicts: NonNullable<Fact["conflicts"]> = [];
+  for (const candidate of alternatives ?? []) {
+    const value = connectorId(candidate.value)!;
+    const same = current.value === value ? current : conflicts.find(row => row.value === value);
+    if (same) same.sources = [...new Set([...same.sources, ...candidate.sources])];
+    else conflicts.push({ ...candidate, value });
   }
-  return { sources: [...sources.values()], connectors: [...connectors.values()], mates: [...mates.values()] };
+  return conflicts.length ? { ...current, conflicts } : current;
+}
+
+function canonicalModel(model: z.output<typeof modelFile>) {
+  return { ...model, ports: model.ports.map(port => ({ ...port, connector: canonicalConnector(port.connector) })) };
+}
+
+function canonicalScene(body: unknown) {
+  const personal = (body as z.input<typeof sceneFile> | null)?.personal;
+  if (!Array.isArray(personal) || !personal.some(row => row?.ownerKind === "port" && row.field === "connector")) return body;
+  const parsed = sceneFile.safeParse(body);
+  if (!parsed.success) return body;
+  let changed = false;
+  const updated = parsed.data.personal.map(row => {
+    if (row.ownerKind !== "port" || row.field !== "connector") return row;
+    const claim = canonicalConnector(row.claim);
+    if (claim === row.claim) return row;
+    changed = true;
+    return { ...row, claim };
+  });
+  return changed ? { ...(body as z.input<typeof sceneFile>), personal: updated } : body;
 }
 
 export function openLibrary(root: string, dataDir: string) {
@@ -170,16 +171,14 @@ export function openLibrary(root: string, dataDir: string) {
   for (const dir of [...fixtureDirs, catalogDir, modelsDir]) for (const name of filesIn(dir)) {
     if (!name.includes("@") || !name.endsWith(".json") || dir === modelsDir && !name.startsWith("model-")) continue;
     const file = join(dir, name);
-    const model = parseDocument(modelFile, JSON.parse(readFileSync(file, "utf8")), file);
+    const parsed = parseDocument(modelFile, JSON.parse(readFileSync(file, "utf8")), file);
+    const model = dir === modelsDir ? canonicalModel(parsed) : parsed;
     const key = model.modelId + "@" + model.revision;
     if (name !== (dir === modelsDir ? "model-" : "") + key + ".json") throw new Error(`${file} — 모델 판본 이름이 ${key}와 다릅니다`);
     mergeRow(models, key, model, file, "모델 판본");
   }
-  const connectorFiles = fixtureDirs.map(dir => join(dir, "connectors.json")).map(file => ({ file, text: readFileSync(file, "utf8") }));
   const catalogConnectors = join(catalogDir, "connectors.json");
-  const catalogText = readOptional(catalogConnectors);
-  if (catalogText !== undefined) connectorFiles.push({ file: catalogConnectors, text: catalogText });
-  const connectors = readConnectors(connectorFiles);
+  const connectors = parseDocument(connectorsFile, JSON.parse(readFileSync(catalogConnectors, "utf8")), catalogConnectors);
   const documents = { models, connectors };
   const examples = new Map<string, { title: string; saved: ReturnType<typeof snapshot> }>();
   const exampleInventory = new Map<string, z.infer<typeof inventoryFile>[number]>();
@@ -189,7 +188,7 @@ export function openLibrary(root: string, dataDir: string) {
     const example = parseDocument(sceneFile, JSON.parse(saved.text), file);
     const id = parseDocument(fileStem, example.sceneId, file + "#sceneId");
     if (examples.has(id)) throw new Error(`${file} — 중복 예제 장면 ID: ${id}`);
-    loadSceneDocuments(example, documents, plugins, { scene: file, connectors: "connectors.json", model: key => key + ".json" });
+    loadSceneDocuments(example, documents, plugins, { scene: file, connectors: catalogConnectors, model: key => key + ".json" });
     examples.set(id, { title, saved });
     for (const item of example.items) mergeRow(exampleInventory, item.instanceId, { ...item, state: "owned" }, file, "실물");
   }
@@ -204,7 +203,11 @@ export function openLibrary(root: string, dataDir: string) {
     const example = examples.get(id);
     if (example) return example.saved;
     const text = readOptional(scenePath(id));
-    return text === undefined ? undefined : snapshot(text);
+    if (text === undefined) return undefined;
+    if (!/usb-c-(?:plug|receptacle)/u.test(text)) return snapshot(text);
+    const body: unknown = JSON.parse(text);
+    const compatible = canonicalScene(body);
+    return snapshot(compatible === body ? text : JSON.stringify(compatible, null, 2) + "\n");
   }
 
   function readInventory() {
@@ -241,9 +244,10 @@ export function openLibrary(root: string, dataDir: string) {
       if (before && ifMatch === undefined) throw new LibraryError(428, "If-Match", "현재 장면의 ETag가 필요합니다");
       if (ifMatch !== undefined && before?.etag !== ifMatch) throw new LibraryError(412, "If-Match", "장면이 바뀌었습니다. 다시 열어 주세요");
 
-      const scene = validate(() => loadSceneDocuments(body, documents, plugins));
+      const compatible = canonicalScene(body);
+      const scene = validate(() => loadSceneDocuments(compatible, documents, plugins));
       if (scene.id !== id) throw new LibraryError(422, "sceneId", "URL과 장면 ID가 다릅니다");
-      const saved = body as z.input<typeof sceneFile>;
+      const saved = compatible as z.input<typeof sceneFile>;
       const exampleCopy = examples.has(id);
       let target = id;
       if (exampleCopy) {
@@ -255,7 +259,7 @@ export function openLibrary(root: string, dataDir: string) {
       return { id: target, created: exampleCopy || before === undefined, ...stored };
     },
     saveModel(id: string, revision: string, body: unknown) {
-      const model = validate(() => parseDocument(modelFile, body, "model.json"));
+      const model = validate(() => canonicalModel(parseDocument(modelFile, body, "model.json")));
       if (model.modelId !== id) throw new LibraryError(422, "modelId", "URL과 모델 ID가 다릅니다");
       if (model.revision !== revision) throw new LibraryError(422, "revision", "URL과 판본이 다릅니다");
       const key = model.modelId + "@" + model.revision;
@@ -269,7 +273,7 @@ export function openLibrary(root: string, dataDir: string) {
       try { writeAtomic(file, text, true); }
       catch (error) {
         if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
-        sameRevision(parseDocument(modelFile, JSON.parse(readFileSync(file, "utf8")), file), model);
+        sameRevision(canonicalModel(parseDocument(modelFile, JSON.parse(readFileSync(file, "utf8")), file)), model);
         models.set(key, model);
         return false;
       }

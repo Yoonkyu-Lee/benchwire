@@ -8,6 +8,10 @@ export const verdictText = { ok: "✅ 성립", conditional: "⚠️ 조건부", 
 const verdictIcon = { ok: "✅", conditional: "⚠️", impossible: "❌", unknown: "❓" };
 const MAX_WIRE_WIDTH = 5;
 
+export function directionArrow(direction: Direction | null) {
+  return direction === "forward" ? "→" : direction === "reverse" ? "←" : "";
+}
+
 export interface WireMark {
   kind: "physical" | "negotiation" | "flow"; direction: Direction | null; layer: Layer; verdict: Verdict | null;
   text: string; title: string; unit: string; pool?: string; width?: number; dashed?: boolean; workload?: string; density?: number;
@@ -57,7 +61,7 @@ function connectionMarks(result: Results, rows: readonly number[], limits: Reado
     const capability = [o.label, capacity].filter(Boolean).join(" ");
     const text = verdict ? `${verdictIcon[verdict]} ${capability}` : capability;
     return { kind: "negotiation", direction: o.direction, layer: layerFor(o.domain, unit), verdict, text, unit,
-      title: [`${verdictIcon[o.verdict]} ${capability}`, direction, domainName(o.domain), pool, option?.condition].filter(Boolean).join(" · "),
+      title: [text, direction, domainName(o.domain), pool, verdict === null && "연결 능력", option?.condition].filter(Boolean).join(" · "),
       ...(pool && { pool }), dashed: verdict === "unknown" || ranged };
   });
 }

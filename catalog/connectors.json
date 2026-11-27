@@ -1,0 +1,16 @@
+{
+  "sources": [
+    {"id":"usb-if-type-c","title":"USB Type-C Cable and Connector Specification Release 2.0 §3.1.1·§3.1.2","locator":"https://www.usb.org/sites/default/files/USB%20Type-C%20Spec%20R2.0%20-%20August%202019_0.pdf#page=37","retrievedAt":"2026-11-27"},
+    {"id":"iec-rj45","title":"IEC 60603-7:2020 §1 · 8극 고정 및 이동형 커넥터","locator":"https://webstore.iec.ch/en/publication/67720","retrievedAt":"2026-11-27"}
+  ],
+  "connectors": [
+    {"id":"network-socket","glyph":"rj45","endForm":{"value":"RJ45 리셉터클","confidence":"official","sources":["iec-rj45"]}},
+    {"id":"network-plug","glyph":"rj45","endForm":{"value":"RJ45 플러그","confidence":"official","sources":["iec-rj45"]}},
+    {"id":"c-receptacle","glyph":"usb-c","endForm":{"value":"USB-C 리셉터클","confidence":"official","sources":["usb-if-type-c"]}},
+    {"id":"c-plug","glyph":"usb-c","endForm":{"value":"USB-C 플러그","confidence":"official","sources":["usb-if-type-c"]}}
+  ],
+  "mates": [
+    {"a":"network-plug","b":"network-socket","evidence":{"value":true,"confidence":"official","sources":["iec-rj45"]}},
+    {"a":"c-plug","b":"c-receptacle","evidence":{"value":true,"confidence":"official","sources":["usb-if-type-c"]}}
+  ]
+}

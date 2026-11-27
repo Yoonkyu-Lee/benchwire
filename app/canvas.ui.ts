@@ -375,7 +375,7 @@ test("PoE 예제의 작업량, 협상 출처와 자원 막대를 열고 의미 �
     assert.match(await detail.innerText(), /이더넷 성립/);
     for (const label of [/이더넷 성립.*정방향/, /PoE 성립.*정방향/]) {
       const negotiation = detail.locator(".negotiation-evidence").filter({ has: page.locator("summary").filter({ hasText: label }) });
-      await negotiation.locator(":scope > summary").click();
+      assert.equal(await negotiation.getAttribute("open"), "");
       const link = negotiation.locator(".specs a").first();
       assert(await link.isVisible());
       assert.match((await link.getAttribute("href"))!, /^https?:\/\//);
@@ -789,7 +789,7 @@ test("USB-C 충전기 초안을 저장·배치하고 재시도와 서버 재시�
     await page.locator('[data-connection="connection-1"] .wire-name').click();
     const evidence = page.getByRole("region", { name: "선택한 항목 근거" });
     assert.match(await evidence.locator(".quests").innerText(), /maxW/);
-    assert.match(await evidence.locator(".negotiation-evidence > summary").first().innerText(), /❓/);
+    assert.match(await evidence.locator(".negotiation-evidence > summary").first().innerText(), /전력 미확인.*연결 능력/u);
     await page.screenshot({ path: "work/m4-creator-charge.png" });
     assert.deepEqual(errors, []);
   } finally { await page.close(); }
@@ -1580,8 +1580,10 @@ test("이더넷 링크 속도 퀘스트는 선택한 배선만 좁히고 측정 
       item.firmware = "1.0";
       item.measurementCondition = "동시";
     }
-    delete document.items.find(i => i.instanceId === "lan-a-wire")!.firmware;
-    delete document.items.find(i => i.instanceId === "lan-a-wire")!.measurementCondition;
+    const cable = document.items.find(i => i.instanceId === "lan-a-wire")!;
+    cable.alias = "시험 케이블 A";
+    delete cable.firmware;
+    delete cable.measurementCondition;
     await saveFromAnotherTab(page, document);
     await openStored(page, id);
     const first = exampleFlow(page, "lan-a", "first-hop");
@@ -1599,8 +1601,8 @@ test("이더넷 링크 속도 퀘스트는 선택한 배선만 좁히고 측정 
       if (await card.getAttribute("open") === null) await summary.click();
       await card.getByLabel("이더넷 링크 속도 (Mbps)", { exact: true }).selectOption({ label: "1000" });
       if (attempt === 0) {
-        await card.getByLabel("현재 펌웨어 · lan-a-wire 상태", { exact: true }).selectOption("none");
-        await card.getByLabel("측정 조건 · lan-a-wire 상태", { exact: true }).selectOption("none");
+        await card.getByLabel("현재 펌웨어 · 시험 케이블 A 상태", { exact: true }).selectOption("none");
+        await card.getByLabel("측정 조건 · 시험 케이블 A 상태", { exact: true }).selectOption("none");
       }
       await card.getByRole("button", { name: "검증값 저장" }).click();
       if (attempt === 1) await card.getByText("이미 같은 값이 저장되어 있습니다.").waitFor();
@@ -1655,6 +1657,7 @@ test("이더넷 예측은 관측과 함께 입력한 측정 조건에 맞는 주
         item.measurementCondition = null;
       }
     }
+    document.items.find(i => i.instanceId === "lan-b-wire")!.alias = "시험 케이블 B";
     document.personal = [{ instanceId: "lan-b-wire", ownerKind: "item", ownerId: "lan-b-wire",
       domain: "network", field: "length",
       claim: { value: 150, unit: "m", confidence: "user_verified", sources: [document.sources[0]!.id] } }];
@@ -1665,8 +1668,8 @@ test("이더넷 예측은 관측과 함께 입력한 측정 조건에 맞는 주
     const summary = panel.locator("details.quest-card > summary").filter({ hasText: /^이더넷 링크 속도 · lan-b ·/ });
     await summary.click();
     const card = summary.locator("..");
-    await card.getByLabel("현재 펌웨어 · lan-b-wire 상태", { exact: true }).selectOption("none");
-    await card.getByLabel("측정 조건 · lan-b-wire 상태", { exact: true }).selectOption("none");
+    await card.getByLabel("현재 펌웨어 · 시험 케이블 B 상태", { exact: true }).selectOption("none");
+    await card.getByLabel("측정 조건 · 시험 케이블 B 상태", { exact: true }).selectOption("none");
     await card.getByLabel("이더넷 링크 속도 (Mbps)", { exact: true }).selectOption({ label: "1000" });
     await card.getByRole("button", { name: "검증값 저장" }).click();
     await panel.getByRole("button", { name: "닫기" }).click();

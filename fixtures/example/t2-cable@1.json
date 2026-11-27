@@ -1,0 +1,43 @@
+{
+  "modelId": "t2-cable",
+  "revision": "1",
+  "kind": "cable",
+  "brand": "합성",
+  "name": "합성 전 기능 USB-C 케이블",
+  "category": "연결 시험",
+  "sources": [
+    {"id":"cable","title":"합성 전 기능 USB-C 케이블","locator":"fixture:t2/cable","retrievedAt":"2026-11-27"}
+  ],
+  "resources": [],
+  "edges": [
+    {"id":"a-b","from":"a","to":"b","evidence":{"value":true,"confidence":"inferred","sources":["cable"]},"uses":[]},
+    {"id":"b-a","from":"b","to":"a","evidence":{"value":true,"confidence":"inferred","sources":["cable"]},"uses":[]}
+  ],
+  "attributes": {
+    "data": {
+      "cableDataGbps": {
+        "value": 5,
+        "unit": "Gbps",
+        "confidence": "inferred",
+        "sources": [
+          "cable"
+        ]
+      },
+      "cableUsb4": {
+        "value": false,
+        "confidence": "inferred",
+        "sources": [
+          "cable"
+        ]
+      }
+    }
+  },
+  "nodes": [
+    {"id":"a","label":"a","kind":"junction"},
+    {"id":"b","label":"b","kind":"junction"}
+  ],
+  "ports": [
+    {"id":"a","label":"a","connector":{"value":"c-plug","confidence":"inferred","sources":["cable"]},"attachment":{"value":"a","confidence":"inferred","sources":["cable"]},"interfaces":[{"id":"video-1","domain":"display","protocol":"DP Alt Mode","role":"bidirectional","evidence":{"value":true,"confidence":"inferred","sources":["cable"]},"params":{"version":{"value":null,"confidence":"unknown","sources":["cable"]},"maxRate":{"value":"HBR3","confidence":"inferred","sources":["cable"]},"lanes":{"value":4,"confidence":"inferred","sources":["cable"]},"dscBpp":{"value":0,"unit":"bpp","confidence":"inferred","sources":["cable"]},"pin":{"value":null,"confidence":"unknown","sources":["cable"]}}}]},
+    {"id":"b","label":"b","connector":{"value":"c-plug","confidence":"inferred","sources":["cable"]},"attachment":{"value":"b","confidence":"inferred","sources":["cable"]},"interfaces":[{"id":"video-2","domain":"display","protocol":"DP Alt Mode","role":"bidirectional","evidence":{"value":true,"confidence":"inferred","sources":["cable"]},"params":{"version":{"value":null,"confidence":"unknown","sources":["cable"]},"maxRate":{"value":"HBR3","confidence":"inferred","sources":["cable"]},"lanes":{"value":4,"confidence":"inferred","sources":["cable"]},"dscBpp":{"value":0,"unit":"bpp","confidence":"inferred","sources":["cable"]},"pin":{"value":null,"confidence":"unknown","sources":["cable"]}}}]}
+  ]
+}

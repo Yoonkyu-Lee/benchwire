@@ -454,7 +454,7 @@ export function mountCreator(dialog: HTMLDialogElement, documents: Documents, sa
     if (original) fillDraft(duplicateModel(original));
   };
   const template = section(body, "템플릿");
-  const count = input(template, "충전기 포트 수", "", "", "number");
+  const count = input(template, "충전기 포트 수", "1", "", "number");
   count.min = "1"; count.max = String(MAX_TEMPLATE_PORTS); count.step = "1";
   const apply = button(charger.name + " 불러오기");
   template.append(apply);

@@ -22,10 +22,11 @@ function readDistinct<T>(rows: T[], read: (value: T, index: number) => void) {
     read(row,i);
   });
 }
-function contextDifference(measured: MeasurementContext, current: MeasurementContext, requireKnown = false) {
+function contextDifference(measured: MeasurementContext, current: MeasurementContext, requireKnown: boolean | "measurementCondition" = false) {
   for (const field of ["firmware","measurementCondition"] as const) {
     const recorded = measured[field], now = current[field];
-    if (recorded === now && (!requireKnown || recorded !== undefined)) continue;
+    const required = requireKnown === true || requireKnown === field;
+    if (recorded === now && (!required || recorded !== undefined)) continue;
     if (recorded === undefined || now === undefined)
       return field === "firmware" ? "unknownFirmware" : "unknownMeasurementCondition";
     return field;
@@ -252,7 +253,7 @@ export function loadSceneDocuments(document: unknown, library: { connectors: unk
     if (candidates.some(c => c.scope === "personal" && c.condition === p.claim.condition && !contextDifference(c,p))) fail(at, "같은 조건에 중복된 개인 주장");
     const row = claim(ownerKind, owner, "personal", domain, field, p.claim, sceneSources, at + ".claim");
     const measured = scene.claims[row]!;
-    const inactive = contextDifference(p,scene.items[local.item]!,p.firmware !== undefined || p.measurementCondition !== undefined);
+    const inactive = contextDifference(p,scene.items[local.item]!,p.firmware === undefined ? false : "measurementCondition");
     if (inactive) measured.inactive = inactive;
     if (p.firmware !== undefined) measured.firmware = p.firmware;
     if (p.measurementCondition !== undefined) measured.measurementCondition = p.measurementCondition;

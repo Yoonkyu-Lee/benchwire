@@ -47,24 +47,24 @@ function textInput(form: HTMLElement, label: string, value = "", limit = CONTEXT
 }
 
 function contextField(form: HTMLElement, label: string, value: string | null | undefined,
-  kind: "firmware" | "measurementCondition", allowUnknown = false) {
+  kind: "firmware" | "measurementCondition", unknown?: { label: string; whenUnset?: boolean }) {
   const firmware = kind === "firmware";
   const mode = el("select");
   mode.setAttribute("aria-label", label + " 상태");
   mode.append(new Option(firmware ? "버전 입력" : "조건 입력", "value"),
     new Option(firmware ? "펌웨어 없음" : "별도 조건 없음", "none"));
-  if (allowUnknown) mode.append(new Option("미확인", "unknown"));
+  if (unknown) mode.append(new Option(unknown.label, "unknown"));
   const input = textInput(form, label, value ?? "");
   input.parentElement!.classList.add("scenario-request");
   input.after(mode);
   const set = (current: string | null | undefined) => {
-    mode.value = current === null ? "none" : current === undefined && allowUnknown ? "unknown" : "value";
+    mode.value = current === null ? "none" : current === undefined && unknown?.whenUnset ? "unknown" : "value";
     input.disabled = mode.value !== "value";
     input.value = current ?? "";
   };
   set(value);
   mode.onchange = () => { input.disabled = mode.value !== "value"; };
-  return { set, input, read: () => mode.value === "none" ? null : mode.value === "value" ? input.value.trim() || undefined : undefined };
+  return { set, input, mode, read: () => mode.value === "none" ? null : mode.value === "value" ? input.value.trim() || undefined : undefined };
 }
 
 function formStatus(form: HTMLFormElement) {
@@ -81,7 +81,7 @@ function formStatus(form: HTMLFormElement) {
 function itemName(view: ResultView, index: number) {
   const { scene } = view;
   const item = scene.items[index]!;
-  return item.alias || item.id;
+  return item.alias || scene.models[item.model]!.name;
 }
 
 function measurementTarget(view: ResultView, c: Claim) {
@@ -107,7 +107,7 @@ function measurementTarget(view: ResultView, c: Claim) {
     : shape?.properties?.[c.field] ?? shape?.additionalProperties;
   return {
     property: typeof property === "object" ? property : undefined,
-    subject: [itemName(view, item), port?.label ?? resource?.id, iface?.id, c.condition].filter(Boolean).join(" · "),
+    subject: [itemName(view, item), port?.label || port?.id || resource?.id, iface?.protocol, c.condition].filter(Boolean).join(" · "),
     target, template,
   };
 }
@@ -143,8 +143,9 @@ function quests(view: ResultView, saved: SceneDocument) {
       const row = result.outcomes[matching[0]!]!.subjectRow;
       const connection = saved.connections[row]!;
       const ends = [connection.from, connection.to].map(p => {
-        const item = saved.items.find(i => i.instanceId === p.instanceId)!;
-        return (item.alias || item.instanceId) + "/" + p.id;
+        const item = scene.items.findIndex(i => i.id === p.instanceId);
+        const port = scene.ports.find(port => port.item === item && port.id === p.id);
+        return itemName(view, item) + "/" + (port?.label || p.id);
       });
       const subject = `${id} · ${ends.join(" → ")}`;
       const affected = observation.mode ? view.workloads.filter(w => w.steps.some(s => {
@@ -239,9 +240,16 @@ function card(view: ResultView, saved: SceneDocument, q: Quest, save: Save, edit
   const ids = q.target ? [q.target.instanceId] : [...new Set(q.connection!.ports.map(p => p.instanceId))];
   const scopes = ids.map(id => {
     const item = saved.items.find(i => i.instanceId === id)!;
-    const name = item.alias || item.instanceId;
+    const name = itemName(view, view.scene.items.findIndex(row => row.id === id));
     const firmware = q.target || item.firmware === undefined
-      ? contextField(form, "현재 펌웨어 · " + name, item.firmware, "firmware") : undefined;
+      ? contextField(form, "현재 펌웨어 · " + name, item.firmware, "firmware", q.target ? { label: "모름" } : undefined) : undefined;
+    if (q.target && firmware) {
+      const hint = el("p", "현재 펌웨어가 기록되지 않은 동안 적용됩니다. 나중에 펌웨어를 기록하면 적용을 멈춥니다.");
+      firmware.input.parentElement!.after(hint);
+      const showHint = () => { hint.hidden = firmware.mode.value !== "unknown"; };
+      firmware.mode.addEventListener("change", showHint);
+      showHint();
+    }
     const condition = q.target || item.measurementCondition === undefined
       ? contextField(form, q.target ? "측정 조건" : "측정 조건 · " + name, item.measurementCondition, "measurementCondition") : undefined;
     if (!firmware && !condition) form.append(el("p", `${name} · ${item.firmware ?? "펌웨어 없음"} · ${item.measurementCondition ?? "별도 조건 없음"}`));
@@ -280,9 +288,12 @@ function card(view: ResultView, saved: SceneDocument, q: Quest, save: Save, edit
       const { item, firmware, condition } = scope;
       const version = firmware ? firmware.read() : item.firmware;
       const measurementCondition = condition ? condition.read() : item.measurementCondition;
-      if (version === undefined || measurementCondition === undefined) {
-        message.textContent = "현재 펌웨어와 측정 조건을 입력하거나 해당 없음으로 지정하세요.";
-        (version === undefined ? firmware : condition)?.input.focus();
+      const missingFirmware = version === undefined && firmware?.mode.value !== "unknown";
+      if (missingFirmware || measurementCondition === undefined) {
+        message.textContent = missingFirmware
+          ? "현재 펌웨어 버전을 입력하거나 선택지에서 상태를 고르세요."
+          : "측정 조건을 입력하거나 ‘별도 조건 없음’을 고르세요.";
+        (missingFirmware ? firmware : condition)?.input.focus();
         return;
       }
       current.set(item.instanceId, item.firmware === version && item.measurementCondition === measurementCondition ? item
@@ -291,11 +302,13 @@ function card(view: ResultView, saved: SceneDocument, q: Quest, save: Save, edit
     const items = saved.items.map(i => current.get(i.instanceId) ?? i);
     const measurementConditions = [...new Set([...current.values()].map(i => i.measurementCondition ?? "별도 조건 없음"))];
     const memo = note.value.trim();
+    const firmwareText = (value: Item["firmware"]) => value === undefined ? "모름" : value ?? "없음";
     const metadata = new URLSearchParams();
     for (const [key, value] of [
       ["os", os.value.trim()], ["driver", driver.value.trim()],
-      ["firmware", q.target ? current.get(q.target.instanceId)!.firmware ?? "없음"
-        : [...current.values()].map(i => `${i.alias || i.instanceId} ${i.firmware ?? "없음"}`).join(" / ")],
+      ["firmware", q.target ? firmwareText(current.get(q.target.instanceId)!.firmware)
+        : [...current.values()].map(i => itemName(view, view.scene.items.findIndex(row => row.id === i.instanceId)) +
+          " " + firmwareText(i.firmware)).join(" / ")],
       ["condition", measurementConditions.join(" / ")],
       ["note", memo],
     ]) if (key && value) metadata.set(key, value);
@@ -424,10 +437,10 @@ export function mountQuests(dialog: HTMLDialogElement, trigger: HTMLButtonElemen
     state.append(el("summary", "실물의 현재 펌웨어 · 측정 조건"));
     const form = el("form");
     const select = el("select");
-    select.append(...saved.items.map(i => new Option(i.alias || i.instanceId, i.instanceId)));
+    select.append(...saved.items.map((i, row) => new Option(itemName(view, row), i.instanceId)));
     field(form, "실물", select);
-    const firmware = contextField(form, "현재 펌웨어", undefined, "firmware", true);
-    const condition = contextField(form, "현재 측정 조건", undefined, "measurementCondition", true);
+    const firmware = contextField(form, "현재 펌웨어", undefined, "firmware", { label: "미확인", whenUnset: true });
+    const condition = contextField(form, "현재 측정 조건", undefined, "measurementCondition", { label: "미확인", whenUnset: true });
     form.append(button("실물 상태 적용", true));
     const { message } = formStatus(form);
     function showScope() {

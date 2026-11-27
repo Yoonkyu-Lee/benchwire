@@ -6,7 +6,7 @@ import { compare, type Snapshot } from "../engine/compare.ts";
 import { scenarioName } from "../scene/files.ts";
 import { evaluateInWorker, loadAssessment, type Documents } from "./assessment.ts";
 import { modelKey, type InventoryItem, type Item, type Library, type SceneDocument } from "./document.ts";
-import { interval, resultView, verdictText, type ResultView } from "./results.ts";
+import { directionArrow, interval, resultView, verdictText, type ResultView } from "./results.ts";
 
 type Scenario = SceneDocument["scenarios"][number];
 type Purchase = NonNullable<Scenario["purchases"]>[number];
@@ -766,7 +766,7 @@ export function mountBudget(root: HTMLElement, library: Library, documents: Docu
       for (const d of changes) {
         const snapshot = d.after === null ? old : next, o = snapshot.result.outcomes[d.after ?? d.before!]!;
         const id = (o.subjectKind === "workload" ? snapshot.scene.workloads : snapshot.scene.connections)[o.subjectRow]!.id;
-        comparison.append(el("p",id + " · " + d.changed.map(k => fields[k]).join(", ") + " · " +
+        comparison.append(el("p",[id, directionArrow(o.direction)].filter(Boolean).join(" ") + " · " + d.changed.map(k => fields[k]).join(", ") + " · " +
           technicalValue(old,d.before) + " → " + technicalValue(next,d.after)));
       }
     });

@@ -13,7 +13,6 @@ import { mountEvidence } from "./evidence.ts";
 import { showFieldError } from "./field.ts";
 import { INVENTORY_DRAG, MODEL_DRAG, mountInventory } from "./inventory.ts";
 import { mountLayers } from "./layers.ts";
-import { CARD_WIDTH } from "./layout.ts";
 import { mountQuests } from "./quests.ts";
 import { resultView, type ResultView } from "./results.ts";
 import { mountScenario } from "./scenario.ts";
@@ -119,8 +118,7 @@ export function mountWorkbench(root: HTMLElement, initial: SceneDocument, librar
   });
   const makeInventory = () => mountInventory(inventoryRoot, library, {
     add(item) {
-      const center = canvas.center();
-      edit({ kind: "add-item", item, position: { x: center.x - CARD_WIDTH / 2, y: center.y - 48 } });
+      edit({ kind: "add-item", item, position: canvas.emptyPosition(models.get(modelKey(item))!) });
     },
     cable(item) {
       cable = cable === item ? undefined : item;
@@ -166,8 +164,7 @@ export function mountWorkbench(root: HTMLElement, initial: SceneDocument, librar
         sessionStorage.removeItem(pending);
         return;
       }
-      const center = canvas.center();
-      const position = { x: center.x - CARD_WIDTH / 2, y: center.y - 48 };
+      let position = canvas.emptyPosition(storedModel);
       const withModel = { ...documents, models: new Map(models).set(key, storedModel) };
       const draft = () => scene.items.some(row => row.instanceId === instanceId) ? scene
         : place({ ...scene, items: [...scene.items, item] }, instanceId, position);
@@ -179,6 +176,7 @@ export function mountWorkbench(root: HTMLElement, initial: SceneDocument, librar
       if (!existing) await persistModel(model, item);
       if (!root.contains(dialog)) return;
       if (scene !== before) {
+        position = canvas.emptyPosition(storedModel);
         next = draft();
         loaded = loadAssessment(next, withModel, readScenario());
         if ("error" in loaded) throw new Error(loaded.error);

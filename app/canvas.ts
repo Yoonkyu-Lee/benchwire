@@ -154,6 +154,44 @@ export function mountCanvas(root: HTMLElement, library: Library,
     lookAt({ cx: (left + right) / 2, cy: (top + bottom) / 2, zoom });
   }
 
+  function emptyPosition(model: Model): Point {
+    const height = cardLayout(model, cardRows(model).length).height;
+    const inset = 16, controls = 54, gap = 16;
+    const min = toWorld({ x: inset, y: controls });
+    const edge = toWorld({ x: surface.clientWidth - inset, y: surface.clientHeight - inset });
+    const max = { x: edge.x - CARD_WIDTH, y: edge.y - height };
+    const middle = toWorld(center());
+    const preferred = { x: Math.max(min.x, Math.min(max.x, middle.x - CARD_WIDTH / 2)),
+      y: Math.max(min.y, Math.min(max.y, middle.y - height / 2)) };
+    const visible = [...cards.values()].filter(({ position: p, height: h }) =>
+      p.x + CARD_WIDTH + gap > min.x && p.x - gap < edge.x && p.y + h + gap > min.y && p.y - gap < edge.y);
+    const free = ({ x, y }: Point) => visible.every(({ position: p, height: h }) =>
+      x + CARD_WIDTH + gap <= p.x || p.x + CARD_WIDTH + gap <= x || y + height + gap <= p.y || p.y + h + gap <= y);
+    if (min.x <= max.x && min.y <= max.y) {
+      if (free(preferred)) return preferred;
+      const xs = new Set([min.x, max.x, preferred.x]);
+      const ys = new Set([min.y, max.y, preferred.y]);
+      for (const { position: p, height: h } of visible) {
+        for (const x of [p.x - CARD_WIDTH - gap, p.x + CARD_WIDTH + gap]) if (x >= min.x && x <= max.x) xs.add(x);
+        for (const y of [p.y - height - gap, p.y + h + gap]) if (y >= min.y && y <= max.y) ys.add(y);
+      }
+      let next: Point | undefined, distance = Infinity;
+      for (const x of xs) for (const y of ys) {
+        const delta = (x - preferred.x) ** 2 + (y - preferred.y) ** 2;
+        if (delta < distance && free({ x, y })) { next = { x, y }; distance = delta; }
+      }
+      if (next) return next;
+    }
+    // 현재 뷰가 가득 차면 카드 오른쪽 빈 자리가 보이도록 뷰를 옮긴다.
+    const x = Math.max(preferred.x, ...Array.from(cards.values(), ({ position }) => position.x + CARD_WIDTH + gap));
+    const y = preferred.y;
+    const scale = Math.min(camera.zoom, (surface.clientWidth - 2 * inset) / CARD_WIDTH,
+      (surface.clientHeight - controls - inset) / height);
+    lookAt({ cx: x + CARD_WIDTH / 2, cy: y + height / 2 - (controls - inset) / (2 * Math.max(MIN_ZOOM, scale)),
+      zoom: Math.max(MIN_ZOOM, scale) });
+    return { x, y };
+  }
+
   function coords(socket: Socket) {
     return { x: socket.card.position.x + socket.layout.x, y: socket.card.position.y + socket.layout.y };
   }
@@ -571,5 +609,5 @@ export function mountCanvas(root: HTMLElement, library: Library,
   });
   return { render, setLayer, zoom, fit, afterGesture, setReduced: particles.setReduced,
     dispose() { particles.dispose(); if (cameraFrame !== undefined) cancelAnimationFrame(cameraFrame); },
-    fromClient: (point: Point) => toWorld(local(point)), center: () => toWorld(center()) };
+    fromClient: (point: Point) => toWorld(local(point)), emptyPosition };
 }

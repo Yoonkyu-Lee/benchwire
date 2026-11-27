@@ -39,7 +39,7 @@ function networkExample() {
   }, plugins);
 }
 
-test("사용하지 않는 협상은 능력으로 표시하고 근거에는 상세 판정을 남긴다", () => {
+test("사용하지 않는 협상은 배선과 근거에서 판정 기호 없는 능력으로 표시한다", () => {
   const scene = networkExample();
   const result = evaluate(scene, plugins);
   const view = resultView(scene, result, 0, "together");
@@ -48,7 +48,8 @@ test("사용하지 않는 협상은 능력으로 표시하고 근거에는 상�
   const reverse = power.find(m => m.direction === "reverse")!;
   assert.equal(reverse.verdict, null);
   assert.doesNotMatch(reverse.text, /❌/);
-  assert.match(reverse.title, /❌/);
+  assert.doesNotMatch(reverse.title, /❌/);
+  assert.match(reverse.title, /역방향.*연결 능력/u);
 
   const idle = resultView(scene, evaluate({ ...scene, members: [] }, plugins), 0, "together");
   assert(idle.wires.get("poe")!.every(m => m.verdict === null));

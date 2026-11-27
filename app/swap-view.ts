@@ -4,7 +4,7 @@ import type { PriceBook } from "../server/prices.ts";
 import { evaluateInWorker, loadAssessment, type Documents } from "./assessment.ts";
 import { calculateBudget, compareBudgets } from "./budget.ts";
 import { modelKey, type Model, type SceneDocument } from "./document.ts";
-import { interval, verdictText } from "./results.ts";
+import { directionArrow, interval, verdictText } from "./results.ts";
 import { compareSwap, swapSlot, type SwapChoice } from "./swap.ts";
 
 const fields: Readonly<Record<string, string>> = {
@@ -141,7 +141,7 @@ export function mountSwap(root: HTMLElement, documents: Documents, saveCopy: (do
           const current = change.after === null ? a : b;
           const outcome = current.result.outcomes[change.after ?? change.before!]!;
           const id = (outcome.subjectKind === "workload" ? current.scene.workloads : current.scene.connections)[outcome.subjectRow]!.id;
-          technical.append(el("p", id + " · " + change.changed.map(field => fields[field] ?? field).join(", ") +
+          technical.append(el("p", [id, directionArrow(outcome.direction)].filter(Boolean).join(" ") + " · " + change.changed.map(field => fields[field] ?? field).join(", ") +
             " · " + technicalValue(a, change.before) + " → " + technicalValue(b, change.after)));
         }
         const costs = el("section");

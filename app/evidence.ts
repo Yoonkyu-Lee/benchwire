@@ -5,7 +5,7 @@ import type { Claim, Value } from "../engine/contract.ts";
 import type { Results, Run } from "../engine/results.ts";
 import type { Variants } from "./assessment.ts";
 import { verificationSource } from "./quests.ts";
-import { interval, quantity, resourceName, verdictText, type ResultView, type Selection } from "./results.ts";
+import { directionArrow, interval, quantity, resourceName, verdictText, type ResultView, type Selection } from "./results.ts";
 
 const stages = { physical: "물리", negotiate: "협상", path: "경로", allocate: "배분", judge: "판정" };
 const confidence = { official: "공식", review: "리뷰", community: "커뮤니티", user_verified: "사용자 검증", inferred: "추정", unknown: "미확인" };
@@ -101,7 +101,8 @@ function measurements(root: HTMLElement, { scene, result }: ResultView, rows: re
     const port = claim.ownerKind === "port" ? scene.ports[claim.owner] : iface && scene.ports[iface.port];
     const resource = claim.ownerKind === "resource" ? scene.resources[claim.owner] : undefined;
     const item = scene.items[claim.ownerKind === "item" ? claim.owner : port?.item ?? resource?.item ?? -1];
-    const target = observation ? scene.connections[claim.owner]!.id : [item?.alias || item?.id, port?.label ?? resource?.id].filter(Boolean).join(" / ");
+    const target = observation ? scene.connections[claim.owner]!.id
+      : [item && (item.alias || scene.models[item.model]!.name), port?.label || port?.id || resource?.id].filter(Boolean).join(" / ");
     const value = [claim.value, claim.unit].filter(v => v !== "" && v !== null).join(" ");
     const entry = el("li", [target, claim.field, value, state].filter(Boolean).join(" · "));
     appendClaimSources(entry, scene, index);
@@ -163,10 +164,10 @@ function list(root: HTMLElement, title: string, entries: readonly string[], clas
   root.append(el("h4", title), ul);
 }
 
-function outcomeNotes(root: HTMLElement, result: Results, rows: readonly number[], run: Run = "together") {
+function outcomeNotes(root: HTMLElement, result: Results, rows: readonly number[], run: Run = "together", showVerdicts = true) {
   const selected = new Set(rows);
   const possible = run === "solo" ? result.assessments.filter(row => row.run === "solo") : result.possibleVerdicts;
-  list(root, "가능한 판정", possible.filter(row => selected.has(row.outcome)).map(row => verdictText[row.verdict]));
+  if (showVerdicts) list(root, "가능한 판정", possible.filter(row => selected.has(row.outcome)).map(row => verdictText[row.verdict]));
   list(root, "검증 퀘스트", result.quests.filter(row => selected.has(row.outcome)).map(row =>
     row.instruction + (row.impact === "verdict" ? " · 판정에 영향" : row.impact === "range" ? " · 범위에 영향" : "")), "quests");
   list(root, "필요한 결합 형태", result.needs.filter(row => selected.has(row.outcome)).map(row => row.requiredCapability));
@@ -193,7 +194,7 @@ function limitWitnesses(view: ResultView, outcome: number) {
       const iface = claim.ownerKind === "interface" ? scene.interfaces[claim.owner] : undefined;
       const port = iface ? scene.ports[iface.port] : claim.ownerKind === "port" ? scene.ports[claim.owner] : undefined;
       const item = port ? scene.items[port.item] : claim.ownerKind === "item" ? scene.items[claim.owner] : undefined;
-      const owner = [item?.alias || item?.id, port?.label, iface?.id].filter(Boolean).join(" / ");
+      const owner = [item && (item.alias || scene.models[item.model]!.name), port?.label || port?.id, iface?.protocol].filter(Boolean).join(" / ");
       const fact = [owner, `${claim.field} = ${value}${claim.unit ? " " + claim.unit : ""}`, claim.condition].filter(Boolean).join(" · ");
       const row = el("li", fact);
       appendClaimSources(row, scene, index, value);
@@ -212,17 +213,45 @@ function detail(root: HTMLElement, view: ResultView, selected: Selection) {
     const rows = view.negotiations.get(selected.id);
     if (!rows?.length) return;
     root.append(el("h3", `연결 · ${selected.id}`));
-    outcomeNotes(root, result, rows);
-    measurements(root, view, rows, new Set([scene.connections.findIndex(c => c.id === selected.id)]));
+    const overview = el("div");
+    overview.className = "connection-summary";
+    const details: HTMLElement[] = [];
     const marks = view.wires.get(selected.id)!.filter(mark => mark.kind === "negotiation");
-    rows.forEach((row, index) => {
-      const negotiation = el("details");
-      negotiation.className = "negotiation-evidence";
-      negotiation.append(el("summary", marks[index]!.title), tree(view, { outcome: row }));
-      root.append(negotiation);
-      const witnesses = limitWitnesses(view, row);
-      if (witnesses) root.append(witnesses);
-    });
+    for (const direction of ["forward", "reverse", null] as const) {
+      const section = el("section");
+      const summary = el("ul");
+      rows.forEach((row, index) => {
+        const mark = marks[index]!;
+        if (mark.direction !== direction) return;
+        const ability = mark.verdict === null;
+        const caption = el("li", mark.text + (ability ? " · 연결 능력" : ""));
+        caption.classList.toggle("connection-capability", ability);
+        summary.append(caption);
+
+        const negotiation = el("details");
+        negotiation.className = "negotiation-evidence";
+        negotiation.open = true;
+        const title = el("summary", mark.title);
+        title.classList.toggle("connection-capability", ability);
+        negotiation.append(title);
+        if (mark.verdict === "unknown") list(negotiation, "가능한 판정",
+          result.possibleVerdicts.filter(candidate => candidate.outcome === row).map(candidate => verdictText[candidate.verdict]));
+        negotiation.append(tree(view, { outcome: row }));
+        section.append(negotiation);
+        const witnesses = limitWitnesses(view, row);
+        if (witnesses) section.append(witnesses);
+      });
+      if (!summary.childElementCount) continue;
+      const directionName = direction === "forward" ? "정방향" : direction === "reverse" ? "역방향" : "물리 연결";
+      const group = el("section");
+      group.append(el("h4", [directionArrow(direction), directionName].filter(Boolean).join(" ")), summary);
+      overview.append(group);
+      details.push(section);
+    }
+    root.append(overview);
+    outcomeNotes(root, result, rows, "together", false);
+    measurements(root, view, rows, new Set([scene.connections.findIndex(c => c.id === selected.id)]));
+    root.append(...details);
   } else if (selected.kind === "workload") {
     const workload = view.workloads.find(w => w.id === selected.id);
     if (!workload) return;
@@ -313,7 +342,9 @@ export function mountEvidence(root: HTMLElement, change: {
         choices.replaceChildren(el("p", error.message));
     });
   });
-  controls.append(run, alternatives);
+  const runLabel = el("label");
+  runLabel.append(el("span", "표시할 성능"), run);
+  controls.append(runLabel, alternatives);
   const content = el("div");
   const info = el("section");
   info.className = "selected-evidence";
