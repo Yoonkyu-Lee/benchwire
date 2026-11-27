@@ -472,7 +472,28 @@ export function loadSceneDocuments(document: unknown, library: { connectors: unk
     const { id, domain, kind } = w;
     unique(works, id, workload, at + ".id");
     scene.workloads.push({ id, domain, kind, from: endpoint(w.from, "nodes", at + ".from"), to: endpoint(w.to, "nodes", at + ".to") });
-    fields("workload", workload, "scene", domain, w.request, ref(domains, domain, at + ".domain").request, sceneSources, at + ".request");
+    const plugin=ref(domains,domain,at+".domain");
+    fields("workload",workload,"scene",domain,w.request,plugin.request,sceneSources,at+".request");
+    for (const {instanceField,nodeField} of plugin.requestNodes ?? []) {
+      const instance=w.request[instanceField], node=w.request[nodeField];
+      if (!instance || !node) continue;
+      const owners=new Set<Local | null>();
+      checkValues(instance,at+".request."+instanceField,({value},where)=>{
+        if (value===null) owners.add(null);
+        else {
+          const local=typeof value==="string" ? instances.get(value) : undefined;
+          if (!local) fail(where+".value","찾을 수 없는 경유 실물: "+value);
+          owners.add(local);
+        }
+      });
+      checkValues(node,at+".request."+nodeField,({value},where)=>{
+        if (value===null) return;
+        for (const owner of owners) {
+          const exists=owner ? typeof value==="string" && owner.nodes.has(value) : scene.nodes.some(n=>n.id===value);
+          if (!exists) fail(where+".value","경유 실물에서 찾을 수 없는 노드: "+value+(owner ? " ("+scene.items[owner.item]!.id+")" : ""));
+        }
+      });
+    }
   });
   for (const {row,fact,at,fieldAt} of references) {
     const c=scene.claims[row]!;

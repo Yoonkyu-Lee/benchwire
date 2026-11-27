@@ -91,6 +91,8 @@ export interface DomainPlugin {
   // 한 관측 행의 { [필드]: { value, unit } }를 검증한다. 각 필드를 독립적으로 입력할 수 있어야 한다.
   observations?: InputSchema;
   paramsFor?(protocol: string): InputSchema | undefined;
+  // 요청이 가리키는 실물·지역 노드 필드 쌍이다. 로더와 슬롯 교체가 같은 참조를 따른다.
+  requestNodes?: readonly { instanceField: string; nodeField: string }[];
   // 파일의 본값과 각 후보를 대상 표와 대조한다. 작업의 복합 참조는 같은 요청에 적힌 후보를 함께 읽는다.
   referenceError?(claim: Pick<Claim,"ownerKind" | "owner" | "field">, value: Value,
     topology: Pick<Scene,"items" | "nodes" | "ports" | "interfaces" | "resources">,

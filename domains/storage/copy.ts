@@ -20,22 +20,7 @@ export const storageDomain: DomainPlugin = {
     .refine(r => (r.viaInstance === undefined) === (r.viaNode === undefined), {
       path: ["viaNode"], message: "경유 실물 ID와 노드 ID를 함께 지정하세요",
     }),
-  referenceError(claim,value,scene,fields) {
-    if (claim.ownerKind!=="workload" || value===null) return undefined;
-    if (claim.field==="viaInstance" && !scene.items.some(i=>i.id===value))
-      return {at:"value",message:"찾을 수 없는 경유 실물: "+value};
-    if (claim.field!=="viaNode") return undefined;
-    const via=fields.viaInstance!;
-    const owners=[via.value,...(via.conflicts??[]).map(c=>c.value)];
-    for (const owner of owners) {
-      const item=scene.items.findIndex(i=>i.id===owner);
-      // 잘못 적은 실물은 viaInstance 본값 또는 해당 충돌 후보 위치에서 거절한다.
-      if (owner!==null && item<0) continue;
-      if (!scene.nodes.some(n=>n.id===value && (owner===null || n.item===item)))
-        return {at:"value",message:"경유 실물에서 찾을 수 없는 노드: "+value+(owner===null ? "" : " ("+owner+")")};
-    }
-    return undefined;
-  },
+  requestNodes: [{instanceField:"viaInstance",nodeField:"viaNode"}],
   negotiate() { return []; },
   demand(scene, workload) {
     const inputs:number[]=[];

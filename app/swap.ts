@@ -1,4 +1,5 @@
 // 슬롯 교체 사본을 만들고, 연결·작업·목표에서 대응이 불확실한 위치의 선택지를 돌려준다.
+import { plugins } from "../domains/registry.ts";
 import { compare, type Snapshot } from "../engine/compare.ts";
 import type { Documents } from "./assessment.ts";
 import { modelKey, type Model, type Port, type PortRef, type SceneDocument } from "./document.ts";
@@ -69,12 +70,49 @@ export function swapSlot(scene: SceneDocument, documents: Documents, options: Sw
 
   const nodes = new Map<string, Set<string>>();
   const portNodes = new Set(before.ports.filter(port => known(port.attachment) === port.id).map(port => port.id));
-  for (const work of scene.workloads) for (const ref of [work.from, work.to]) {
-    if (ref.instanceId !== originalId) continue;
+  function useNode(ref:PortRef, use:string) {
+    if (ref.instanceId !== originalId) return;
     const uses = nodes.get(ref.id) ?? new Set<string>();
-    uses.add("작업 " + work.id);
+    uses.add(use);
     nodes.set(ref.id, uses);
-    if (portNodes.has(ref.id) && !replacement.nodes.some(node => node.id === ref.id)) usePort(ref, "작업 " + work.id);
+    if (portNodes.has(ref.id) && !replacement.nodes.some(node => node.id === ref.id)) usePort(ref,use);
+  }
+
+  const workloads=structuredClone(scene.workloads);
+  type Sample = Pick<SceneDocument["workloads"][number]["request"][string], "value">;
+  const instanceClaims: Sample[]=[];
+  const nodeClaims: {source:string; sample:Sample}[]=[];
+  const sharedNames=new Set<string>(), uniqueNames=new Set<string>();
+  const conflictNodes:string[][]=[];
+  const otherNodes=new Set(scene.items.filter(i=>i!==original).flatMap(i=>
+    documents.models.get(modelKey(i))?.nodes.map(n=>n.id) ?? []));
+  for (const work of workloads) {
+    const use="작업 "+work.id;
+    useNode(work.from,use);
+    useNode(work.to,use);
+    const plugin=plugins.find(p=>p.id===work.domain);
+    for (const {instanceField,nodeField} of plugin?.requestNodes ?? []) {
+      const instance=work.request[instanceField], node=work.request[nodeField];
+      if (!instance || !node) continue;
+      const owners=[instance,...(instance.conflicts ?? [])];
+      const open=instance.value===null;
+      if (!open && !owners.some(sample=>sample.value===originalId)) continue;
+      const shared=owners.some(sample=>sample.value!==null && sample.value!==originalId);
+      const candidates:string[]=[];
+      for (const sample of [node,...(node.conflicts ?? [])]) {
+        if (typeof sample.value!=="string") continue;
+        const source=sample.value;
+        candidates.push(source);
+        if (open && !before.nodes.some(n=>n.id===source)) continue;
+        // 실물 후보들이 노드 주장 하나를 공유하면 다른 실물의 경유 위치도 보존해야 한다.
+        if (shared || open && otherNodes.has(source)) sharedNames.add(source);
+        else if (open) uniqueNames.add(source);
+        useNode({instanceId:originalId,id:source},sharedNames.has(source) ? use+" · 다른 경유 실물과 같은 노드 ID" : use);
+        nodeClaims.push({source,sample});
+      }
+      if (candidates.length>1) conflictNodes.push(candidates);
+      for (const sample of owners) if (sample.value===originalId) instanceClaims.push(sample);
+    }
   }
 
   const mates = new Set(documents.connectors.mates.map(mate => pairKey(mate.a, mate.b)));
@@ -124,19 +162,29 @@ export function swapSlot(scene: SceneDocument, documents: Documents, options: Sw
   const pending = [...portChoices.values()].filter(row => !portTargets.has(row.source));
 
   const nodeTargets = new Map<string, string>();
+  const nodeChoices = new Map<string, SwapChoice>();
   for (const [id, uses] of nodes) {
     const throughPort = portNodes.has(id) && !replacement.nodes.some(node => node.id === id);
     const port = throughPort ? portTargets.get(id) : undefined;
     if (throughPort && !port) continue;
     const automatic = port ? known(replacement.ports.find(row => row.id === port)?.attachment) ?? id : id;
     const row = choice("node", before.nodes.find(node => node.id === id)!, uses,
-      replacement.nodes.map(({ id, label }) => ({ id, label })));
+      replacement.nodes.filter(n=>(!sharedNames.has(id) || n.id===id) && (!uniqueNames.has(id) || !otherNodes.has(n.id)))
+        .map(({ id, label }) => ({ id, label })));
+    nodeChoices.set(id,row);
     const target = select(row, automatic);
-    if (target === undefined) pending.push(row);
-    else nodeTargets.set(id, target);
+    if (target !== undefined) nodeTargets.set(id,target);
   }
+  // 다른 값이라는 두 출처를 같은 노드에 대응하면 저장할 수 없는 충돌 주장이 된다.
+  for (const group of conflictNodes) {
+    const sources=Map.groupBy(new Set(group),id=>nodeTargets.get(id) ?? id);
+    for (const ids of sources.values()) if (ids.length>1) for (const id of ids) nodeTargets.delete(id);
+  }
+  pending.push(...[...nodeChoices.values()].filter(row=>!nodeTargets.has(row.source)));
   if (pending.length) return { document: null, pending };
 
+  for (const sample of instanceClaims) sample.value=replacementId;
+  for (const {source,sample} of nodeClaims) sample.value=nodeTargets.get(source)!;
   function remap(ref: PortRef, targets: ReadonlyMap<string, string>) {
     return ref.instanceId === originalId ? { instanceId: replacementId, id: targets.get(ref.id)! } : ref;
   }
@@ -152,7 +200,7 @@ export function swapSlot(scene: SceneDocument, documents: Documents, options: Sw
           ? { instanceId: replacementId, entry: portTargets.get(part.entry)!, exit: portTargets.get(part.exit)! }
           : part),
       })),
-      workloads: scene.workloads.map(work => ({ ...work, from: remap(work.from, nodeTargets), to: remap(work.to, nodeTargets) })),
+      workloads: workloads.map(work => ({ ...work, from: remap(work.from, nodeTargets), to: remap(work.to, nodeTargets) })),
       scenarios: scene.scenarios.map(scenario => !scenario.purchases && !scenario.goals ? scenario : {
         ...scenario,
         ...(scenario.purchases && { purchases: scenario.purchases.map(row =>
