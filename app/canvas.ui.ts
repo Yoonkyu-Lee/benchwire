@@ -798,6 +798,52 @@ test("USB-C 충전기 초안을 저장·배치하고 재시도와 서버 재시�
   } finally { await reopened.close(); }
 });
 
+
+test("장면 저장 실패 후 다시 열어 같은 모델을 배치할 때 실물은 한 개다", async () => {
+  const { page } = await newPage("/");
+  const modelId = "retry-placement";
+  async function draft() {
+    await page.getByRole("button", { name: "새 아이템", exact: true }).click();
+    const form = page.getByRole("dialog", { name: "새 아이템" });
+    await form.getByLabel("모델 ID", { exact: true }).fill(modelId);
+    await form.getByLabel("브랜드", { exact: true }).fill("시험");
+    await form.getByLabel("모델 이름", { exact: true }).fill("다시 배치할 모델");
+    await form.getByLabel("카테고리", { exact: true }).fill("시험");
+    await form.getByLabel("제목", { exact: true }).fill("모델 자료");
+    await form.getByLabel("주소", { exact: true }).fill("fixture:retry-model");
+    return form;
+  }
+  async function instances() {
+    return await page.evaluate(async modelId => {
+      const library = await (await fetch("/api/library")).json() as Library;
+      return library.inventory.filter(item => item.modelId === modelId).map(item => item.instanceId);
+    }, modelId);
+  }
+  try {
+    let form = await draft();
+    await page.route("**/api/scenes/*", route => route.request().method() === "PUT"
+      ? route.fulfill({ status: 500, json: { message: "시험 장면 저장 실패" } }) : route.continue(), { times: 1 });
+    await form.getByRole("button", { name: "저장하고 배치" }).click();
+    await page.locator("#storage-status").getByRole("button").waitFor();
+    const before = await instances();
+    assert.equal(before.length, 1);
+    await page.reload();
+    await page.locator(".surface").waitFor();
+    form = await draft();
+    const catalogWrites: string[] = [];
+    page.on("request", request => {
+      if (request.method() === "PUT" && /\/api\/(models|inventory)\//.test(request.url())) catalogWrites.push(request.url());
+    });
+    await form.getByRole("button", { name: "저장하고 배치" }).click();
+    await form.waitFor({ state: "hidden" });
+    await page.getByText("저장됨", { exact: true }).waitFor();
+    assert.deepEqual(await instances(), before);
+    assert.deepEqual(catalogWrites, []);
+    assert.equal(await page.locator('[data-instance="' + before[0] + '"]').count(), 1);
+    await page.screenshot({ path: "work/m4-placement-retry.png" });
+  } finally { await page.close(); }
+});
+
 test("키가 없으면 AI 조사가 꺼지고 수동 생성기를 계속 쓴다", async () => {
   const { page, errors } = await newPage("/");
   try {
@@ -820,8 +866,12 @@ test("판본을 골라 가상 조사 초안을 확인·편집한 뒤 저장하�
     await page.getByRole("button", { name: "새 아이템", exact: true }).click();
     const dialog = page.getByRole("dialog", { name: "새 아이템" });
     await dialog.getByLabel("모델 이름", { exact: true }).fill("작성 중인 수동 초안");
-    await dialog.getByLabel("모델명 또는 공개 URL").fill("Morrow Finch");
+    const query = dialog.getByLabel("모델명 또는 공개 URL");
+    await query.fill("https://manufacturer.example.com/product?code=비공개#fragment");
+    assert.equal(await dialog.getByText("https://manufacturer.example.com/product", { exact: true }).count(), 1);
+    const sent = page.waitForRequest(request => request.method() === "POST" && request.url().endsWith("/api/research"));
     await dialog.getByRole("button", { name: "조사 시작" }).click();
+    assert.equal((await sent).postDataJSON().query, "https://manufacturer.example.com/product");
     await dialog.getByRole("button", { name: "Morrow Finch · FA-25" }).waitFor();
     assert.equal(calls.length, 1);
     await dialog.getByRole("button", { name: "Morrow Finch · FA-24" }).click();
@@ -832,6 +882,15 @@ test("판본을 골라 가상 조사 초안을 확인·편집한 뒤 저장하�
     const discarded = dialog.getByText(/버린 필드 \d+개/);
     await discarded.waitFor();
     await dialog.getByText("출처 충돌", { exact: true }).waitFor();
+    const proposals = dialog.getByRole("group", { name: "AI 제안", exact: true });
+    assert.equal(await proposals.count(), 1);
+    assert.match(await proposals.innerText(), /are not connected/);
+    assert.equal(await proposals.getByRole("checkbox", { checked: true }).count(), 0);
+    await proposals.screenshot({ path: "work/m4-research-proposals.png" });
+    const resource = proposals.getByRole("checkbox", { name: "자원 사용 · supply", exact: true });
+    assert(await resource.isDisabled());
+    await proposals.getByRole("checkbox", { name: "간선 · Controller → Output", exact: true }).check();
+    await resource.check();
     await page.screenshot({ path: "work/research-fixture.png" });
     await fill.click();
     assert.equal(await dialog.getByLabel("모델 이름", { exact: true }).inputValue(), "Morrow Finch");
@@ -845,6 +904,8 @@ test("판본을 골라 가상 조사 초안을 확인·편집한 뒤 저장하�
       .find((model: { modelId: string }) => model.modelId === "morrow-finch"));
     assert.equal(stored.name, "Morrow Finch 사용자 확인");
     assert.equal(stored.ports[0].attachment.value, null);
+    assert.deepEqual(stored.edges.map((edge: Model["edges"][number]) => [edge.id, edge.uses.map(use => use.resource)]),
+      [["feed", ["supply"]]]);
     const maxW = stored.ports[0].interfaces[0].params.maxW;
     assert.equal(maxW.value, 30);
     assert.deepEqual(maxW.sources, ["source-1"]);

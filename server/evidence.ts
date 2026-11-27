@@ -1,8 +1,9 @@
 // 검증 메모·사진을 내용 해시로 저장하고 허용한 이미지 형식으로만 읽어 준다.
 import { createHash } from "node:crypto";
-import { lstatSync, readFileSync } from "node:fs";
+import { lstatSync, readFileSync, readdirSync, unlinkSync } from "node:fs";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { join } from "node:path";
+import { sceneFile } from "../scene/files.ts";
 import { LibraryError, writeAtomic } from "./library.ts";
 
 const LIMIT = 2 * 1024 * 1024;
@@ -20,6 +21,40 @@ function imageType(bytes: Buffer) {
   if (bytes.length >= 16 && bytes.toString("ascii", 0, 4) === "RIFF" && bytes.toString("ascii", 8, 12) === "WEBP"
     && bytes.readUInt32LE(4) + 8 === bytes.length && ["VP8 ", "VP8L", "VP8X"].includes(bytes.toString("ascii", 12, 16))) return "image/webp";
   return undefined;
+}
+
+export function removeUnlinkedEvidence(dataDir: string, savedScenes: readonly string[]) {
+  const root = join(dataDir, "evidence");
+  let files;
+  try { files = readdirSync(root, { withFileTypes: true }); }
+  catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return;
+    throw error;
+  }
+  const linked = new Set<string>();
+  for (const text of savedScenes) {
+    let json: unknown;
+    try { json = JSON.parse(text); }
+    catch (error) {
+      if (!(error instanceof SyntaxError)) throw error;
+      return;
+    }
+    const parsed = sceneFile.safeParse(json);
+    // 읽을 수 없는 장면이 있으면 그 장면의 첨부도 보존한다.
+    if (!parsed.success) return;
+    for (const { locator } of parsed.data.sources) {
+      if (!locator.startsWith("verification:")) continue;
+      const params = new URLSearchParams(locator.slice("verification:".length));
+      for (const key of ["photo", "evidence"]) {
+        const id = /^\/api\/evidence\/([a-f0-9]{64})$/.exec(params.get(key) ?? "")?.[1];
+        if (id) linked.add(id);
+      }
+    }
+  }
+  for (const file of files) {
+    const id = /^([a-f0-9]{64})(?:\.txt)?$/.exec(file.name)?.[1];
+    if (file.isFile() && id && !linked.has(id)) unlinkSync(join(root, file.name));
+  }
 }
 
 export async function evidence(request: IncomingMessage, response: ServerResponse, dataDir: string, path: string, origin: string) {

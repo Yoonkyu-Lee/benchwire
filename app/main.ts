@@ -26,7 +26,7 @@ async function fetchLocal(url: string, init?: RequestInit) {
   }
 }
 
-type Edit = { before: SceneDocument; after: SceneDocument; intent: SceneIntent };
+type Edit = { before: SceneDocument; after: SceneDocument; intent: SceneIntent; done?: (saved: boolean) => void };
 
 function same(a: unknown, b: unknown) {
   return a === b || JSON.stringify(a) === JSON.stringify(b);
@@ -130,9 +130,11 @@ function replay(latest: SceneDocument, edit: Edit) {
     case "place":
       return latest.items.some(item => item.instanceId === intent.instanceId)
         ? place(latest, intent.instanceId, intent.position) : undefined;
-    case "add-item":
-      return latest.items.some(item => item.instanceId === intent.item.instanceId) ? undefined
-        : place({ ...latest, items: [...latest.items, intent.item] }, intent.item.instanceId, intent.position);
+    case "add-item": {
+      const current = latest.items.find(item => item.instanceId === intent.item.instanceId);
+      if (current) return modelKey(current) === modelKey(intent.item) ? latest : undefined;
+      return place({ ...latest, items: [...latest.items, intent.item] }, intent.item.instanceId, intent.position);
+    }
     case "connect": {
       const part = edit.after.connections.at(-1)!.parts[0];
       const item = part && edit.after.items.find(item => item.instanceId === part.instanceId)!;
@@ -218,14 +220,17 @@ async function start() {
   }
 
   function edited(after: SceneDocument, intent: SceneIntent) {
-    if (mustReopen) { workbench.replaceDocument(saved); return; }
-    edits.push({ before: draft, after, intent });
+    if (mustReopen) { workbench.replaceDocument(saved); return Promise.resolve(false); }
+    const edit: Edit = { before: draft, after, intent };
+    const completion = intent.kind === "add-item" ? new Promise<boolean>(done => { edit.done = done; }) : undefined;
+    edits.push(edit);
     draft = after;
     if (!saving) void save();
+    return completion;
   }
 
   function rejectEdits() {
-    const unsaved = edits.splice(0).map(editName);
+    const unsaved = edits.splice(0).map(edit => { edit.done?.(false); return editName(edit); });
     mustReopen = true;
     draft = saved;
     workbench.replaceDocument(saved);
@@ -239,9 +244,10 @@ async function start() {
     const scenarioId = workbench.readScenario();
     for (const edit of edits.splice(0)) {
       const next = replay(draft, edit);
-      if (!next) { discarded.push(editName(edit)); continue; }
+      if (!next) { discarded.push(editName(edit)); edit.done?.(false); continue; }
+      if (next === draft) { edit.done?.(true); continue; }
       const loaded = loadAssessment(next, workbench.documents, null);
-      if ("error" in loaded) { discarded.push(editName(edit)); continue; }
+      if ("error" in loaded) { discarded.push(editName(edit)); edit.done?.(false); continue; }
       if (edit.intent.kind === "connect" && requiredMateCapabilities(loaded.scene, next.connections.at(-1)!.id).length) {
         discarded.push(editName(edit));
         continue;
@@ -285,7 +291,7 @@ async function start() {
         }
         if (result?.status === 422) {
           errors.push(await result.json() as { path: string; message: string });
-          edits.shift();
+          edits.shift()?.done?.(false);
           await workbench.finishGesture();
           reapply(discarded);
           continue;
@@ -298,7 +304,7 @@ async function start() {
           picker.value = saved.sceneId;
         } else saved = document;
         etag = tag;
-        edits.shift();
+        edits.shift()?.done?.(true);
       }
       const notices = errors.flatMap(({ path, message }) => workbench.showFieldError(path, message)
         ? [] : [[path, message].filter(Boolean).join(" — ")]);

@@ -1,8 +1,8 @@
 // 공개 제품 자료를 판본별로 조사하고, 검증한 주장으로 저장 전 초안을 만든다.
 import Anthropic from "@anthropic-ai/sdk";
 import { zodOutputFormat } from "@anthropic-ai/sdk/helpers/zod";
-import { createHash, randomUUID } from "node:crypto";
-import { mkdirSync, readFileSync, renameSync, unlinkSync, writeFileSync } from "node:fs";
+import { createHash } from "node:crypto";
+import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { isIP } from "node:net";
 import { parseEnv } from "node:util";
@@ -11,12 +11,15 @@ import { domains, plugins } from "../domains/registry.ts";
 import type { InputSchema } from "../engine/contract.ts";
 import { connectorsFile, modelFile, type Fact } from "../scene/files.ts";
 import { loadSceneDocuments } from "../scene/load.ts";
-import { LibraryError } from "./library.ts";
+import { researchQuery } from "../scene/research-query.ts";
+import { LibraryError, writeAtomic } from "./library.ts";
 
 const MODEL = "claude-opus-5-5";
 const BUDGET_USD = 5;
 const MAX_SEARCHES = 6;
 const CACHE_DAYS = 30;
+// 이 이름 이전의 초안에는 검증되지 않은 값과 자동 배선이 남아 있을 수 있다.
+const CACHE_VERSION = "verified-quotes-v1";
 const DAY_MS = 86_400_000;
 const CONTEXT_TOKENS = 1_000_000;
 // Claude Platform Pricing: https://platform.claude.com/docs/en/about-claude/pricing
@@ -56,18 +59,11 @@ export function configuredResearchClient(root: string): ResearchClient | null {
   return apiKey ? new Anthropic({ apiKey, baseURL: "https://api.anthropic.com", maxRetries: 0, logLevel: "off" }).messages : null;
 }
 
-function publicUrl(value: string, cleanInput = false): string | undefined {
+function publicUrl(value: string): string | undefined {
   const url = URL.parse(value);
   if (!url || !["https:", "http:"].includes(url.protocol) || url.username || url.password || url.port) return;
-  // 사용자가 입력한 URL에서 추적 매개변수나 비공개 토큰을 넘기지 않는다.
   if (isIP(url.hostname.replace(/^\[|\]$/g, "")) || !url.hostname.includes(".") ||
     /(?:^|\.)(?:localhost|local|internal|lan|home|test|invalid|onion)\.?$/i.test(url.hostname)) return;
-  if (cleanInput) {
-    for (const key of [...url.searchParams.keys()]) {
-      if (/^utm_|^(?:gclid|fbclid)$|token|credential|signature|api[-_]?key|secret|password|^auth$/i.test(key))
-        url.searchParams.delete(key);
-    }
-  }
   url.hash = "";
   return url.href;
 }
@@ -84,7 +80,7 @@ type Candidate = Omit<z.infer<typeof candidate>, "sourceUrls"> & { sourceIds: st
 const query = z.string().trim().min(1).max(MAX_URL).refine(value =>
   !/[\u0000-\u001f\u007f]/u.test(value) &&
   (/:\/\/|^https?:|^file:|^[a-z]:[\\/]/i.test(value)
-    ? (publicUrl(value, true)?.length ?? Infinity) <= MAX_URL : value.length <= MAX_MODEL_NAME),
+    ? publicUrl(value) !== undefined && researchQuery(value).length <= MAX_URL : value.length <= MAX_MODEL_NAME),
   "모델명이나 공용 웹사이트의 URL을 입력하세요");
 const jobId = z.string().regex(/^[0-9a-f]{64}$/);
 const request = z.discriminatedUnion("action", [
@@ -99,6 +95,7 @@ const shapes = {
   interfaces: z.strictObject({ ...structure, port: text, domain: text, protocol: text, role: text }),
   resources: z.strictObject({ ...structure, kind: text, domain: text, unit: text }),
   edges: z.strictObject({ id: text, from: text, to: text, citation: text }),
+  omissions: z.strictObject({ target: z.enum(["item", "interface"]), id: text, domain: text, field: text, citation: text }),
   claims: z.strictObject({
     target: z.enum(["item", "port", "interface", "resource", "edge"]), id: text, domain: z.string().max(100),
     field: text, condition: z.string().max(300), value: z.union([z.number(), z.boolean(), z.string().max(500)]),
@@ -108,35 +105,45 @@ const shapes = {
 const output = z.strictObject({
   revision: fileId, sources: z.array(shapes.sources), ports: z.array(shapes.ports), nodes: z.array(shapes.nodes),
   interfaces: z.array(shapes.interfaces), edges: z.array(shapes.edges), resources: z.array(shapes.resources),
-  claims: z.array(shapes.claims),
+  claims: z.array(shapes.claims), omissions: z.array(shapes.omissions),
 });
 const lists = z.strictObject({
   revision: fileId, sources: z.array(z.unknown()).max(MAX_ROWS), ports: z.array(z.unknown()).max(MAX_ROWS),
   nodes: z.array(z.unknown()).max(MAX_ROWS), interfaces: z.array(z.unknown()).max(MAX_ROWS),
   edges: z.array(z.unknown()).max(MAX_ROWS), resources: z.array(z.unknown()).max(MAX_ROWS), claims: z.array(z.unknown()).max(MAX_ROWS),
+  omissions: z.array(z.unknown()).max(MAX_ROWS).default([]),
 });
 // 스트림의 정지 이유와 사용량을 먼저 확인하고, 완료된 응답은 행별로 검증한다.
 const { type: formatType, schema: formatSchema } = zodOutputFormat(output);
 const FORMAT = { type: formatType, schema: formatSchema };
 
 type ClaimRow = z.infer<typeof shapes.claims>;
-type Citation = { id: string; source: string; quote: string };
+type Citation = { id: string; source: string; quote: string; verified: boolean };
 type Collected = { sources: Map<string, Source>; citations: Citation[]; text: string };
 const phase = z.enum(["identifying", "choosing", "researching", "normalizing", "complete", "stopped"]);
 const stopReason = z.enum(["budget", "refusal", "incomplete", "unidentified", "unverified", "provider", "interrupted"]);
 type Stop = z.infer<typeof stopReason>;
-type Conflict = z.output<typeof conflictReport>;
-type Draft = { model: Model; discarded: string[]; conflicts: Conflict[] };
+type Draft = z.output<typeof draftFile>;
 const sourceFile = modelFile.shape.sources.element.extend({ locator: z.string().refine(url => publicUrl(url) !== undefined) });
 const conflictReport = z.strictObject({
   field: z.string(), condition: z.string(), values: z.array(shapes.claims.pick({ value: true, unit: true, confidence: true })
     .extend({ sources: z.array(z.string()) })),
 });
+const modelEdge = modelFile.shape.edges.element;
+const draftFile = z.strictObject({
+  model: modelFile, discarded: z.array(z.string()), conflicts: z.array(conflictReport),
+  omissions: z.array(z.strictObject({ field: text, quote: z.string(), source: text })),
+  proposals: z.strictObject({
+    attachments: z.array(z.strictObject({ port: text, attachment: modelFile.shape.ports.element.shape.attachment, quote: z.string() })),
+    edges: z.array(modelEdge.extend({ quote: z.string(), uses: z.array(modelEdge.shape.uses.element.extend({ quote: z.string() })) })),
+  }),
+});
 const cacheFile = z.strictObject({
-  id: jobId, query, phase, retrievedAt: z.iso.datetime(), spentUsd: z.number().nonnegative(), searches: z.number().int().nonnegative(),
+  id: jobId, version: z.literal(CACHE_VERSION), query, phase, retrievedAt: z.iso.datetime(),
+  spentUsd: z.number().nonnegative(), searches: z.number().int().nonnegative(),
   stop: stopReason.optional(), sources: z.array(sourceFile),
   candidates: z.array(candidate.omit({ sourceUrls: true }).extend({ sourceIds: z.array(z.string()) })),
-  draft: z.strictObject({ model: modelFile, discarded: z.array(z.string()), conflicts: z.array(conflictReport) }).optional(),
+  draft: draftFile.optional(),
   raw: z.array(z.unknown()),
 });
 type Job = z.output<typeof cacheFile>;
@@ -174,7 +181,7 @@ function decode(text: string): unknown {
 
 function collect(blocks: readonly Block[], retrievedAt: string): Collected {
   const sources = new Map<string, Source>();
-  const documents: string[] = [];
+  const documents: { url: string; text?: string }[] = [];
   const citations: Citation[] = [];
   const byUrl = new Map<string, string>();
   function add(url: string, title: string, date = retrievedAt.slice(0, 10)) {
@@ -190,7 +197,7 @@ function collect(blocks: readonly Block[], retrievedAt: string): Collected {
     }
     if (block.type === "web_fetch_tool_result" && block.content.type === "web_fetch_result") {
       const { url, content, retrieved_at } = block.content;
-      documents.push(url);
+      documents.push({ url, ...(content.source.type === "text" && { text: content.source.data }) });
       const date = retrieved_at?.slice(0, 10);
       add(url, content.title ?? url, z.iso.date().safeParse(date).success ? date : undefined);
     }
@@ -200,11 +207,16 @@ function collect(blocks: readonly Block[], retrievedAt: string): Collected {
     if (block.type !== "text") continue;
     parts.push(block.text);
     for (const cite of block.citations ?? []) {
-      const url = cite.type === "web_search_result_location" ? cite.url
-        : cite.type === "char_location" || cite.type === "page_location" || cite.type === "content_block_location"
-          ? documents[cite.document_index] : undefined;
+      const doc = "document_index" in cite ? documents[cite.document_index] : undefined;
+      const url = cite.type === "web_search_result_location" ? cite.url : doc?.url;
       const source = url && byUrl.get(publicUrl(url) ?? "");
-      if (source && cite.cited_text.trim()) citations.push({ id: "quote-" + (citations.length + 1), source, quote: cite.cited_text });
+      if (!source || !cite.cited_text.trim()) continue;
+      // 검색 요약과 PDF는 비교할 수 있는 원문 구간을 제공하지 않는다.
+      const verified = cite.type === "char_location" && doc?.text !== undefined && cite.start_char_index >= 0 &&
+        cite.end_char_index > cite.start_char_index &&
+        (doc.text.slice(cite.start_char_index, cite.end_char_index) === cite.cited_text ||
+          [...doc.text].slice(cite.start_char_index, cite.end_char_index).join("") === cite.cited_text);
+      citations.push({ id: "quote-" + (citations.length + 1), source, quote: cite.cited_text, verified });
     }
   }
   return { sources, citations, text: parts.join("") };
@@ -213,6 +225,34 @@ function collect(blocks: readonly Block[], retrievedAt: string): Collected {
 function mentions(quote: string, label: string) {
   const words = (value: string) => value.toLowerCase().normalize("NFKC").match(/[\p{L}\p{N}]+/gu)?.join(" ") ?? "";
   return (" " + words(quote) + " ").includes(" " + words(label) + " ");
+}
+
+function quotedValue(quote: string, value: ClaimRow["value"], unit: string) {
+  const token = String(value).normalize("NFKC");
+  if (!token) return false;
+  const clauses = quote.normalize("NFKC").replaceAll("\u2212", "-").split(/[;\r\n]|[.!?](?=\s|$)/u);
+  const assertive = clauses.filter(clause =>
+    !/\b(?:not|never|unsupported|cannot|can['’]t|doesn['’]t|no(?!\s+(?:more|less)\s+than\b))\b|미지원|지원하지|않(?:다|음|습니다)|불가/iu.test(clause));
+  if (typeof value === "number") {
+    const quantity = new RegExp("(?<![\\p{L}\\p{N}_.,+\\-])([+-]?(?:\\d+(?:\\.\\d+)?|\\.\\d+))(?![\\p{N}]|[.,]\\p{N})" +
+      (unit ? "\\s*" + RegExp.escape(unit) : "") + "(?![\\p{L}\\p{N}_])", "gu");
+    return assertive.some(clause => [...clause.matchAll(quantity)].some(match => Number(match[1]) === value));
+  }
+  const literal = new RegExp("(?<![\\p{L}\\p{N}_-])" + RegExp.escape(token) + "(?![\\p{L}\\p{N}_-])", "iu");
+  return assertive.some(clause => literal.test(clause));
+}
+
+const omissionMeta = z.strictObject({ headings: z.array(z.string()), voltageV: z.number() });
+
+function excludedFromCompleteList(quote: string, meta: z.output<typeof omissionMeta>) {
+  const headings = meta.headings.map(heading => RegExp.escape(heading)).join("|");
+  // 문장 전체가 명시적인 완전 목록이고 항목마다 단위가 있어야 미지원을 판단할 수 있다.
+  const complete = new RegExp("^(?:" + headings + ")\\s*:\\s*(.+)$", "iu");
+  const voltage = /^(\d+(?:\.\d+)?)\s*V(?:\s*(?:\/|@)\s*\d+(?:\.\d+)?\s*A)?$/u;
+  return quote.split(/[;\r\n]/).some(line => {
+    const list = complete.exec(line.trim())?.[1]?.replace(/\.$/, "").split(",").map(value => voltage.exec(value.trim()));
+    return !!list?.length && list.every(entry => entry && Number(entry[1]) !== meta.voltageV);
+  });
 }
 
 function identify(result: Collected) {
@@ -239,16 +279,17 @@ function identityDraft(selected: Candidate, sources: Source[]): Draft {
   return {
     model: { modelId: slug || "model", revision: selected.revision, kind: selected.kind, name: selected.name, brand: selected.brand,
       category: selected.category, attributes: {}, sources, ports: [], nodes: [], resources: [], edges: [] },
-    discarded: [], conflicts: [],
+    discarded: [], conflicts: [], omissions: [], proposals: { attachments: [], edges: [] },
   };
 }
 
 function assembledDraft(selected: Candidate, data: unknown, result: Collected, identitySources: Source[], connectors: Connectors, otherRevisions: readonly string[]): Draft {
-  const forRevision = new Set(result.citations.filter(c => mentions(c.quote, selected.revision) && mentions(c.quote, selected.name)).map(c => c.source));
+  const verified = result.citations.filter(c => c.verified);
+  const forRevision = new Set(verified.filter(c => mentions(c.quote, selected.revision) && mentions(c.quote, selected.name)).map(c => c.source));
   const allSources = new Map([...identitySources, ...[...result.sources.values()].filter(source => forRevision.has(source.id))]
     .map(source => [source.id, source]));
   const draft = identityDraft(selected, [...allSources.values()]);
-  const { model, discarded, conflicts } = draft;
+  const { model, discarded, conflicts, omissions, proposals } = draft;
   const envelope = lists.safeParse(data);
   if (!envelope.success || envelope.data.revision !== selected.revision) {
     discarded.push("정규화 응답이 올바르지 않거나 선택한 판본과 다릅니다.");
@@ -265,7 +306,7 @@ function assembledDraft(selected: Candidate, data: unknown, result: Collected, i
 
   const sourceById = new Map(draft.model.sources.map(source => [source.id, source]));
   const mixed = new Set(result.citations.filter(c => otherRevisions.some(revision => mentions(c.quote, revision))).map(c => c.source));
-  const cited = new Map(result.citations.filter(c => forRevision.has(c.source) &&
+  const cited = new Map(verified.filter(c => forRevision.has(c.source) &&
     !otherRevisions.some(revision => mentions(c.quote, revision)) && (!mixed.has(c.source) || mentions(c.quote, selected.revision)))
     .map(c => [c.id, c.source]));
   const ranks = new Map<string, z.infer<typeof confidence>>();
@@ -273,7 +314,7 @@ function assembledDraft(selected: Candidate, data: unknown, result: Collected, i
     if (sourceById.has(rank.id)) ranks.set(rank.id, rank.confidence);
     else discarded.push(rank.id + " · 선택한 판본의 출처 목록에 없습니다.");
   }
-  const quotes = new Map(result.citations.map(c => [c.id, c.quote]));
+  const quotes = new Map(verified.map(c => [c.id, c.quote]));
   function namesInQuote(citation: string, ...labels: string[]) {
     const quote = quotes.get(citation);
     return quote !== undefined && labels.every(label => mentions(quote, label));
@@ -290,7 +331,13 @@ function assembledDraft(selected: Candidate, data: unknown, result: Collected, i
   const key = (target: ClaimRow["target"], id: string, domain: string, field: string) => JSON.stringify([target, id, domain, field]);
   for (const row of rows("claims")) {
     const evidence = proof(row.citation, row.confidence);
-    if (!evidence) { discarded.push(row.id + "." + row.field + " · 같은 판본의 인용 근거가 없습니다."); continue; }
+    if (!evidence) { discarded.push(row.id + "." + row.field + " · 같은 판본에서 검증된 인용 근거가 없습니다."); continue; }
+    const topology = row.target === "edge" || row.target === "port" && row.field === "attachment";
+    const quote = quotes.get(row.citation)!;
+    if ((!topology && !quotedValue(quote, row.value, row.unit)) || (row.condition && !quote.includes(row.condition))) {
+      discarded.push(row.id + "." + row.field + " · 인용 원문에서 같은 값·단위·조건을 찾을 수 없습니다.");
+      continue;
+    }
     const slot = key(row.target, row.id, row.domain, row.field);
     const group = grouped.get(slot) ?? [];
     group.push({ row, evidence, used: false });
@@ -351,18 +398,22 @@ function assembledDraft(selected: Candidate, data: unknown, result: Collected, i
   const nodes = new Map(model.nodes.map(node => [node.id, node.label]));
   for (const { row, evidence } of structureRows(rows("ports"))) {
     const connector = fact("port", row.id, "", "connector", r => !r.unit && typeof r.value === "string" && knownConnectors.has(r.value));
-    const attachment = fact("port", row.id, "", "attachment",
-      (r, evidence) => {
-        const node = typeof r.value === "string" ? nodes.get(r.value) : undefined;
-        return evidence.confidence !== "inferred" && !r.unit && node !== undefined && namesInQuote(r.citation, row.label, node);
-      });
+    for (const entry of grouped.get(key("port", row.id, "", "attachment")) ?? []) {
+      const { row: claim, evidence } = entry;
+      const node = typeof claim.value === "string" ? nodes.get(claim.value) : undefined;
+      if (claim.condition || claim.unit || evidence.confidence === "inferred" || node === undefined ||
+        !namesInQuote(claim.citation, row.label, node)) continue;
+      entry.used = true;
+      proposals.attachments.push({ port: row.id, attachment: { ...evidence, value: claim.value }, quote: quotes.get(claim.citation)! });
+    }
     model.ports.push({ id: row.id, label: row.label, location: "", interfaces: [],
-      connector: connector ?? unknown(evidence.sources), attachment: attachment ?? unknown(evidence.sources) });
+      connector: connector ?? unknown(evidence.sources), attachment: unknown(evidence.sources) });
   }
   const ports = new Map(model.ports.map(port => [port.id, port]));
+  const omissionRows = Map.groupBy(rows("omissions"), row => key(row.target, row.id, row.domain, row.field));
   const declared = new Set<string>();
   const domainIds = new Set(selected.domains);
-  function fields(schema: InputSchema, target: "item" | "interface", id: string, domain: string, sources: string[]) {
+  function fields(schema: InputSchema, target: "item" | "interface", id: string, domain: string, sources: string[], port?: string) {
     const result: Record<string, Fact> = Object.create(null);
     const description = describe(schema);
     const properties = schema instanceof z.ZodObject ? schema.shape as Record<string, z.ZodType> : {};
@@ -377,10 +428,20 @@ function assembledDraft(selected: Candidate, data: unknown, result: Collected, i
       if (value) result[row.field] = value;
 
     }
-    for (const field of description.required ?? []) {
-      if (Object.hasOwn(result, field)) continue;
-      const property = description.properties?.[field];
-      const unit = typeof property === "object" ? property.properties?.unit : undefined;
+    for (const [field, property] of Object.entries(description.properties ?? {})) {
+      if (Object.hasOwn(result, field) || typeof property !== "object") continue;
+      const meta = omissionMeta.safeParse(property.researchOmission);
+      if (meta.success && !description.required?.includes(field)) {
+        const omission = (omissionRows.get(key(target, id, domain, field)) ?? []).find(row => {
+          const quote = quotes.get(row.citation);
+          return quote && proof(row.citation) && (!port || mentions(quote, port)) && excludedFromCompleteList(quote, meta.data);
+        });
+        if (omission) {
+          omissions.push({ field: id + "." + field, quote: quotes.get(omission.citation)!, source: cited.get(omission.citation)! });
+          continue;
+        }
+      }
+      const unit = property.properties?.unit;
       const placeholder = unknown(sources, typeof unit === "object" && typeof unit.const === "string" ? unit.const : "");
       if (properties[field]?.safeParse({ value: placeholder.value, unit: placeholder.unit }).success) result[field] = placeholder;
     }
@@ -397,7 +458,7 @@ function assembledDraft(selected: Candidate, data: unknown, result: Collected, i
       discarded.push(row.id + " · 포트 참조나 인터페이스 선언이 맞지 않습니다.");
       continue;
     }
-    const params = fields(registration.plugin.paramsFor?.(row.protocol) ?? registration.plugin.params, "interface", row.id, row.domain, evidence.sources);
+    const params = fields(registration.plugin.paramsFor?.(row.protocol) ?? registration.plugin.params, "interface", row.id, row.domain, evidence.sources, port.label);
     if (!params) { discarded.push(row.id + " · 인터페이스 필수 필드를 확인할 수 없습니다."); continue; }
     declared.add(signature);
     port.interfaces.push({ id: row.id, domain: row.domain, protocol: row.protocol, role: row.role, evidence, params });
@@ -425,17 +486,17 @@ function assembledDraft(selected: Candidate, data: unknown, result: Collected, i
     if (!from || !to || !namesInQuote(row.citation, from, to)) {
       discarded.push(row.id + " · 두 노드와 연결을 확인할 인용이 필요합니다."); continue;
     }
-    const uses = new Map<string, Fact>();
+    const uses = new Map<string, Draft["proposals"]["edges"][number]["uses"][number]>();
     for (const entry of grouped.get(key("edge", row.id, "", "uses")) ?? []) {
       const { row: claim, evidence } = entry;
       const resource = typeof claim.value === "string" ? resources.get(claim.value) : undefined;
       if (claim.condition || claim.unit || evidence.confidence === "inferred" || !resource || typeof claim.value !== "string" ||
         !namesInQuote(claim.citation, from, to, resource)) continue;
       entry.used = true;
-      const previous = uses.get(claim.value);
-      uses.set(claim.value, { ...evidence, sources: [...new Set([...(previous?.sources ?? []), ...evidence.sources])] });
+      if (!uses.has(claim.value))
+        uses.set(claim.value, { resource: claim.value, evidence, quote: quotes.get(claim.citation)! });
     }
-    model.edges.push({ id: row.id, from: row.from, to: row.to, evidence, uses: [...uses].map(([resource, evidence]) => ({ resource, evidence })) });
+    proposals.edges.push({ id: row.id, from: row.from, to: row.to, evidence, uses: [...uses.values()], quote: quotes.get(row.citation)! });
   }
   for (const group of grouped.values()) for (const { row, used } of group) {
     if (!used) discarded.push(row.id + "." + row.field + " · 지원하지 않는 값·단위·조건 또는 참조입니다.");
@@ -463,11 +524,7 @@ export function openResearch(dataDir: string, connectors: Connectors, client: Re
   const active = new Map<string, Job>();
   const path = (id: string) => join(dir, id + ".json");
   function write(job: Job) {
-    mkdirSync(dir, { recursive: true });
-    const temp = join(dir, randomUUID() + ".tmp");
-    writeFileSync(temp, JSON.stringify(job), { flag: "wx", mode: 0o600 });
-    try { renameSync(temp, path(job.id)); }
-    catch (error) { unlinkSync(temp); throw error; }
+    writeAtomic(path(job.id), JSON.stringify(job));
   }
   function read(id: string) {
     const pending = active.get(id);
@@ -485,7 +542,7 @@ export function openResearch(dataDir: string, connectors: Connectors, client: Re
   }
 
   function view(job: Job) {
-    const { raw: _raw, query: _query, ...result } = job;
+    const { raw: _raw, query: _query, version: _version, ...result } = job;
     return { ...result, stale: now().getTime() - Date.parse(job.retrievedAt) >= CACHE_DAYS * DAY_MS };
   }
 
@@ -551,12 +608,12 @@ export function openResearch(dataDir: string, connectors: Connectors, client: Re
     write(job);
     const found = await turn(job, [
       boundaries, relevance, "선택한 판본의 필드와 내부 구조를 조사하세요. 포트·컨트롤러·허브 칩·간선·전력 분배 정책은 확인된 경우에만 보고하세요.",
-      "자료마다 본문을 인용하고, 같은 자료 안에서 제품명과 판본 표기가 함께 보이는 구절도 인용하세요.",
+      "웹 검색 결과에서 후보 자료를 찾은 뒤 웹 열람으로 실제 본문을 확인하세요. 본문에서 제품명과 판본 표기가 함께 보이는 구절과 값·단위 구절을 인용하세요.",
       "배선은 연결되는 두 포트·노드의 원래 명칭이 함께 들어간 구절을 인용하세요. 자원 사용은 자원 명칭도 함께 인용하세요.",
       "값마다 인용과 조건, 단위를 표시하세요. 여러 출처가 다른 값을 보고하면 모두 남기세요. 카테고리에 해당하는 영역만 조사하세요.",
     ].join("\n"), {
       name: chosen.name, revision: chosen.revision, category: chosen.category,
-      publicUrls: identitySources.map(source => source.locator), domains: vocabulary(chosen.domains),
+      publicUrls: identitySources.map(source => researchQuery(source.locator)), domains: vocabulary(chosen.domains),
       connectors: connectors.connectors.map(connector => connector.id),
     }, INVESTIGATE);
     // 식별과 상세 조사에서 각각 매긴 지역 출처 ID의 충돌을 피한다.
@@ -568,18 +625,20 @@ export function openResearch(dataDir: string, connectors: Connectors, client: Re
     job.sources = [...new Map([...identitySources, ...found.sources.values()].map(source => [source.id, source])).values()];
     job.draft = identityDraft(chosen, identitySources);
     if (found.stop) { stop(job, found.stop); return; }
-    if (!found.citations.length) { stop(job, "unverified"); return; }
+    if (!found.citations.some(citation => citation.verified)) { stop(job, "unverified"); return; }
     job.phase = "normalizing";
     write(job);
     const normalized = await turn(job, [
-      boundaries, "조사 결과에서 검증 가능한 인용을 참조하여 JSON으로 정리하세요. 인용 목록의 ID만 사용하세요.",
+      boundaries, "조사 결과에서 검증 가능한 인용을 참조하여 JSON으로 정리하세요. verified가 true인 인용 ID만 쓰고, 원문 구간에 값·단위·조건이 함께 있는 경우만 주장으로 쓰세요.",
       "sources에는 사용한 출처 ID와 신뢰도(official, review, community, inferred)를 넣고, 각 구조와 주장에는 quote ID를 붙이세요.",
       "claims의 item ID는 model입니다. 포트의 connector·attachment는 domain이 빈 문자열입니다. 미확인 값은 주장 행을 만들지 마세요.",
       "배선에 쓰는 포트·노드 label과 사용 자원의 label은 인용문에 나오는 원래 명칭을 사용하세요.",
       "인터페이스 params의 주장은 자기 interface ID와 영역, 자원은 capacity/policy를 사용하세요.",
+      "researchOmission 필드는 검증된 원문에 메타의 제목으로 시작하는 완전한 목록이 명시되고 그 목록에 해당 항목이 없을 때만 omissions에 넣으세요.",
       "간선에 자원 사용 근거가 있으면 domain이 빈 문자열인 uses 주장에 자원 ID를 넣으세요. 같은 판본·조건의 값이 다르면 각각 남기세요.",
     ].join("\n"), { revision: chosen.revision, text: found.text, citations: found.citations,
-      sources: [...found.sources.values()], domains: vocabulary(chosen.domains), connectors: connectors.connectors.map(connector => connector.id) }, NORMALIZE, true);
+      sources: [...found.sources.values()].map(source => ({ ...source, locator: researchQuery(source.locator) })),
+      domains: vocabulary(chosen.domains), connectors: connectors.connectors.map(connector => connector.id) }, NORMALIZE, true);
     if (normalized.stop) { stop(job, normalized.stop); return; }
     job.draft = assembledDraft(chosen, decode(normalized.text), found, identitySources, connectors,
       job.candidates.filter(row => row.revision !== chosen.revision).map(row => row.revision));
@@ -597,8 +656,8 @@ export function openResearch(dataDir: string, connectors: Connectors, client: Re
     if (found.stop) { stop(job, found.stop); return; }
     job.candidates = identify(found);
     if (!job.candidates.length) { stop(job, "unidentified"); return; }
-    if (job.candidates.length > 1) job.phase = "choosing";
-    else await investigate(job, 0);
+    job.phase = "choosing";
+    if (job.candidates.length === 1) selectDetail(job, 0, true);
   }
 
   function run(job: Job, task: () => Promise<void>) {
@@ -610,12 +669,35 @@ export function openResearch(dataDir: string, connectors: Connectors, client: Re
       try { write(job); } catch { /* 마지막으로 저장에 성공한 기록을 둔다. */ }
     }).finally(() => active.delete(job.id));
   }
+  function cacheId(...parts: unknown[]) {
+    return createHash("sha256").update(JSON.stringify([CACHE_VERSION, ...parts])).digest("hex");
+  }
+
+  function detailId(identity: Job, index: number) {
+    const { name, brand, revision, year } = identity.candidates[index]!;
+    return cacheId("detail", identity.id, name, brand, revision, year);
+  }
+
+  function viewIdentity(job: Job) {
+    const detail = job.phase === "choosing" && job.candidates.length === 1 ? read(detailId(job, 0)) : undefined;
+    return view(detail ?? job);
+  }
+
+  function selectDetail(identity: Job, index: number, refresh = false) {
+    const id = detailId(identity, index);
+    const cached = read(id);
+    if (cached && (!refresh || !view(cached).stale || active.has(id))) return cached;
+    const job: Job = { ...identity, id, phase: "researching", retrievedAt: now().toISOString(), raw: [] };
+    run(job, () => investigate(job, index));
+    return job;
+  }
+
   return {
     config: { enabled: client !== null, budgetUsd: BUDGET_USD, maxSearches: MAX_SEARCHES, cacheDays: CACHE_DAYS },
     status(id: string) {
       const job = jobId.safeParse(id).success ? read(id) : undefined;
       if (!job) throw new LibraryError(404, "id", "조사 기록을 찾을 수 없습니다.");
-      return view(job);
+      return viewIdentity(job);
     },
     submit(payload: unknown) {
       if (!client) throw new LibraryError(403, "", "ANTHROPIC_API_KEY를 넣으면 조사를 켤 수 있습니다.");
@@ -626,15 +708,17 @@ export function openResearch(dataDir: string, connectors: Connectors, client: Re
         const job = read(action.id);
         if (!job || job.phase !== "choosing" || job.retrievedAt !== action.retrievedAt || view(job).stale || !job.candidates[action.index])
           throw new LibraryError(409, "index", "현재 조사에서 선택할 수 있는 판본이 아닙니다.");
-        job.phase = "researching";
-        run(job, () => investigate(job, action.index));
-        return view(job);
+        return view(selectDetail(job, action.index, true));
       }
-      const model = publicUrl(action.query, true) ?? action.query;
-      const id = createHash("sha256").update(model).digest("hex");
+      const model = researchQuery(action.query);
+      const id = cacheId("identity", model);
       const cached = read(id);
-      if (cached && (!action.refresh || active.has(id))) return view(cached);
-      const job: Job = { id, query: model, phase: "identifying", retrievedAt: now().toISOString(),
+      if (cached && (!action.refresh || active.has(id))) {
+        if (cached.phase === "choosing" && cached.candidates.length === 1 && !read(detailId(cached, 0)) && !view(cached).stale)
+          return view(selectDetail(cached, 0));
+        return viewIdentity(cached);
+      }
+      const job: Job = { id, version: CACHE_VERSION, query: model, phase: "identifying", retrievedAt: now().toISOString(),
         spentUsd: 0, searches: 0, sources: [], candidates: [], raw: [] };
       run(job, () => identifyAndInvestigate(job));
       return view(job);

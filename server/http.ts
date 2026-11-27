@@ -6,7 +6,7 @@ import { createServer, type IncomingMessage, type ServerResponse } from "node:ht
 import { extname, join, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { collect } from "./collect.ts";
-import { evidence } from "./evidence.ts";
+import { evidence, removeUnlinkedEvidence } from "./evidence.ts";
 import { LibraryError, openLibrary, sceneIdPattern } from "./library.ts";
 import { configuredResearchClient, openResearch } from "./research.ts";
 
@@ -71,7 +71,8 @@ function staticFile(buildDir: string, path: string, response: ServerResponse): b
 export async function startServer({ port = PORT, dataDir = join(ROOT, "userdata"), buildDir = join(ROOT, "dist", "app"),
   researchClient = configuredResearchClient(ROOT) } = {}) {
   const library = openLibrary(ROOT, dataDir);
-  const research = openResearch(dataDir, library.describe().connectors, researchClient);
+  const { scenes, connectors } = library.describe();
+  const research = openResearch(dataDir, connectors, researchClient);
   async function handle(request: IncomingMessage, response: ServerResponse) {
     response.setHeader("X-Content-Type-Options", "nosniff");
     response.setHeader("Cache-Control", "no-store");
@@ -145,6 +146,15 @@ export async function startServer({ port = PORT, dataDir = join(ROOT, "userdata"
   });
   server.listen(port, HOST);
   await once(server, "listening");
+  try {
+    removeUnlinkedEvidence(dataDir, scenes.flatMap(({ id }) => {
+      const scene = library.readScene(id);
+      return scene ? [scene.text] : [];
+    }));
+  } catch (error) {
+    server.close();
+    throw error;
+  }
   return server;
 }
 

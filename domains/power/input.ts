@@ -12,8 +12,13 @@ const watts = fact(z.number().nonnegative(), POWER_UNIT);
 // 빠진 전압은 목록에 없다는 뜻이고, 명시적인 null은 해당 전압에서 협상 가능한지 미확인이다.
 const pd = z.strictObject({
   ...Object.fromEntries(USB_PD_FIXED_SOURCE_LIMITS.flatMap(({ voltageV, maxCurrentA }) => [
-    ["pdo" + voltageV, fact(z.number().nonnegative().max(maxCurrentA), "A").optional().meta({ title: `${voltageV} V 송전 PDO 전류`, unit: "A" })],
-    ["accepts" + voltageV, fact(z.boolean()).optional().meta({ title: `${voltageV} V 수전 지원` })],
+    ["pdo" + voltageV, fact(z.number().nonnegative().max(maxCurrentA), "A").optional().meta({
+      title: `${voltageV} V 송전 PDO 전류`, unit: "A",
+      researchOmission: { headings: ["all source PDOs", "전체 송전 PDO"], voltageV },
+    })],
+    ["accepts" + voltageV, fact(z.boolean()).optional().meta({
+      title: `${voltageV} V 수전 지원`, researchOmission: { headings: ["all sink PDOs", "전체 수전 PDO"], voltageV },
+    })],
   ])),
   maxW: watts.meta({ title: "포트 최대 전력", unit: POWER_UNIT }),
   reserveW: watts.optional().meta({ title: "패스스루 선점 전력", unit: POWER_UNIT }),

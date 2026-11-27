@@ -18,7 +18,7 @@ import { mountScenario } from "./scenario.ts";
 export function mountWorkbench(root: HTMLElement, initial: SceneDocument, library: Library, options: {
   title?: string;
   scenarioId?: string;
-  onChange?: (document: SceneDocument, intent: SceneIntent) => void;
+  onChange?: (document: SceneDocument, intent: SceneIntent) => void | Promise<boolean>;
   onSelectConnection?: (id: string) => void;
   onSelectScenario?: (id: string) => void;
 } = {}) {
@@ -135,26 +135,38 @@ export function mountWorkbench(root: HTMLElement, initial: SceneDocument, librar
   let openCreator: () => void;
   if (options.onChange) trigger.hidden = false;
   trigger.onclick = () => {
-    if (!dialog.childElementCount) openCreator = mountCreator(dialog, documents, async (model, instanceId) => {
-      const item: InventoryItem = { instanceId, modelId: model.modelId, revision: model.revision, state: "owned" };
+    if (!dialog.childElementCount) openCreator = mountCreator(dialog, documents, async (model, newId) => {
+      const key = modelKey(model);
+      const pending = "benchwire:pending-placement:" + JSON.stringify([scene.sceneId, key]);
+      const instanceId = sessionStorage.getItem(pending) ?? newId;
+      const existing = stock.get(instanceId);
+      const item: InventoryItem = existing ?? { instanceId, modelId: model.modelId, revision: model.revision, state: "owned" };
+      const storedModel = existing ? models.get(key)! : model;
+      if (scene.items.some(row => row.instanceId === instanceId)) {
+        sessionStorage.removeItem(pending);
+        return;
+      }
       const center = canvas.center();
       const position = { x: center.x - CARD_WIDTH / 2, y: center.y - 48 };
-      const withModel = { ...documents, models: new Map(models).set(modelKey(model), model) };
+      const withModel = { ...documents, models: new Map(models).set(key, storedModel) };
       const draft = () => scene.items.some(row => row.instanceId === instanceId) ? scene
         : place({ ...scene, items: [...scene.items, item] }, instanceId, position);
       const before = scene;
       let next = draft();
       let loaded = loadAssessment(next, withModel, readScenario());
       if ("error" in loaded) throw new Error(loaded.error);
-      await persistModel(model, item);
+      sessionStorage.setItem(pending, instanceId);
+      if (!existing) await persistModel(model, item);
       if (!root.contains(dialog)) return;
       if (scene !== before) {
         next = draft();
         loaded = loadAssessment(next, withModel, readScenario());
         if ("error" in loaded) throw new Error(loaded.error);
       }
-      refreshCatalog([model], [item]);
-      commit(next, { kind: "add-item", item, position }, loaded);
+      if (!existing) refreshCatalog([storedModel], [item]);
+      if (await commit(next, { kind: "add-item", item, position }, loaded) === false)
+        throw new Error("실물은 저장했습니다. 장면을 다시 열고 배치를 재시도하세요.");
+      sessionStorage.removeItem(pending);
     });
     openCreator();
   };
@@ -259,8 +271,7 @@ export function mountWorkbench(root: HTMLElement, initial: SceneDocument, librar
       scene = next;
       use(loaded, intent.kind !== "edit-scenario");
     }
-    options.onChange?.(scene, intent);
-    return true;
+    return options.onChange?.(scene, intent) ?? true;
   }
 
   function edit(intent: SceneIntent) {
@@ -317,7 +328,7 @@ export function mountWorkbench(root: HTMLElement, initial: SceneDocument, librar
 
   function editScenario(next: SceneDocument, scenarioId = readScenario()) {
     const loaded = load(next, scenarioId);
-    return loaded ? commit(next, { kind: "edit-scenario" }, loaded) : false;
+    return loaded ? commit(next, { kind: "edit-scenario" }, loaded) !== false : false;
   }
 
   const loaded = load(initial);

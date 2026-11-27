@@ -2,6 +2,7 @@
 import charger from "../catalog/templates/usb-c-charger.json" with { type: "json" };
 import { domains, type DomainRegistration } from "../domains/registry.ts";
 import { modelFile, parseDocument } from "../scene/files.ts";
+import { researchQuery } from "../scene/research-query.ts";
 import type { ResearchConfig, ResearchStatus } from "../server/research.ts";
 import type { Documents } from "./assessment.ts";
 import { modelKey, type InventoryItem, type Model, type Port } from "./document.ts";
@@ -117,12 +118,14 @@ function mountResearch(root: HTMLElement, fillDraft: (model: Model) => void) {
   model.maxLength = 250;
   const price = el("p");
   const notice = el("p", "조사를 시작하면 입력한 모델명 또는 공개 URL을 Claude로 보냅니다.");
+  const preview = el("output");
+  preview.setAttribute("aria-label", "Claude로 보낼 입력");
   const start = button("조사 시작");
   const refresh = button("조사 갱신");
   const status = el("p");
   status.setAttribute("role", "status");
   const details = el("div");
-  root.append(notice, price, start, refresh, status, details);
+  root.append(notice, preview, price, start, refresh, status, details);
   start.disabled = model.disabled = true;
   refresh.hidden = true;
   let enabled = false;
@@ -162,8 +165,64 @@ function mountResearch(root: HTMLElement, fillDraft: (model: Model) => void) {
     if (result.draft) {
       const draft = result.draft;
       const use = button("조사 초안 불러오기");
-      use.onclick = () => fillDraft(draft.model);
+      const attachments = new Map<string, Claim>();
+      const edges: (() => Edge | undefined)[] = [];
+      use.onclick = () => fillDraft({
+        ...draft.model,
+        ports: draft.model.ports.map(port => ({ ...port, attachment: attachments.get(port.id) ?? port.attachment })),
+        edges: [...draft.model.edges, ...edges.flatMap(read => read() ?? [])],
+      });
       details.append(el("p", "초안을 불러오면 생성기의 입력이 바뀝니다. 내용을 확인한 뒤 저장하세요."), use);
+      const { proposals } = draft;
+      if (proposals.attachments.length || proposals.edges.length) {
+        const review = section(details, "AI 제안");
+        review.append(el("p", "인용문을 읽고 확인한 배선만 선택한 뒤 초안을 불러오세요."));
+        function approve(box: HTMLElement, title: string, quote: string, proof: Claim) {
+          const checkbox = el("input");
+          checkbox.type = "checkbox";
+          field(box, title, checkbox);
+          box.append(el("blockquote", quote), ...proof.sources.map(citation));
+          return checkbox;
+        }
+        const byPort = new Map<string, HTMLInputElement[]>();
+        const nodeLabel = (id: string) => draft.model.nodes.find(node => node.id === id)?.label ?? id;
+        for (const { port, attachment, quote } of proposals.attachments) {
+          const label = draft.model.ports.find(row => row.id === port)?.label ?? port;
+          const checkbox = approve(review, `부착 · ${label} → ${nodeLabel(String(attachment.value))}`, quote, attachment);
+          const related = byPort.get(port) ?? [];
+          related.push(checkbox);
+          byPort.set(port, related);
+          checkbox.onchange = () => {
+            if (!checkbox.checked) { attachments.delete(port); return; }
+            for (const other of related) if (other !== checkbox) other.checked = false;
+            attachments.set(port, attachment);
+          };
+        }
+        for (const { quote, uses, ...edge } of proposals.edges) {
+          const accepted = approve(review, `간선 · ${nodeLabel(edge.from)} → ${nodeLabel(edge.to)}`, quote, edge.evidence);
+          const resources = uses.map(({ quote, ...claim }) => {
+            const control = approve(review, "자원 사용 · " + claim.resource, quote, claim.evidence);
+            control.disabled = true;
+            return { claim, control };
+          });
+          accepted.onchange = () => {
+            for (const { control } of resources) {
+              control.disabled = !accepted.checked;
+              if (control.disabled) control.checked = false;
+            }
+          };
+          edges.push(() => accepted.checked ? { ...edge, uses: resources.filter(row => row.control.checked).map(row => row.claim) } : undefined);
+        }
+      }
+      if (draft.omissions.length) {
+        const list = el("ul");
+        for (const omission of draft.omissions) {
+          const row = el("li", omission.field);
+          row.append(el("blockquote", omission.quote), citation(omission.source));
+          list.append(row);
+        }
+        details.append(el("p", "완전한 목록에서 제외된 항목"), list);
+      }
       if (draft.conflicts.length) {
         const conflicts = el("ul");
         for (const conflict of draft.conflicts) {
@@ -201,7 +260,7 @@ function mountResearch(root: HTMLElement, fillDraft: (model: Model) => void) {
 
   function controls() {
     model.disabled = !enabled || running;
-    start.disabled = !enabled || running;
+    start.disabled = !enabled || running || !researchQuery(model.value);
     refresh.disabled = running;
   }
 
@@ -229,9 +288,13 @@ function mountResearch(root: HTMLElement, fillDraft: (model: Model) => void) {
     void receive(researchJson("/api/research", payload));
   }
 
-  start.onclick = () => begin({ action: "start", query: model.value });
-  refresh.onclick = () => begin({ action: "start", query: model.value, refresh: true });
-  model.oninput = () => { refresh.hidden = true; };
+  start.onclick = () => begin({ action: "start", query: researchQuery(model.value) });
+  refresh.onclick = () => begin({ action: "start", query: researchQuery(model.value), refresh: true });
+  model.oninput = () => {
+    preview.textContent = researchQuery(model.value);
+    refresh.hidden = true;
+    controls();
+  };
   model.onkeydown = event => {
     if (event.key !== "Enter" || event.isComposing) return;
     event.preventDefault();

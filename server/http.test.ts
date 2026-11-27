@@ -140,6 +140,37 @@ test("T8 퀘스트 증거는 같은 출처의 짧은 메모와 제한된 이미�
   assert.equal(readFileSync(join(files.dataDir, "evidence", hash + ".txt"), "utf8"), "측정 메모");
 });
 
+
+test("실패한 장면 저장의 첨부만 재시작할 때 제거한다", async t => {
+  const files = workspace(t);
+  const server = await files.open();
+  const png = Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+nm6kAAAAASUVORK5CYII=", "base64");
+  async function attach(note: string) {
+    const body = new FormData();
+    body.set("note", note);
+    body.set("photo", new Blob([Uint8Array.from(png)], { type: "image/png" }), "photo.png");
+    const response = await fetch(server.origin + "/api/evidence", { method: "POST", headers: { Origin: server.origin }, body });
+    assert.equal(response.status, 201);
+    return response.headers.get("Location")!;
+  }
+  const kept = await attach("저장 성공");
+  const orphan = await attach("장면 저장 실패");
+  const example = await (await server.get("/api/scenes/network")).json() as SceneDocument;
+  const source = (photo: string) => ({ id: "verification", title: "검증 퀘스트", retrievedAt: "2026-11-27",
+    locator: "verification:" + new URLSearchParams({ photo }) });
+  const scene = { ...example, sceneId: "evidence-kept", sources: [...example.sources, source(kept)] };
+  const saved = await server.put("/api/scenes/evidence-kept", scene);
+  assert.equal(saved.status, 201);
+  const failed = await server.put("/api/scenes/evidence-kept", { ...scene, sources: [...example.sources, source(orphan)] }, '"expired"');
+  assert.equal(failed.status, 412);
+  await server.close();
+  const restarted = await files.open();
+  assert.equal((await restarted.get(kept)).status, 200);
+  assert.equal((await restarted.get(orphan)).status, 404);
+  const hash = kept.split("/").at(-1)!;
+  assert.deepEqual(readdirSync(join(files.dataDir, "evidence")).sort(), [hash, hash + ".txt"]);
+});
+
 test("같은 ETag를 읽은 두 탭 중 한 저장만 성공하고 잘못된 장면은 원본을 보존한다", async t => {
   const files = workspace(t);
   const { get, put } = await files.open();
