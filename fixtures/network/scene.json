@@ -1,0 +1,49 @@
+{
+  "sceneId": "network",
+  "sources": [
+    {"id":"network-scene","title":"합성 LAN·회선·PoE 작업","locator":"fixture:network/network-scene","retrievedAt":"2026-11-26"}
+  ],
+  "items": [
+    {"instanceId":"host-a","modelId":"network-host","revision":"1"},
+    {"instanceId":"host-b","modelId":"network-host","revision":"1"},
+    {"instanceId":"server","modelId":"network-host","revision":"1"},
+    {"instanceId":"router","modelId":"network-router","revision":"1"},
+    {"instanceId":"access","modelId":"network-access","revision":"1"},
+    {"instanceId":"lan-a-wire","modelId":"network-copper","revision":"1"},
+    {"instanceId":"lan-b-wire","modelId":"network-copper","revision":"1"},
+    {"instanceId":"uplink-wire","modelId":"network-uplink-wire","revision":"1"},
+    {"instanceId":"wan-wire","modelId":"network-copper","revision":"1"},
+    {"instanceId":"pse","modelId":"network-pse","revision":"1"},
+    {"instanceId":"pd","modelId":"network-pd","revision":"1"},
+    {"instanceId":"poe-wire","modelId":"network-copper","revision":"1"}
+  ],
+  "connections": [
+    {"id":"lan-a","from":{"instanceId":"host-a","id":"lan"},"to":{"instanceId":"router","id":"lan-a"},"parts":[{"instanceId":"lan-a-wire","entry":"a","exit":"b"}],"evidence":{"value":true,"confidence":"inferred","sources":["network-scene"]}},
+    {"id":"lan-b","from":{"instanceId":"host-b","id":"lan"},"to":{"instanceId":"router","id":"lan-b"},"parts":[{"instanceId":"lan-b-wire","entry":"a","exit":"b"}],"evidence":{"value":true,"confidence":"inferred","sources":["network-scene"]}},
+    {"id":"uplink","from":{"instanceId":"router","id":"lan-uplink"},"to":{"instanceId":"server","id":"lan"},"parts":[{"instanceId":"uplink-wire","entry":"a","exit":"b"}],"evidence":{"value":true,"confidence":"inferred","sources":["network-scene"]}},
+    {"id":"wan","from":{"instanceId":"router","id":"wan"},"to":{"instanceId":"access","id":"access"},"parts":[{"instanceId":"wan-wire","entry":"a","exit":"b"}],"evidence":{"value":true,"confidence":"inferred","sources":["network-scene"]}},
+    {"id":"poe","from":{"instanceId":"pse","id":"pse"},"to":{"instanceId":"pd","id":"pd"},"parts":[{"instanceId":"poe-wire","entry":"a","exit":"b"}],"evidence":{"value":true,"confidence":"inferred","sources":["network-scene"]}}
+  ],
+  "workloads": [
+    {"id":"internet-900","domain":"network","kind":"traffic","from":{"instanceId":"host-a","id":"nic"},"to":{"instanceId":"access","id":"service"},"request":{"throughput":{"value":900,"unit":"Mbps","confidence":"inferred","sources":["network-scene"]}}},
+    {"id":"internet-1000","domain":"network","kind":"traffic","from":{"instanceId":"host-a","id":"nic"},"to":{"instanceId":"access","id":"service"},"request":{"throughput":{"value":1000,"unit":"Mbps","confidence":"inferred","sources":["network-scene"]}}},
+    {"id":"lan-a","domain":"network","kind":"traffic","from":{"instanceId":"host-a","id":"nic"},"to":{"instanceId":"server","id":"nic"},"request":{"throughput":{"value":900,"unit":"Mbps","confidence":"inferred","sources":["network-scene"]}}},
+    {"id":"lan-b","domain":"network","kind":"traffic","from":{"instanceId":"host-b","id":"nic"},"to":{"instanceId":"server","id":"nic"},"request":{"throughput":{"value":900,"unit":"Mbps","confidence":"inferred","sources":["network-scene"]}}},
+    {"id":"first-hop","domain":"network","kind":"traffic","from":{"instanceId":"host-a","id":"nic"},"to":{"instanceId":"router","id":"lan-a"},"request":{"throughput":{"value":900,"unit":"Mbps","confidence":"inferred","sources":["network-scene"]}}},
+    {"id":"poe-12","domain":"network","kind":"power","from":{"instanceId":"pse","id":"supply"},"to":{"instanceId":"pd","id":"load"},"request":{"watts":{"value":12,"unit":"W","confidence":"inferred","sources":["network-scene"]}}},
+    {"id":"poe-14","domain":"network","kind":"power","from":{"instanceId":"pse","id":"supply"},"to":{"instanceId":"pd","id":"load"},"request":{"watts":{"value":14,"unit":"W","confidence":"inferred","sources":["network-scene"]}}},
+    {"id":"poe-reverse","domain":"network","kind":"power","from":{"instanceId":"pd","id":"load"},"to":{"instanceId":"pse","id":"supply"},"request":{"watts":{"value":12,"unit":"W","confidence":"inferred","sources":["network-scene"]}}},
+    {"id":"poe-ethernet","domain":"network","kind":"traffic","from":{"instanceId":"pse","id":"supply"},"to":{"instanceId":"pd","id":"load"},"request":{"throughput":{"value":900,"unit":"Mbps","confidence":"inferred","sources":["network-scene"]}}}
+  ],
+  "scenarios": [
+    {"id":"internet-900","members":["internet-900"]},
+    {"id":"internet-1000","members":["internet-1000"]},
+    {"id":"lan-a","members":["lan-a"]},
+    {"id":"first-hop","members":["first-hop"]},
+    {"id":"poe-12","members":["poe-12"]},
+    {"id":"poe-14","members":["poe-14"]},
+    {"id":"poe-reverse","members":["poe-reverse"]},
+    {"id":"poe-ethernet","members":["poe-ethernet"]},
+    {"id":"shared-lan","members":["lan-a","lan-b"]}
+  ]
+}

@@ -1,0 +1,34 @@
+{
+  "modelId": "network-router",
+  "revision": "1",
+  "kind": "device",
+  "brand": "합성",
+  "name": "합성 스위치 라우터",
+  "category": "네트워크 시험",
+  "sources": [
+    {"id":"network-router","title":"합성 스위치 라우터","locator":"fixture:network/network-router","retrievedAt":"2026-11-26"}
+  ],
+  "nodes": [
+    {"id":"lan-a","kind":"junction","label":"lan-a"},
+    {"id":"lan-b","kind":"junction","label":"lan-b"},
+    {"id":"lan-uplink","kind":"junction","label":"lan-uplink"},
+    {"id":"fabric","kind":"junction","label":"fabric"},
+    {"id":"wan","kind":"junction","label":"wan"}
+  ],
+  "ports": [
+    {"id":"lan-a","label":"lan-a","connector":{"value":"network-socket","confidence":"inferred","sources":["network-router"]},"attachment":{"value":"lan-a","confidence":"inferred","sources":["network-router"]},"interfaces":[{"id":"lan-a","domain":"network","protocol":"Ethernet","role":"bidirectional","evidence":{"value":true,"confidence":"inferred","sources":["network-router"]},"params":{"baseTModes":{"value":"1000BASE-T","confidence":"inferred","sources":["network-router"]},"networkRole":{"value":"lan","confidence":"inferred","sources":["network-router"]}}}]},
+    {"id":"lan-b","label":"lan-b","connector":{"value":"network-socket","confidence":"inferred","sources":["network-router"]},"attachment":{"value":"lan-b","confidence":"inferred","sources":["network-router"]},"interfaces":[{"id":"lan-b","domain":"network","protocol":"Ethernet","role":"bidirectional","evidence":{"value":true,"confidence":"inferred","sources":["network-router"]},"params":{"baseTModes":{"value":"1000BASE-T","confidence":"inferred","sources":["network-router"]},"networkRole":{"value":"lan","confidence":"inferred","sources":["network-router"]}}}]},
+    {"id":"lan-uplink","label":"lan-uplink","connector":{"value":"network-socket","confidence":"inferred","sources":["network-router"]},"attachment":{"value":"lan-uplink","confidence":"inferred","sources":["network-router"]},"interfaces":[{"id":"lan-uplink","domain":"network","protocol":"Ethernet","role":"bidirectional","evidence":{"value":true,"confidence":"inferred","sources":["network-router"]},"params":{"baseTModes":{"value":"1000BASE-T,2.5GBASE-T","confidence":"inferred","sources":["network-router"]},"networkRole":{"value":"lan","confidence":"inferred","sources":["network-router"]}}}]},
+    {"id":"wan","label":"wan","connector":{"value":"network-socket","confidence":"inferred","sources":["network-router"]},"attachment":{"value":"wan","confidence":"inferred","sources":["network-router"]},"interfaces":[{"id":"wan","domain":"network","protocol":"Ethernet","role":"bidirectional","evidence":{"value":true,"confidence":"inferred","sources":["network-router"]},"params":{"baseTModes":{"value":"1000BASE-T","confidence":"inferred","sources":["network-router"]},"networkRole":{"value":"wan","confidence":"inferred","sources":["network-router"]}}}]}
+  ],
+  "edges": [
+    {"id":"lan-a-fabric","from":"lan-a","to":"fabric","evidence":{"value":true,"confidence":"inferred","sources":["network-router"]},"uses":[{"resource":"backplane","evidence":{"value":true,"confidence":"inferred","sources":["network-router"]}}]},
+    {"id":"lan-b-fabric","from":"lan-b","to":"fabric","evidence":{"value":true,"confidence":"inferred","sources":["network-router"]},"uses":[{"resource":"backplane","evidence":{"value":true,"confidence":"inferred","sources":["network-router"]}}]},
+    {"id":"fabric-lan-uplink","from":"fabric","to":"lan-uplink","evidence":{"value":true,"confidence":"inferred","sources":["network-router"]},"uses":[{"resource":"uplink","evidence":{"value":true,"confidence":"inferred","sources":["network-router"]}}]},
+    {"id":"fabric-wan","from":"fabric","to":"wan","evidence":{"value":true,"confidence":"inferred","sources":["network-router"]},"uses":[]}
+  ],
+  "resources": [
+    {"id":"backplane","kind":"backplane","domain":"network","unit":"Mbps","capacity":{"value":1400,"unit":"Mbps","confidence":"inferred","sources":["network-router"]},"policy":{"value":"max-min","confidence":"inferred","sources":["network-router"]}},
+    {"id":"uplink","kind":"uplink","domain":"network","unit":"Mbps","capacity":{"value":1200,"unit":"Mbps","confidence":"inferred","sources":["network-router"]},"policy":{"value":"max-min","confidence":"inferred","sources":["network-router"]}}
+  ]
+}

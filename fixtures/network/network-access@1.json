@@ -1,0 +1,24 @@
+{
+  "modelId": "network-access",
+  "revision": "1",
+  "kind": "device",
+  "brand": "합성",
+  "name": "합성 회선 제공 장치",
+  "category": "네트워크 시험",
+  "sources": [
+    {"id":"network-access","title":"합성 회선 제공 장치","locator":"fixture:network/network-access","retrievedAt":"2026-11-26"}
+  ],
+  "nodes": [
+    {"id":"access","kind":"junction","label":"access"},
+    {"id":"service","kind":"junction","label":"service"}
+  ],
+  "ports": [
+    {"id":"access","label":"access","connector":{"value":"network-socket","confidence":"inferred","sources":["network-access"]},"attachment":{"value":"access","confidence":"inferred","sources":["network-access"]},"interfaces":[{"id":"access","domain":"network","protocol":"Ethernet","role":"bidirectional","evidence":{"value":true,"confidence":"inferred","sources":["network-access"]},"params":{"baseTModes":{"value":"1000BASE-T","confidence":"inferred","sources":["network-access"]},"networkRole":{"value":"provider","confidence":"inferred","sources":["network-access"]}}}]}
+  ],
+  "edges": [
+    {"id":"access-service","from":"access","to":"service","evidence":{"value":true,"confidence":"inferred","sources":["network-access"]},"uses":[{"resource":"line","evidence":{"value":true,"confidence":"inferred","sources":["network-access"]}}]}
+  ],
+  "resources": [
+    {"id":"line","kind":"line","domain":"network","unit":"Mbps","capacity":{"value":1000,"unit":"Mbps","confidence":"inferred","sources":["network-access"]},"policy":{"value":"max-min","confidence":"inferred","sources":["network-access"]}}
+  ]
+}

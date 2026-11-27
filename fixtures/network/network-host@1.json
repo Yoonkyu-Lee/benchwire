@@ -1,0 +1,19 @@
+{
+  "modelId": "network-host",
+  "revision": "1",
+  "kind": "device",
+  "brand": "합성",
+  "name": "합성 LAN 단말",
+  "category": "네트워크 시험",
+  "sources": [
+    {"id":"network-host","title":"합성 LAN 단말","locator":"fixture:network/network-host","retrievedAt":"2026-11-26"}
+  ],
+  "nodes": [
+    {"id":"nic","kind":"junction","label":"nic"}
+  ],
+  "ports": [
+    {"id":"lan","label":"lan","connector":{"value":"network-socket","confidence":"inferred","sources":["network-host"]},"attachment":{"value":"nic","confidence":"inferred","sources":["network-host"]},"interfaces":[{"id":"lan","domain":"network","protocol":"Ethernet","role":"bidirectional","evidence":{"value":true,"confidence":"inferred","sources":["network-host"]},"params":{"baseTModes":{"value":"1000BASE-T,2.5GBASE-T","confidence":"inferred","sources":["network-host"]},"networkRole":{"value":"lan","confidence":"inferred","sources":["network-host"]}}}]}
+  ],
+  "edges": [],
+  "resources": []
+}

@@ -24,10 +24,14 @@ export const ETHERNET_COPPER_CHANNEL_REACH = [
   { mode: "5GBASE-T", category: "Cat5e", screening: "any", reachM: 100, requiresExtraQualification: true },
   { mode: "5GBASE-T", category: "Cat6", screening: "any", reachM: 100, requiresExtraQualification: true },
   { mode: "5GBASE-T", category: "Cat6A", screening: "any", reachM: 100, requiresExtraQualification: false },
-  { mode: "10GBASE-T", category: "Cat6", screening: "unscreened", reachM: 55, requiresExtraQualification: true },
+  // 비차폐 Cat6를 55 m보다 길게 쓰려면 외래 누화를 완화한 설치 채널을 검증한다.
+  { mode: "10GBASE-T", category: "Cat6", screening: "unscreened", reachM: 55, mitigatedReachM: 100, requiresExtraQualification: true },
   { mode: "10GBASE-T", category: "Cat6", screening: "screened", reachM: 100, requiresExtraQualification: true },
   { mode: "10GBASE-T", category: "Cat6A", screening: "any", reachM: 100, requiresExtraQualification: false },
 ] as const;
+
+// 구리 채널 등급을 규격표의 낮은 등급부터 비교한다.
+export const COPPER_CATEGORIES = [...new Set(ETHERNET_COPPER_CHANNEL_REACH.map(row => row.category))];
 
 // 태그 없는 최대 MAC 페이로드 효율은 MTU ÷ (MTU + 헤더 + FCS + 프리앰블 + SFD + IFG)다.
 // 출처: IEEE 802.3 §3.2 및 §4.4, RFC 6349 §4.1.1 (신뢰도: official)
@@ -39,6 +43,9 @@ export const ETHERNET_UNTAGGED_FRAME = {
   sfdBytes: 1,
   interFrameGapByteTimes: 12,
 } as const;
+
+const { mtuBytes, macHeaderBytes, fcsBytes, preambleBytes, sfdBytes, interFrameGapByteTimes } = ETHERNET_UNTAGGED_FRAME;
+export const MAC_PAYLOAD_FRACTION = mtuBytes / (mtuBytes + macHeaderBytes + fcsBytes + preambleBytes + sfdBytes + interFrameGapByteTimes);
 
 // 각 Type의 최고 등급에서 PSE 포트 예산과 PD 입력 상한이다. Type 1은 802.3af 원판의 12.95 W를 쓴다.
 // 출처: IEEE 802.3af-2003 §33.3.5.2·§33.3.5.4, IEEE 802.3at Clause 33, IEEE 802.3bt-2018 표 145-11·145-29 (신뢰도: official)

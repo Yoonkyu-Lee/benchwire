@@ -1,0 +1,21 @@
+{
+  "modelId": "network-pse",
+  "revision": "1",
+  "kind": "device",
+  "brand": "합성",
+  "name": "합성 PoE 송전 장치",
+  "category": "네트워크 시험",
+  "sources": [
+    {"id":"network-pse","title":"합성 PoE 송전 장치","locator":"fixture:network/network-pse","retrievedAt":"2026-11-26"}
+  ],
+  "nodes": [
+    {"id":"supply","kind":"junction","label":"supply"}
+  ],
+  "ports": [
+    {"id":"pse","label":"pse","connector":{"value":"network-socket","confidence":"inferred","sources":["network-pse"]},"attachment":{"value":"supply","confidence":"inferred","sources":["network-pse"]},"interfaces":[{"id":"power","domain":"network","protocol":"PoE PSE","role":"source","evidence":{"value":true,"confidence":"inferred","sources":["network-pse"]},"params":{"poeType":{"value":2,"confidence":"inferred","sources":["network-pse"]},"budgetResource":{"value":"port-budget","confidence":"inferred","sources":["network-pse"]}}},{"id":"data","domain":"network","protocol":"Ethernet","role":"bidirectional","evidence":{"value":true,"confidence":"inferred","sources":["network-pse"]},"params":{"baseTModes":{"value":"1000BASE-T","confidence":"inferred","sources":["network-pse"]},"networkRole":{"value":"lan","confidence":"inferred","sources":["network-pse"]}}}]}
+  ],
+  "edges": [],
+  "resources": [
+    {"id":"port-budget","kind":"poe-port","domain":"network","unit":"W","capacity":{"value":15,"unit":"W","confidence":"inferred","sources":["network-pse"]},"policy":{"value":"max-min","confidence":"inferred","sources":["network-pse"]}}
+  ]
+}
