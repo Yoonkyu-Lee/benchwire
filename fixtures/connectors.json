@@ -1,0 +1,12 @@
+{
+  "sources": [
+    {"id":"test-fit","title":"합성 시험용 결합쌍 정의","locator":"fixture:test-fit","retrievedAt":"2026-11-26"}
+  ],
+  "connectors": [
+    {"id":"trial-plug","endForm":{"value":"plug","confidence":"inferred","sources":["test-fit"]}},
+    {"id":"trial-socket","endForm":{"value":"receptacle","confidence":"inferred","sources":["test-fit"]}}
+  ],
+  "mates": [
+    {"a":"trial-plug","b":"trial-socket","evidence":{"value":true,"confidence":"inferred","sources":["test-fit"]}}
+  ]
+}

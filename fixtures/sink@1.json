@@ -1,0 +1,24 @@
+{
+  "modelId": "sink",
+  "revision": "1",
+  "kind": "device",
+  "brand": "합성",
+  "name": "sink",
+  "category": "시험",
+  "sources": [
+    {"id":"sink","title":"sink 합성 시험 정의","locator":"fixture:sink","retrievedAt":"2026-11-26"}
+  ],
+  "nodes": [
+    {"id":"entry","kind":"junction","label":"entry"},
+    {"id":"end","kind":"junction","label":"end"}
+  ],
+  "ports": [
+    {"id":"in","label":"in","connector":{"value":"trial-socket","confidence":"inferred","sources":["sink"]},"attachment":{"value":"entry","confidence":"inferred","sources":["sink"]},"interfaces":[{"id":"in-iface","domain":"trial","protocol":"pulse","role":"bidirectional","evidence":{"value":true,"confidence":"inferred","sources":["sink"]},"params":{"rate":{"value":1200,"unit":"회/s","confidence":"inferred","sources":["sink"]}}}]}
+  ],
+  "edges": [
+    {"id":"entry-end","from":"entry","to":"end","evidence":{"value":true,"confidence":"inferred","sources":["sink"]},"uses":[{"resource":"medium","evidence":{"value":true,"confidence":"inferred","sources":["sink"]}}]}
+  ],
+  "resources": [
+    {"id":"medium","kind":"rate","domain":"trial","unit":"회/s","capacity":{"value":1000,"unit":"회/s","confidence":"inferred","sources":["sink"]},"policy":{"value":"max-min","confidence":"inferred","sources":["sink"]}}
+  ]
+}

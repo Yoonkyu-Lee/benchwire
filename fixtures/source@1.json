@@ -1,0 +1,26 @@
+{
+  "modelId": "source",
+  "revision": "1",
+  "kind": "device",
+  "brand": "합성",
+  "name": "source",
+  "category": "시험",
+  "sources": [
+    {"id":"source","title":"source 합성 시험 정의","locator":"fixture:source","retrievedAt":"2026-11-26"}
+  ],
+  "nodes": [
+    {"id":"root","kind":"junction","label":"root"},
+    {"id":"out","kind":"junction","label":"out"}
+  ],
+  "ports": [
+    {"id":"a","label":"a","connector":{"value":"trial-plug","confidence":"inferred","sources":["source"]},"attachment":{"value":"out","confidence":"inferred","sources":["source"]},"interfaces":[{"id":"a-iface","domain":"trial","protocol":"pulse","role":"bidirectional","evidence":{"value":true,"confidence":"inferred","sources":["source"]},"params":{"rate":{"value":1200,"unit":"회/s","confidence":"inferred","sources":["source"]}}}]},
+    {"id":"b","label":"b","connector":{"value":"trial-plug","confidence":"inferred","sources":["source"]},"attachment":{"value":"out","confidence":"inferred","sources":["source"]},"interfaces":[{"id":"b-iface","domain":"trial","protocol":"pulse","role":"bidirectional","evidence":{"value":true,"confidence":"inferred","sources":["source"]},"params":{"rate":{"value":1200,"unit":"회/s","confidence":"inferred","sources":["source"]}}}]},
+    {"id":"c","label":"c","connector":{"value":"trial-plug","confidence":"inferred","sources":["source"]},"attachment":{"value":"out","confidence":"inferred","sources":["source"]},"interfaces":[{"id":"c-iface","domain":"trial","protocol":"pulse","role":"bidirectional","evidence":{"value":true,"confidence":"inferred","sources":["source"]},"params":{"rate":{"value":1200,"unit":"회/s","confidence":"inferred","sources":["source"]}}}]}
+  ],
+  "edges": [
+    {"id":"root-out","from":"root","to":"out","evidence":{"value":true,"confidence":"inferred","sources":["source"]},"uses":[{"resource":"trunk","evidence":{"value":true,"confidence":"inferred","sources":["source"]}}]}
+  ],
+  "resources": [
+    {"id":"trunk","kind":"rate","domain":"trial","unit":"회/s","capacity":{"value":900,"unit":"회/s","confidence":"inferred","sources":["source"]},"policy":{"value":"max-min","confidence":"inferred","sources":["source"]}}
+  ]
+}

@@ -1,0 +1,50 @@
+// 판정 결과와 중간 계산을 번호로 연결해 출력에서 입력 주장까지 되짚는다.
+import type { Demand, Direction, Option, Step, Trace, Verdict } from "./contract.ts";
+
+export type Run = "solo" | "together";
+export type Target = "demand" | "workload" | "connection" | "edge" | "port" | "resource" | "linkResource";
+export interface PhysicalStep {
+  connection: number; direction: Direction; order: number; entry: number; exit: number;
+  kind: "mate" | "part"; verdict: Verdict; required: string; passages: number[][]; truncated: boolean; inputs: number[];
+}
+export interface Results {
+  physical: PhysicalStep[];
+  linkResources: { connection: number; domain: string; direction: Direction; capacity: number | null; unit: string | null; absentDomain: number[] }[];
+  errors: { domain: string; spec: string; stage: "negotiate" | "demand" | "consume"; row: number }[];
+  specSources: { domain: string; id: string; title: string; locator: string }[];
+  reasonSpecs: { reason: number; source: number }[];
+  options: (Option & { linkResource: number; connection: number; domain: string; direction: Direction })[];
+  demands: (Demand & { workload: number })[];
+  paths: { workload: number; demand: number; verdict: Verdict; key: string; truncated: boolean }[];
+  steps: (Step & { path: number; order: number })[];
+  allocations: { scenario: number; workload: number; run: Run; value: number | null; unit: string }[];
+  bindings: { scenario: number; workload: number; run: Run; resourceKind: "scene" | "link"; resource: number }[];
+  outcomes: { subjectKind: "connection" | "workload"; subjectRow: number; path: number | null; direction: Direction | null; scenario: number | null; domain: string; verdict: Verdict; mode: string; label: string }[];
+  metrics: { outcome: number; kind: "solo" | "together" | "drop" | "dropPercent" | "unused"; unit: string;
+    value: number | null; low: number | null; high: number | null; basis: "calculated" | "assumed" }[];
+  reasons: { outcome: number; stage: "physical" | "negotiate" | "path" | "allocate" | "judge"; rule: string; targetKind: Target; targetRow: number }[];
+  reasonInputs: { reason: number; claim: number }[];
+  reasonParents: { reason: number; prior: number }[];
+  needs: { outcome: number; requiredCapability: string }[];
+}
+export function addReason(result: Results, reason: Results["reasons"][number], inputs: readonly number[], parents: readonly number[] = [], domain = "", specs: readonly string[] = []) {
+  const row = result.reasons.push(reason) - 1;
+  for (const claim of new Set(inputs)) result.reasonInputs.push({ reason: row, claim });
+  for (const prior of new Set(parents)) result.reasonParents.push({ reason: row, prior });
+  for (const id of new Set(specs)) {
+    const source = result.specSources.findIndex(s => s.domain === domain && s.id === id);
+    result.reasonSpecs.push({ reason: row, source });
+  }
+  return row;
+}
+
+// 계약 위반은 호출한 링크 자원·워크로드·경로를 가리킨다. 유효한 규격은 그대로 추적한다.
+export function checkedTrace<T extends Trace>(result: Results, domain: string, stage: Results["errors"][number]["stage"], row: number, trace: T): T {
+  const specs = trace.specs.filter(id => result.specSources.some(s => s.domain === domain && s.id === id));
+  if (specs.length === trace.specs.length) return trace;
+  for (const spec of new Set(trace.specs.filter(id => !specs.includes(id)))) {
+    if (!result.errors.some(e => e.domain === domain && e.spec === spec && e.stage === stage && e.row === row))
+      result.errors.push({ domain, spec, stage, row });
+  }
+  return { ...trace, specs };
+}

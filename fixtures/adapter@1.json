@@ -1,0 +1,23 @@
+{
+  "modelId": "adapter",
+  "revision": "1",
+  "kind": "adapter",
+  "brand": "합성",
+  "name": "adapter",
+  "category": "시험",
+  "sources": [
+    {"id":"adapter","title":"adapter 합성 시험 정의","locator":"fixture:adapter","retrievedAt":"2026-11-26"}
+  ],
+  "nodes": [
+    {"id":"in","kind":"junction","label":"in"},
+    {"id":"out","kind":"junction","label":"out"}
+  ],
+  "ports": [
+    {"id":"entry","label":"entry","connector":{"value":"trial-socket","confidence":"inferred","sources":["adapter"]},"attachment":{"value":"in","confidence":"inferred","sources":["adapter"]},"interfaces":[{"id":"entry-iface","domain":"trial","protocol":"pulse","role":"bidirectional","evidence":{"value":true,"confidence":"inferred","sources":["adapter"]},"params":{"rate":{"value":1200,"unit":"회/s","confidence":"inferred","sources":["adapter"]}}}]},
+    {"id":"exit","label":"exit","connector":{"value":"trial-plug","confidence":"inferred","sources":["adapter"]},"attachment":{"value":"out","confidence":"inferred","sources":["adapter"]},"interfaces":[{"id":"exit-iface","domain":"trial","protocol":"pulse","role":"bidirectional","evidence":{"value":true,"confidence":"inferred","sources":["adapter"]},"params":{"rate":{"value":1200,"unit":"회/s","confidence":"inferred","sources":["adapter"]}}}]}
+  ],
+  "edges": [
+    {"id":"in-out","from":"in","to":"out","evidence":{"value":true,"confidence":"inferred","sources":["adapter"]},"uses":[]}
+  ],
+  "resources": []
+}
