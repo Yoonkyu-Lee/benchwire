@@ -266,6 +266,41 @@ test("T8 패스스루의 자체 소비를 소스 총예산과 실제 입력 방�
   assert.equal(analyze(scene).work("solo", "primary").metric("together").value, 50);
 });
 
+test("T8 직렬 패스스루 두 대의 자체 소비를 첫 입력과 충전기 총예산에서 한 번씩 뺀다",
+  { todo: "엔진이 상시 소비의 상위 공급 경로를 계산해야 한다" }, () => {
+  const scene = read("serial-passthrough");
+  const reserves = scene.claims.flatMap((claim, row) => claim.domain === "power" && claim.field === "reserveW" ? [row] : []);
+  assert.equal(reserves.length, 2);
+  const total = effectiveClaim(scene, "resource", 0, "power", "capacity")!;
+  for (const [budget, delivery] of [[100, 40], [45, 25]] as const) {
+    scene.claims[total]!.value = budget;
+    const { result, work } = analyze(scene);
+    const charge = work("only", "charge");
+    assert.deepEqual([charge.metric("together").value, charge.verdict], [delivery, "conditional"]);
+    assert.ok(reserves.every(row => charge.claims.includes(row)));
+    assert.ok(charge.citations.includes("relay"));
+    const sourceBudget = result.standingLoads.filter(l => l.kind === "scene" && l.resource === 0);
+    assert.deepEqual(sourceBudget.map(l => [scene.items[l.item]!.id, l.amount]).sort(),
+      [["relay-a", 10], ["relay-b", 10]]);
+    const rootInput = result.standingLoads.filter(l => l.kind === "link" &&
+      result.linkResources[l.resource]!.connection === 0 && result.linkResources[l.resource]!.direction === "forward");
+    assert.deepEqual(rootInput.map(l => [scene.items[l.item]!.id, l.amount]).sort(),
+      [["relay-a", 10], ["relay-b", 10]]);
+  }
+});
+
+test("T8 직렬 패스스루 첫 입력이 미확인이면 공급 가능한 상한에서 두 장치의 소비를 차감한다",
+  { todo: "엔진이 공급 한도와 상시 소비를 같은 후보에서 계산해야 한다" }, () => {
+  const scene = read("serial-passthrough");
+  const limit = effectiveClaim(scene, "item", 0, "power", "budget:a:a")!;
+  Object.assign(scene.claims[limit]!, { value: null, confidence: "unknown" });
+  const { result, work } = analyze(scene);
+  const charge = work("only", "charge");
+  const { value, low, high } = charge.metric("together");
+  assert.deepEqual([value, low, high], [null, 0, 40]);
+  assert.ok(result.quests.some(q => q.outcome === charge.outcome && q.claim === limit));
+});
+
 test("T8 패스스루 자체 소비가 미확인이면 소스 총예산까지의 범위와 확인 퀘스트를 남긴다", () => {
   const scene = read("passthrough");
   const total = effectiveClaim(scene, "resource", 0, "power", "capacity")!;

@@ -1,0 +1,24 @@
+{
+  "sceneId": "serial-passthrough",
+  "sources": [
+    {"id":"scene","title":"합성 직렬 패스스루 배선과 전력 요청","locator":"fixture:power/serial-passthrough","retrievedAt":"2026-11-26"}
+  ],
+  "items": [
+    {"instanceId":"supply","modelId":"supply","revision":"1"},
+    {"instanceId":"relay-a","modelId":"relay","revision":"1"},
+    {"instanceId":"relay-b","modelId":"relay","revision":"1"},
+    {"instanceId":"receiver","modelId":"receiver","revision":"1"},
+    {"instanceId":"wire-a","modelId":"cable-3a","revision":"1"},
+    {"instanceId":"wire-b","modelId":"cable-3a","revision":"1"},
+    {"instanceId":"wire-c","modelId":"cable-3a","revision":"1"}
+  ],
+  "connections": [
+    {"id":"feed-a","from":{"instanceId":"supply","id":"a"},"to":{"instanceId":"relay-a","id":"in"},"evidence":{"value":true,"confidence":"inferred","sources":["scene"]},"parts":[{"instanceId":"wire-a","entry":"first","exit":"second"}]},
+    {"id":"feed-b","from":{"instanceId":"relay-a","id":"out"},"to":{"instanceId":"relay-b","id":"in"},"evidence":{"value":true,"confidence":"inferred","sources":["scene"]},"parts":[{"instanceId":"wire-b","entry":"first","exit":"second"}]},
+    {"id":"output","from":{"instanceId":"relay-b","id":"out"},"to":{"instanceId":"receiver","id":"in"},"evidence":{"value":true,"confidence":"inferred","sources":["scene"]},"parts":[{"instanceId":"wire-c","entry":"first","exit":"second"}]}
+  ],
+  "workloads": [
+    {"id":"charge","domain":"power","kind":"charge","from":{"instanceId":"supply","id":"root"},"to":{"instanceId":"receiver","id":"end"},"request":{"requestedW":{"value":80,"unit":"W","confidence":"inferred","sources":["scene"]},"loadW":{"value":0,"unit":"W","confidence":"inferred","sources":["scene"]},"targetW":{"value":45,"unit":"W","confidence":"inferred","sources":["scene"]}}}
+  ],
+  "scenarios": [{"id":"only","members":["charge"]}]
+}
