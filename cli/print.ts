@@ -4,6 +4,7 @@ import type { Results, Target } from "../engine/results.ts";
 
 const verdicts: Record<Verdict, string> = { ok: "✅", conditional: "⚠️", impossible: "❌", unknown: "❓" };
 const stages = { physical: "물리 호환", negotiate: "링크 협상", path: "경로 합성", allocate: "자원 배분", judge: "판정" };
+const runs = { solo: "단독", together: "동시" };
 const metrics = { solo: "단독 성능", together: "동시 성능", drop: "하락량", dropPercent: "하락률", unused: "미사용 성능" };
 
 // 사람이 읽는 출력이라 소수 셋째 자리까지만 보인다. 계산값은 결과 표에 그대로 있다.
@@ -59,24 +60,36 @@ export function printResults(scene: Scene, result: Results): string {
     indent += "  ";
     lines.push(`${indent}모드 ${outcome.mode || "—"}`);
 
+    const assessments = result.assessments.filter(a => a.outcome === row);
     for (const m of result.metrics.filter(m => m.outcome === row)) {
+      const name = assessments.length && (m.kind === "solo" || m.kind === "together") ? runs[m.kind] + " 전달량" : metrics[m.kind];
       const range = (m.low !== null || m.high !== null) && (m.low !== m.value || m.high !== m.value);
       const bound = m.range === "conservative" ? " (보수적 경계)" : "";
-      if (range) lines.push(`${indent}${metrics[m.kind]} 범위 ${quantity(m.low, m.unit)} ~ ${quantity(m.high, m.unit)}${bound}`);
+      if (range) lines.push(`${indent}${name} 범위 ${quantity(m.low, m.unit)} ~ ${quantity(m.high, m.unit)}${bound}`);
       if (m.value !== null || (!range && m.kind !== "dropPercent")) {
         const basis = m.basis === "assumed" && m.value !== null ? " (가정)" : "";
-        lines.push(`${indent}${metrics[m.kind]} ${quantity(m.value, m.unit)}${basis}`);
+        lines.push(`${indent}${name} ${quantity(m.value, m.unit)}${basis}`);
       }
+    }
+    const measures = result.measures.filter(m => m.outcome === row);
+    for (const run of ["solo", "together"] as const) {
+      for (const m of measures.filter(m => m.run === run)) {
+        const label = `${indent}${runs[run]} ${m.kind === "netCharge" ? "순충전" : m.kind}`;
+        const low = quantity(m.low, m.unit);
+        lines.push(m.low === m.high ? `${label} ${low}` : `${label} 범위 ${low} ~ ${quantity(m.high, m.unit)}`);
+      }
+      const possible = assessments.filter(a => a.run === run).map(a => verdicts[a.verdict]);
+      if (possible.length) lines.push(`${indent}${runs[run]} ${possible.length > 1 ? "가능한 판정" : "판정"} ${possible.join(" ")}`);
     }
     if (outcome.subjectKind === "workload") {
       for (const b of result.bindings.filter(b => b.workload === outcome.subjectRow && b.scenario === outcome.scenario)) {
         const resource = targetName(b.resourceKind === "scene" ? "resource" : "linkResource", b.resource);
-        lines.push(`${indent}${b.run === "solo" ? "단독" : "동시"} 병목 ${resource}`);
+        lines.push(`${indent}${runs[b.run]} 병목 ${resource}`);
       }
     }
     for (const n of result.needs.filter(n => n.outcome === row)) lines.push(`${indent}필요한 결합 형태 ${n.requiredCapability}`);
     const possible = result.possibleVerdicts.filter(p => p.outcome === row).map(p => verdicts[p.verdict]);
-    if (possible.length > 1) lines.push(`${indent}가능한 판정 ${possible.join(" ")}`);
+    if (possible.length > 1 && !assessments.some(a => a.run === "together")) lines.push(`${indent}가능한 판정 ${possible.join(" ")}`);
     for (const q of result.quests.filter(q => q.outcome === row)) {
       const c = scene.claims[q.claim]!;
       lines.push(`${indent}확인할 것 · ${q.instruction} (${targetName(c.ownerKind, c.owner)} · ${c.field})`);
@@ -90,7 +103,8 @@ export function printResults(scene: Scene, result: Results): string {
       }
       seen.add(reason);
       const r = result.reasons[reason]!;
-      evidence.push(`${pad}#${reason + 1} [${stages[r.stage]}] ${r.rule} · ${targetName(r.targetKind, r.targetRow)}`);
+      const run = r.run ? runs[r.run] + " " : "";
+      evidence.push(`${pad}#${reason + 1} [${stages[r.stage]}] ${run}${r.rule} · ${targetName(r.targetKind, r.targetRow)}`);
       for (const { claim } of result.reasonInputs.filter(i => i.reason === reason)) {
         const c = scene.claims[claim]!;
         const value = c.value === null ? "미확인" : JSON.stringify(c.value);

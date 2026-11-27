@@ -2,6 +2,7 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { test } from "node:test";
+import { power } from "../domains/power/power.ts";
 import { effectiveClaim } from "../engine/contract.ts";
 import { evaluate } from "../engine/evaluate.ts";
 import { trialDomain } from "../fixtures/trial.ts";
@@ -93,4 +94,26 @@ test("CLI 출력에 모르는 정책의 범위와 가정값, 가능한 판정, �
   assert.match(b, /동시 성능 400 회\/s \(가정\)/u);
   assert.match(b, /가능한 판정 .*✅.*/u);
   assert.match(b, /확인할 것 · .+ \(host\/trunk · policy\)/u);
+});
+
+test("T8 CLI 출력에 단독·동시 전달량과 순충전 전력 및 가능한 판정이 보인다", () => {
+  const dir = "fixtures/power";
+  const plugins = [power];
+  const scene = loadScene(dir + "/three-ports.json", { modelsDir: dir, connectorsFile: dir + "/connectors.json" }, plugins);
+  const idle = scene.workloads.findIndex(w => w.id === "idle");
+  const load = effectiveClaim(scene, "workload", idle, "power", "loadW")!;
+  Object.assign(scene.claims[load]!, { value: null, confidence: "unknown" });
+  const [summary, evidence] = printResults(scene, evaluate(scene, plugins)).split("\n근거\n");
+  const maximum = summary!.split("시나리오 max\n")[1]!.split("시나리오 only-a")[0]!;
+  const discharge = maximum.split(/❌ 워크로드 max\b/u)[1]!;
+  assert.match(discharge, /단독 전달량 50 W/u);
+  assert.match(discharge, /동시 전달량 50 W/u);
+  assert.match(discharge, /단독 순충전 -20 W/u);
+  assert.match(discharge, /동시 순충전 -20 W/u);
+  assert.match(discharge, /단독 판정 ❌/u);
+  assert.match(discharge, /동시 판정 ❌/u);
+  const unknown = summary!.split(/❓ 워크로드 idle\b/u)[1]!.split("시나리오 normal")[0]!;
+  assert.match(unknown, /동시 순충전 범위 미확인 ~ 50 W/u);
+  assert.match(unknown, /동시 가능한 판정 ✅ ⚠️ ❌/u);
+  assert.match(evidence!, /\[판정\] 동시 순충전.* · max/u);
 });

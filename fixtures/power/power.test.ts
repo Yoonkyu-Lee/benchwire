@@ -27,7 +27,7 @@ function analyze(scene: Scene) {
       assert.equal(m.unit, "W");
       return m;
     };
-    const root = result.reasons.findIndex(reason => reason.outcome === outcome && reason.stage === "judge");
+    const root = result.reasons.findLastIndex(reason => reason.outcome === outcome && reason.stage === "judge");
     assert.ok(root >= 0);
     const reasons = new Set([root]);
     for (const reason of reasons) for (const parent of result.reasonParents)
@@ -46,23 +46,32 @@ function cableClaim(scene: Scene, field: string) {
   return scene.interfaces.flatMap((i, row) => i.role === "cable" ? [effectiveClaim(scene, "interface", row, "power", field)!] : []);
 }
 
-test("T8 세 포트에서 50·30·20 W를 전달하고 다른 작업만 꺼도 A의 50 W가 유지된다", () => {
+test("T8 세 포트에서 50·30·20 W를 전달하고 A의 소비 상황에 따라 순충전을 판정한다", () => {
   const scene = read("three-ports");
-  const { work } = analyze(scene);
+  const { result, work } = analyze(scene);
   for (const [scenario, load, verdict, net] of [
     ["idle", 20, "ok", 30], ["normal", 45, "conditional", 5], ["max", 70, "impossible", -20],
   ] as const) {
     const a = work(scenario);
     assert.equal(a.metric("solo").value, 50);
     assert.equal(a.metric("together").value, 50);
-    assert.equal(a.verdict, "conditional");
-    const loadW = scene.claims[effectiveClaim(scene, "workload", a.workload, "power", "loadW")!]!.value;
-    const targetW = scene.claims[effectiveClaim(scene, "workload", a.workload, "power", "targetW")!]!.value;
-    assert.equal(loadW, load);
-    assert.equal(targetW, 30);
-    const charge = assessCharge(a.metric("together"), loadW, targetW);
-    assert.deepEqual(charge.possible, [verdict]);
-    assert.deepEqual(charge.metrics, [{ kind: "netCharge", unit: "W", value: net, low: net, high: net }]);
+    assert.equal(a.verdict, verdict);
+    const loadClaim = effectiveClaim(scene, "workload", a.workload, "power", "loadW")!;
+    const targetClaim = effectiveClaim(scene, "workload", a.workload, "power", "targetW")!;
+    assert.equal(scene.claims[loadClaim]!.value, load);
+    assert.equal(scene.claims[targetClaim]!.value, 30);
+    for (const run of ["solo", "together"] as const) {
+      assert.deepEqual(result.assessments.filter(r => r.outcome === a.outcome && r.run === run).map(r => r.verdict), [verdict]);
+      assert.deepEqual(result.measures.find(m => m.outcome === a.outcome && m.run === run && m.kind === "netCharge"),
+        { outcome: a.outcome, run, kind: "netCharge", unit: "W", low: net, high: net });
+      const reason = result.reasons.findIndex(r => r.outcome === a.outcome && r.run === run && r.stage === "judge");
+      assert.ok(reason >= 0);
+      for (const claim of [loadClaim, targetClaim]) {
+        assert.ok(result.reasonInputs.some(i => i.reason === reason && i.claim === claim));
+        assert.ok(scene.claimSources.some(s => s.claim === claim && scene.sources[s.source]!.id === "scene"));
+      }
+      assert.ok(result.reasonParents.some(p => p.reason === reason && /요청과 단독·동시 성능/.test(result.reasons[p.prior]!.rule)));
+    }
     assert.equal(work(scenario, "b").metric("together").value, 30);
     assert.equal(work(scenario, "c").metric("together").value, 20);
     assert.equal(work(scenario, "b").verdict, "ok");
@@ -76,6 +85,11 @@ test("T8 세 포트에서 50·30·20 W를 전달하고 다른 작업만 꺼도 A
   assert.equal(work("only-a", "max").metric("together").value, 50);
   assert.equal(work("same-port", "idle").metric("together").value, 25);
   assert.equal(work("same-port", "normal").metric("together").value, 25);
+  const shared = work("same-port", "normal");
+  assert.deepEqual(result.assessments.filter(r => r.outcome === shared.outcome).map(r => [r.run, r.verdict]),
+    [["solo", "conditional"], ["together", "impossible"]]);
+  assert.deepEqual(result.measures.filter(m => m.outcome === shared.outcome).map(m => [m.run, m.low, m.high]),
+    [["solo", 5, 5], ["together", -20, -20]]);
 });
 
 test("T8 다른 포트를 분리하면 전자 표지가 없는 케이블이 20 V·3 A와 60 W를 제한한다", () => {
@@ -83,7 +97,7 @@ test("T8 다른 포트를 분리하면 전자 표지가 없는 케이블이 20 V
   for (const claim of cableClaim(scene, "currentA")) Object.assign(scene.claims[claim]!, { value: null, confidence: "unknown" });
   const { result, work } = analyze(scene);
   const a = work("single", "idle");
-  assert.equal(a.verdict, "conditional");
+  assert.equal(a.verdict, "ok");
   assert.equal(a.metric("together").value, 60);
   assert.ok(a.reasons.some(r => r.stage === "negotiate" && /20 V · 3 A · 60 W/.test(r.rule)));
   assert.ok(a.citations.includes("cable-3a"));
@@ -91,16 +105,28 @@ test("T8 다른 포트를 분리하면 전자 표지가 없는 케이블이 20 V
   assert.ok(result.bindings.some(b => b.run === "together" && b.resourceKind === "link"));
 });
 
-test("T8 e-marker 전류가 미확인이면 60–80 W와 확인 퀘스트가 남는다", () => {
+test("T8 e-marker 전류가 미확인이면 전달 60–80 W, 순충전 40–60 W와 가능한 판정이 남는다", () => {
   const scene = read("single-port");
+  const target = scene.claims[effectiveClaim(scene, "workload", 0, "power", "targetW")!]!;
   for (const claim of cableClaim(scene, "eMarked")) scene.claims[claim]!.value = true;
   const currents = cableClaim(scene, "currentA");
   for (const claim of currents) Object.assign(scene.claims[claim]!, { value: null, confidence: "unknown" });
+  const guaranteed = analyze(scene);
+  const guaranteedCharge = guaranteed.work("single", "idle");
+  assert.equal(guaranteedCharge.verdict, "ok");
+  assert.deepEqual(guaranteed.result.measures.find(m => m.outcome === guaranteedCharge.outcome && m.run === "together"),
+    { outcome: guaranteedCharge.outcome, run: "together", kind: "netCharge", unit: "W", low: 40, high: 60 });
+  target.value = 50;
   const { result, work } = analyze(scene);
   const a = work("single", "idle");
   assert.equal(a.verdict, "unknown");
   assert.equal(a.metric("together").value, null);
   assert.deepEqual([a.metric("together").low, a.metric("together").high], [60, 80]);
+  for (const run of ["solo", "together"] as const) {
+    assert.deepEqual(result.assessments.filter(r => r.outcome === a.outcome && r.run === run).map(r => r.verdict), ["ok", "conditional"]);
+    assert.deepEqual(result.measures.find(m => m.outcome === a.outcome && m.run === run && m.kind === "netCharge"),
+      { outcome: a.outcome, run, kind: "netCharge", unit: "W", low: 40, high: 60 });
+  }
   assert.ok(result.quests.some(q => q.outcome === a.outcome && currents.includes(q.claim) && /전류/.test(q.instruction)));
   assert.ok(a.reasons.some(r => r.stage === "negotiate"));
   assert.ok(a.citations.includes("cable-3a"));
@@ -195,20 +221,45 @@ test("T8 충전기 총예산이 포트별 한도보다 작으면 총예산이 �
 });
 
 test("T8 패스스루 입력의 60 W에서 중간 장치의 10 W를 한 번 빼고 두 작업은 50 W를 공유한다", () => {
-  const { work } = analyze(read("passthrough"));
+  const { result, work } = analyze(read("passthrough"));
   const one = work("solo", "primary");
   assert.equal(one.metric("together").value, 50);
   assert.equal(work("shared", "primary").metric("together").value, 25);
   assert.equal(work("shared", "secondary").metric("together").value, 25);
+  assert.equal(one.verdict, "ok");
+  const shared = work("shared", "primary");
+  assert.equal(shared.verdict, "ok");
+  assert.deepEqual(result.measures.find(m => m.outcome === shared.outcome && m.run === "together"),
+    { outcome: shared.outcome, run: "together", kind: "netCharge", unit: "W", low: 25, high: 25 });
   assert.ok(one.reasons.some(r => r.stage === "negotiate" && /자체 소비 10 W/.test(r.rule)));
   assert.ok(one.citations.includes("relay"));
   assert.ok(one.specs.includes("pd-fixed"));
 });
 
+test("T8 명시적인 미확인 소비와 목표는 가능한 순충전 판정과 확인 퀘스트로 남는다", () => {
+  for (const [field, low, high, possible] of [
+    ["loadW", null, 60, ["ok", "conditional", "impossible"]],
+    ["targetW", 40, 40, ["ok", "conditional"]],
+  ] as const) {
+    const scene = read("single-port");
+    const claim = effectiveClaim(scene, "workload", 0, "power", field)!;
+    Object.assign(scene.claims[claim]!, { value: null, confidence: "unknown" });
+    const { result, work } = analyze(scene);
+    const a = work("single", "idle");
+    assert.equal(a.verdict, "unknown");
+    assert.equal(a.metric("together").value, 60);
+    assert.deepEqual(result.assessments.filter(r => r.outcome === a.outcome && r.run === "together").map(r => r.verdict), possible);
+    assert.deepEqual(result.measures.find(m => m.outcome === a.outcome && m.run === "together"),
+      { outcome: a.outcome, run: "together", kind: "netCharge", unit: "W", low, high });
+    assert.ok(result.quests.some(q => q.outcome === a.outcome && q.claim === claim));
+    assert.ok(a.claims.includes(claim));
+  }
+});
+
 test("T8 순충전 범위는 0과 목표를 포함해 분류하고 생략한 목표에는 0 W를 쓴다", () => {
   const charge = assessCharge({ low: 40, high: 80 }, 50, 30);
   assert.deepEqual(charge.possible, ["ok", "conditional", "impossible"]);
-  assert.deepEqual(charge.metrics, [{ kind: "netCharge", unit: "W", value: null, low: -10, high: 30 }]);
+  assert.deepEqual(charge.metrics, [{ kind: "netCharge", unit: "W", low: -10, high: 30 }]);
   assert.deepEqual(assessCharge({ low: 50, high: 50 }, 50).possible, ["ok"]);
   assert.deepEqual(assessCharge({ low: 50, high: 50 }, 50, 1).possible, ["conditional"]);
   assert.deepEqual(assessCharge({ low: 10, high: 20 }, null).possible, ["ok", "impossible"]);
