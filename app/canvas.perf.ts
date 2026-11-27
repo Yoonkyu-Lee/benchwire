@@ -22,6 +22,10 @@ async function measure(page: Page, motion: Motion) {
   assert.equal(await page.locator(".port").count(), 400);
   assert.equal(await page.locator(".wire").count(), 100);
   assert.equal(await page.locator('.wire-line[data-result-kind="negotiation"]').count(), 200);
+  const particles = page.locator(".flow-particles");
+  assert(await particles.isVisible());
+  const particleCount = Number(await particles.getAttribute("data-count"));
+  assert(particleCount > 0);
   const target = motion === "drag" ? await center(cardTitle)
     : motion === "pan" ? { x: 288, y: 134 } : { x: 848, y: 432 };
   const carrier = motion === "drag" ? page.locator('[data-instance="grid-12"]') : page.locator(".world");
@@ -29,15 +33,22 @@ async function measure(page: Page, motion: Motion) {
   await page.mouse.move(target.x, target.y);
   if (motion !== "zoom") await page.mouse.down();
   await page.waitForTimeout(350);
-  const frameTimes = page.evaluate(ms => new Promise<number[]>(done => {
+  const frameTimes = page.evaluate(ms => new Promise<{ samples: number[]; longTasks: number[] }>(done => {
     const samples: number[] = [];
+    const longTasks: number[] = [];
+    const observer = new PerformanceObserver(list => longTasks.push(...list.getEntries().map(entry => entry.duration)));
+    observer.observe({ type: "longtask" });
     requestAnimationFrame(start => {
       let last = start;
       function sample(now: number) {
         samples.push(now - last);
         last = now;
         if (now - start < ms) requestAnimationFrame(sample);
-        else done(samples);
+        else {
+          longTasks.push(...observer.takeRecords().map(entry => entry.duration));
+          observer.disconnect();
+          done({ samples, longTasks });
+        }
       }
       requestAnimationFrame(sample);
     });
@@ -50,11 +61,13 @@ async function measure(page: Page, motion: Motion) {
     if (motion === "zoom") await page.mouse.wheel(0, i % 12 < 7 ? -8 : 8);
     else await page.mouse.move(target.x + 105 * i / steps, target.y + Math.sin(i / 12) * 38 + 35 * i / steps);
   }
-  const times = (await frameTimes).sort((a, b) => a - b);
+  const measured = await frameTimes;
+  const times = measured.samples.sort((a, b) => a - b);
   if (motion !== "zoom") await page.mouse.up();
   assert.notEqual(await carrier.getAttribute("transform"), before, motion);
   const quantile = (q: number) => Number(times[Math.ceil(q * times.length) - 1]!.toFixed(2));
-  return { motion, samples: times.length, inputs: steps, p50: quantile(0.5), p95: quantile(0.95), max: quantile(1) };
+  return { motion, samples: times.length, inputs: steps, particleCount, longTasks: measured.longTasks,
+    p50: quantile(0.5), p95: quantile(0.95), max: quantile(1) };
 }
 
 test("50기기·400포트·100선 장면의 드래그·팬·줌 프레임 p95가 20 ms 이하다", { timeout: 60_000 }, async context => {
@@ -69,6 +82,7 @@ test("50기기·400포트·100선 장면의 드래그·팬·줌 프레임 p95가
     for (const sample of samples) {
       context.diagnostic(JSON.stringify(sample));
       assert(sample.p95 <= FRAME_P95_LIMIT, `${sample.motion} ${sample.trial}: p95 ${sample.p95} ms`);
+      assert.equal(sample.longTasks.length, 0, `${sample.motion} ${sample.trial}: ${sample.longTasks.join(", ")} ms`);
     }
   } finally { await page.close(); }
 });
@@ -131,7 +145,7 @@ test("예제와 50기기 정적 빌드에서 의미 편집부터 새 판정이 �
   const stats = { browser: edge.browser.version(), viewport, mainTaskLimit: MAIN_TASK_LIMIT, measurements };
   await writeFile("work/m3-perf-total.json", JSON.stringify(stats, null, 2));
   for (const sample of measurements)
-    assert(sample.longTasks.every(task => task <= MAIN_TASK_LIMIT), `${sample.mode}: ${JSON.stringify(sample.longTasks)} ms`);
+    assert.equal(sample.longTasks.length, 0, `${sample.mode}: ${JSON.stringify(sample.longTasks)} ms`);
 });
 
 test("50기기 장면의 단계별 Edge 시간을 기록한다", { timeout: 60_000 }, async context => {

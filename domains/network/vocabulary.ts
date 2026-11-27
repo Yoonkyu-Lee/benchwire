@@ -22,3 +22,12 @@ export const networkPresets = [
   { kind: "traffic", name: "이더넷 전송", request: { throughput: { value: EXAMPLE_TRAFFIC_MBPS, unit: MBPS } } },
   { kind: "power", name: "PoE 전력 공급", request: { watts: { value: EXAMPLE_POE_W, unit: WATTS } } },
 ] as const;
+
+export const networkCardStats = [
+  { scope: "item", field: "category", label: "케이블 등급" },
+  { scope: "item", field: "length", label: "케이블 길이" },
+  { scope: "resource", field: "capacity", label: "업링크", resourceKind: "uplink" },
+  { scope: "resource", field: "capacity", label: "공유 대역폭", unit: "Mbps" },
+  { scope: "resource", field: "capacity", label: "PoE 예산", unit: "W" },
+  { scope: "interface", field: "baseTModes", label: "이더넷 모드" },
+] as const;

@@ -157,9 +157,9 @@ async function profile() {
   const host = document.createElement("div");
   host.style.cssText = "position:fixed;inset:72px 0 0 262px;background:#f2f6f6";
   document.body.append(host);
+  const inputs = phaseInputs();
+  const canvas = mountCanvas(host, inputs.library, { intent() {}, status() {} });
   try {
-    const inputs = phaseInputs();
-    const canvas = mountCanvas(host, inputs.library, { intent() {}, status() {} });
     const owner = {};
     const samples: { load: number; evaluate: number; variants: number; roundTrip: number; draw: number; paint: number }[] = [];
     for (let i = 0; i < 24; i++) {
@@ -174,7 +174,7 @@ async function profile() {
       if (basic?.kind !== "primary" || variants?.kind !== "variants") throw new Error("단계별 평가 실패");
       const start = performance.now();
       const view = resultView(scene, basic.result, 0, "together");
-      canvas.render(inputs.initial, view.wires);
+      canvas.render(inputs.initial, { assessed: view.wires });
       const draw = performance.now() - start;
       await new Promise<void>(done => requestAnimationFrame(() => requestAnimationFrame(() => done())));
       if (i >= 3) samples.push({ load: request - loadStart, evaluate: basic.elapsed, variants: variants.elapsed,
@@ -183,11 +183,11 @@ async function profile() {
     const stages = Object.fromEntries((["load", "evaluate", "variants", "roundTrip", "draw", "paint"] as const)
       .map(key => [key, percentiles(samples.map(s => s[key]))]));
     return { samples, stages };
-  } finally { host.remove(); }
+  } finally { canvas.dispose(); host.remove(); }
 }
 
 window.benchwire = {
-  open(scene) { workbench = open(scene); },
+  open(scene) { workbench.dispose(); workbench = open(scene); },
   read: () => workbench.readDocument(),
   edit: scene => workbench.editScenario(scene),
   changes: () => count,

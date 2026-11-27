@@ -10,7 +10,7 @@ const MAX_WIRE_WIDTH = 5;
 
 export interface WireMark {
   kind: "physical" | "negotiation" | "flow"; direction: Direction | null; layer: Layer; verdict: Verdict | null;
-  text: string; title: string; unit: string; pool?: string; width?: number; dashed?: boolean; workload?: string;
+  text: string; title: string; unit: string; pool?: string; width?: number; dashed?: boolean; workload?: string; density?: number;
 }
 export type Selection = { kind: "connection" | "workload"; id: string } | { kind: "resource"; row: number };
 type Outcome = Results["outcomes"][number];
@@ -117,10 +117,11 @@ export function resultView(scene: Scene, result: Results, scenario: number | nul
       const unit = metric.unit;
       const text = [w.verdict && verdictIcon[w.verdict], w.name, w.summary].filter(Boolean).join(" ");
       const maximum = maxima.get(unit);
-      const width = maximum && metric.value !== null ? 2 + (MAX_WIRE_WIDTH - 2) * metric.value / maximum : 2;
+      const ratio = maximum && metric.value !== null ? metric.value / maximum : 0;
+      const dashed = w.verdict === "unknown" || metric.value === null || metric.low !== metric.high;
+      const width = 2 + (MAX_WIRE_WIDTH - 2) * ratio;
       wire.push({ kind: "flow", workload: w.id, direction: s.direction, layer: layerFor(s.carrier?.domain ?? w.domain, unit),
-        verdict: w.verdict, text, title: text, unit, width,
-        dashed: w.verdict === "unknown" || metric.value === null || metric.low !== metric.high });
+        verdict: w.verdict, text, title: text, unit, width, dashed, ...(!dashed && ratio > 0 && { density: ratio }) });
     }
   }
   const resources = result.resourceUsage.filter(r => r.scenario === scenario).map(r => ({

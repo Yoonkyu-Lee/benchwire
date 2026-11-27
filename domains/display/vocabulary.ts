@@ -28,3 +28,10 @@ export const displayPresets = [{
     chroma: { value: DEFAULT_VIDEO.chroma, unit: "" },
   },
 }];
+
+export const displayCardStats = [
+  { scope: "interface", field: "maxRate", label: "DP 전송 등급" },
+  { scope: "interface", field: "frlCode", label: "HDMI FRL 코드" },
+  { scope: "interface", field: "version", label: "DP 판본" },
+  { scope: "interface", field: "tmdsVersion", label: "HDMI TMDS 판본" },
+] as const;

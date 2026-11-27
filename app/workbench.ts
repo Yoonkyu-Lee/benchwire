@@ -2,10 +2,12 @@
 import type { Results, Run } from "../engine/results.ts";
 import { evaluateInWorker, loadAssessment, type Assessment, type Documents, type Variants } from "./assessment.ts";
 import { mountCanvas } from "./canvas.ts";
+import { cardMeasurements, type CardMeasurements } from "./cards.ts";
+import { heatmap } from "./heatmap.ts";
 import { mountBudget } from "./budget.ts";
 import { mountCollector } from "./collector.ts";
 import { mountCreator, persistModel } from "./creator.ts";
-import { occupiedPorts, requiredMateCapabilities } from "./connection.ts";
+import { moveConnectionEnd, occupiedPorts, requiredMateCapabilities } from "./connection.ts";
 import { addConnection, modelKey, place, portKey, type InventoryItem, type Library, type SceneDocument, type SceneIntent } from "./document.ts";
 import { mountEvidence } from "./evidence.ts";
 import { showFieldError } from "./field.ts";
@@ -31,6 +33,11 @@ export function mountWorkbench(root: HTMLElement, initial: SceneDocument, librar
   const alternatives = new Map<number, Variants>();
   const owner = {};
   let view: ResultView | undefined;
+  let measured: CardMeasurements | undefined;
+  let showHeat = false;
+  const motionPreference = "benchwire:reduced-motion";
+  let reducedMotion = localStorage.getItem(motionPreference) === "true";
+  const arrivals = new Set<string>();
 
   let scenario: number | null = null;
   let variant = 0;
@@ -56,10 +63,12 @@ export function mountWorkbench(root: HTMLElement, initial: SceneDocument, librar
           <button type="button" class="fit" title="전체 맞춤">전체 맞춤</button>
           <button type="button" class="zoom-out" aria-label="축소" title="축소">−</button>
           <button type="button" class="zoom-in" aria-label="확대" title="확대">+</button>
+          <button type="button" class="heat-toggle" aria-pressed="false">병목 히트맵</button>
+          <button type="button" class="motion-toggle" aria-pressed="false">움직임 줄이기</button>
           <button type="button" class="results-toggle" aria-controls="results-panel">결과 · 근거</button>
           <button type="button" class="quests-open" hidden>검증 퀘스트</button>
         </div>
-        <div class="canvas-help">빈 곳 드래그로 이동 · 휠로 확대/축소 · 포트에서 포트로 연결</div>
+        <div class="canvas-help">빈 곳 끌기 · 휠로 확대/축소 · 포트를 끌어 연결하거나 케이블 끝 옮기기</div>
         <div class="status" role="status"></div>
         <div class="assessment-error" role="alert"></div>
         <div class="assessment-progress" aria-live="polite"></div>
@@ -104,6 +113,7 @@ export function mountWorkbench(root: HTMLElement, initial: SceneDocument, librar
     intent: edit, status: setStatus,
     selectConnection(id) { panel.choose({ kind: "connection", id }); options.onSelectConnection?.(id); },
     selectWorkload(id) { panel.choose({ kind: "workload", id }); },
+    selectResource(row) { panel.choose({ kind: "resource", row }); },
   });
   const makeInventory = () => mountInventory(inventoryRoot, library, {
     add(item) {
@@ -112,11 +122,13 @@ export function mountWorkbench(root: HTMLElement, initial: SceneDocument, librar
     },
     cable(item) {
       cable = cable === item ? undefined : item;
-      inventory(scene, cable?.instanceId);
+      inventory(scene, cable?.instanceId, measured);
       setStatus(cable ? `${cable.alias || models.get(modelKey(cable))!.name}에 연결할 두 포트를 선택하세요.` : "케이블 선택을 해제했습니다.");
     },
   });
   let canvas = makeCanvas();
+  canvas.setReduced(reducedMotion);
+  display.toggleAttribute("data-reduced-motion", reducedMotion);
   let inventory = makeInventory();
 
   function refreshCatalog(newModels: Library["models"], newItems: Library["inventory"]) {
@@ -124,9 +136,11 @@ export function mountWorkbench(root: HTMLElement, initial: SceneDocument, librar
     for (const item of newItems) stock.set(item.instanceId, item);
     library.models = [...models.values()];
     library.inventory = [...stock.values()];
+    canvas.dispose();
     stage.replaceChildren();
     inventoryRoot.replaceChildren();
     canvas = makeCanvas();
+    canvas.setReduced(reducedMotion);
     inventory = makeInventory();
     for (const layer of hiddenLayers) canvas.setLayer(layer, false);
   }
@@ -183,6 +197,21 @@ export function mountWorkbench(root: HTMLElement, initial: SceneDocument, librar
   root.querySelector(".zoom-out")!.addEventListener("click", () => canvas.zoom(1 / 1.2));
   root.querySelector(".zoom-in")!.addEventListener("click", () => canvas.zoom(1.2));
   root.querySelector(".results-toggle")!.addEventListener("click", panel.toggle);
+  const heatToggle = root.querySelector<HTMLButtonElement>(".heat-toggle")!;
+  heatToggle.onclick = () => {
+    showHeat = !showHeat;
+    heatToggle.setAttribute("aria-pressed", String(showHeat));
+    render();
+  };
+  const motionToggle = root.querySelector<HTMLButtonElement>(".motion-toggle")!;
+  motionToggle.setAttribute("aria-pressed", String(reducedMotion));
+  motionToggle.onclick = () => {
+    reducedMotion = !reducedMotion;
+    localStorage.setItem(motionPreference, String(reducedMotion));
+    motionToggle.setAttribute("aria-pressed", String(reducedMotion));
+    display.toggleAttribute("data-reduced-motion", reducedMotion);
+    canvas.setReduced(reducedMotion);
+  };
   stage.addEventListener("dragover", event => {
     if (!event.dataTransfer?.types.includes(INVENTORY_DRAG)) return;
     event.preventDefault();
@@ -195,10 +224,11 @@ export function mountWorkbench(root: HTMLElement, initial: SceneDocument, librar
     edit({ kind: "add-item", item, position: canvas.fromClient({ x: event.clientX, y: event.clientY }) });
   });
 
-  function render() {
+  function render(flash?: ReadonlySet<string>) {
     count.textContent = `실물 ${scene.items.length} · 연결 ${scene.connections.length}`;
-    canvas.render(scene, view?.wires);
-    inventory(scene, cable?.instanceId);
+    const current = assessment === evaluated ? view : undefined;
+    canvas.render(scene, { assessed: current?.wires, measured, heat: showHeat && current ? heatmap(current) : undefined, arrivals: flash });
+    inventory(scene, cable?.instanceId, measured);
     updateScenario();
   }
 
@@ -213,7 +243,8 @@ export function mountWorkbench(root: HTMLElement, initial: SceneDocument, librar
     if (!assessment || assessment !== evaluated || !primary) return;
     const variants = scenario === null ? [] : alternatives.get(scenario) ?? [];
     view = resultView(assessment.scene, variants[variant]?.result ?? primary, scenario, run);
-    render();
+    render(arrivals);
+    arrivals.clear();
     panel.render(view, variants, variant, preserveSelection);
     questTrigger.hidden = !options.onChange;
     if (options.onChange) renderQuests(view, scene);
@@ -242,6 +273,7 @@ export function mountWorkbench(root: HTMLElement, initial: SceneDocument, librar
 
   function use(loaded: Assessment, geometryChanged = true) {
     assessment = loaded;
+    measured = scene.personal?.length ? cardMeasurements(loaded.scene) : undefined;
     scenario = loaded.scenario;
     variant = 0;
     alternatives.clear();
@@ -293,6 +325,10 @@ export function mountWorkbench(root: HTMLElement, initial: SceneDocument, librar
       if (commit(place({ ...scene, items: [...scene.items, intent.item] }, intent.item.instanceId, intent.position), intent))
         setStatus("실물을 배치했습니다.");
     } else if (intent.kind === "connect") connect(intent);
+    else if (intent.kind === "move-connection-end") {
+      const candidate = moveConnectionEnd(scene, intent);
+      if (candidate) validateConnection(candidate, intent, intent.id);
+    }
   }
 
   function connect(intent: Extract<SceneIntent, { kind: "connect" }>) {
@@ -307,16 +343,23 @@ export function mountWorkbench(root: HTMLElement, initial: SceneDocument, librar
     const candidate = addConnection(scene, from, to, cable && {
       item: cable, part: { instanceId: cable.instanceId, entry: entry!.id, exit: exit!.id },
     });
+    validateConnection(candidate, intent, candidate.connections.at(-1)!.id);
+  }
+
+  function validateConnection(candidate: SceneDocument, intent: Extract<SceneIntent, { kind: "connect" | "move-connection-end" }>, id: string) {
     const loaded = load(candidate);
     if (!loaded) return;
-    const required = requiredMateCapabilities(loaded.scene, candidate.connections.at(-1)!.id);
+    const required = requiredMateCapabilities(loaded.scene, id);
     if (required.length) {
       setStatus("커넥터가 맞지 않습니다. 필요한 결합 형태 " + required.join(" · "));
       return;
     }
-    cable = undefined;
+    if (intent.kind === "connect") {
+      cable = undefined;
+      arrivals.add(id);
+    }
     commit(candidate, intent, loaded);
-    setStatus("연결을 배치했습니다.");
+    setStatus(intent.kind === "connect" ? "연결을 배치했습니다." : "케이블 끝을 옮겼습니다.");
   }
 
   function readScenario() {
@@ -345,6 +388,7 @@ export function mountWorkbench(root: HTMLElement, initial: SceneDocument, librar
   if (loaded) use(loaded);
   return {
     documents,
+    dispose: () => canvas.dispose(),
     readDocument: () => scene,
     readScenario,
     setScenario,

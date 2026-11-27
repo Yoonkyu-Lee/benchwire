@@ -1,7 +1,7 @@
 // 로컬 API의 장면을 작업대에 열고 확정 편집을 ETag 순서대로 저장한다.
 import "./style.css";
 import { loadAssessment } from "./assessment.ts";
-import { requiredMateCapabilities } from "./connection.ts";
+import { moveConnectionEnd, requiredMateCapabilities } from "./connection.ts";
 import { addConnection, modelKey, place, type Library, type SceneDocument, type SceneIntent } from "./document.ts";
 import { mountWorkbench } from "./workbench.ts";
 
@@ -143,6 +143,14 @@ function replay(latest: SceneDocument, edit: Edit) {
       const item = part && edit.after.items.find(item => item.instanceId === part.instanceId)!;
       return addConnection(latest, intent.from, intent.to, part && item ? { item, part } : undefined);
     }
+    case "move-connection-end": {
+      const before = edit.before.connections.find(row => row.id === intent.id);
+      const saved = latest.connections.find(row => row.id === intent.id);
+      if (!before || !saved || !same(before.parts, saved.parts)) return;
+      if (same(saved[intent.end], intent.target)) return latest;
+      if (!same(saved[intent.end], before[intent.end])) return;
+      return moveConnectionEnd(latest, intent);
+    }
     case "verify-measurement": {
       const { before, after } = edit;
       // 측정이 기대고 있는 배선·실물 상태가 변하면 값을 새 장면에 자동 적용하지 않는다.
@@ -163,6 +171,7 @@ function editName({ intent, before, after }: Edit) {
     case "place": return intent.instanceId + " 배치 이동";
     case "add-item": return intent.item.instanceId + " 실물 배치";
     case "connect": return `${intent.from.instanceId}/${intent.from.id} → ${intent.to.instanceId}/${intent.to.id} 연결`;
+    case "move-connection-end": return intent.id + " 케이블 끝 이동";
     case "verify-measurement": return "검증값 · 실물 상태 편집";
     case "edit-scenario": {
       const changed = after.workloads.find((row, index) => row !== before.workloads[index]);
@@ -208,6 +217,7 @@ async function start() {
         return;
       }
       const scene = await result.json() as SceneDocument;
+      workbench?.dispose();
       workbench = mountWorkbench(root, scene, library, { onChange: edited });
       draft = saved = scene;
       etag = tag;
@@ -251,7 +261,9 @@ async function start() {
       if (next === draft) { edit.done?.(true); continue; }
       const loaded = loadAssessment(next, workbench.documents, null);
       if ("error" in loaded) { discarded.push(editName(edit)); edit.done?.(false); continue; }
-      if (edit.intent.kind === "connect" && requiredMateCapabilities(loaded.scene, next.connections.at(-1)!.id).length) {
+      const connection = edit.intent.kind === "connect" ? next.connections.at(-1)!.id
+        : edit.intent.kind === "move-connection-end" ? edit.intent.id : undefined;
+      if (connection && requiredMateCapabilities(loaded.scene, connection).length) {
         discarded.push(editName(edit));
         continue;
       }

@@ -27,3 +27,9 @@ export const dataPresets = [
   { kind: BULK, name: "USB 데이터 전송", request },
   { kind: PCIE_TUNNEL, name: "PCIe 터널 전송", request },
 ];
+
+export const dataCardStats = [
+  { scope: "item", field: "cableDataGbps", label: "데이터 정격" },
+  { scope: "interface", field: "modes", label: "USB 모드" },
+  { scope: "interface", field: "tunnelGbps", label: "터널 한도" },
+] as const;

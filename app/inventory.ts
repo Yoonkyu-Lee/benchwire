@@ -1,5 +1,6 @@
 // 보유·후보 실물을 고르고 캔버스에 놓거나 다음 연결의 케이블로 선택한다.
 import { modelKey, type InventoryItem, type Library, type SceneDocument } from "./document.ts";
+import { inventoryStats, type CardMeasurements } from "./cards.ts";
 
 export const INVENTORY_DRAG = "application/x-benchwire-item";
 const tabs = { owned: "보유", candidate: "후보", recommended: "추천" } as const;
@@ -23,6 +24,7 @@ export function mountInventory(root: HTMLElement, library: Pick<Library, "invent
   let placed = new Set<string>();
   let used = new Set<string>();
   let selectedCable: string | undefined;
+  let measured: CardMeasurements | undefined;
   for (const [key, title] of Object.entries(tabs) as [Tab, string][]) {
     const button = document.createElement("button");
     button.type = "button";
@@ -63,6 +65,8 @@ export function mountInventory(root: HTMLElement, library: Pick<Library, "invent
       detail.textContent = [model.kind === "cable" ? "케이블" : model.kind === "adapter" ? "어댑터" : `포트 ${model.ports.length}개`,
         isUsed ? "연결됨" : isPlaced ? "배치됨" : ""].filter(Boolean).join(" · ");
       row.append(name, detail);
+      const stats = inventoryStats(model, measured?.get(item.instanceId));
+      if (stats.childElementCount) row.append(stats);
       const controls = document.createElement("div");
       controls.className = "inventory-actions";
       if (!isPlaced) {
@@ -100,8 +104,9 @@ export function mountInventory(root: HTMLElement, library: Pick<Library, "invent
     }
   }
 
-  return (scene: SceneDocument, cableId?: string) => {
+  return (scene: SceneDocument, cableId?: string, measurements?: CardMeasurements) => {
     selectedCable = cableId;
+    measured = measurements;
     placed = new Set(scene.items.map(i => i.instanceId));
     used = new Set(scene.connections.flatMap(c => [c.from.instanceId, c.to.instanceId, ...c.parts.map(p => p.instanceId)]));
     show();

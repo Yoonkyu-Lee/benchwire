@@ -6,3 +6,7 @@ export const storagePresets = [{
   kind: "copy", name: "저장장치 복사",
   request: { throughput: { value: DEFAULT_COPY_MB_PER_SECOND, unit: "MB/s" } },
 }];
+
+export const storageCardStats = [
+  { scope: "resource", field: "capacity", label: "저장 처리량" },
+] as const;

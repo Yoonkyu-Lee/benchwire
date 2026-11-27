@@ -24,3 +24,9 @@ export const powerPresets = [{
   kind: "charge", name: "USB PD 충전",
   request: { requestedW: { value: null, unit: POWER_UNIT }, loadW: { value: null, unit: POWER_UNIT } },
 }];
+
+export const powerCardStats = [
+  { scope: "resource", field: "capacity", label: "전력 예산" },
+  { scope: "interface", field: "maxW", label: "포트 최대 전력" },
+  { scope: "interface", field: "currentA", label: "케이블 정격" },
+] as const;

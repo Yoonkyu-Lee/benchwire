@@ -3,7 +3,10 @@ import { occupiedPorts } from "./connection.ts";
 import { modelKey, portKey, type Library, type Model, type Point, type Port, type PortRef, type SceneDocument, type SceneIntent, type Viewport } from "./document.ts";
 import { wireLayers, type Layer } from "./layers.ts";
 import type { WireMark } from "./results.ts";
-import { cardLayout, CARD_WIDTH, type PortLayout } from "./layout.ts";
+import { cardRows, type CardMeasurements } from "./cards.ts";
+import type { HeatMark } from "./heatmap.ts";
+import { cardLayout, CARD_STAT_ROW, CARD_WIDTH, type PortLayout } from "./layout.ts";
+import { mountParticles, type Curve, type FlowTrack } from "./particles.ts";
 
 const SVG = "http://www.w3.org/2000/svg";
 const glyphs = new Map([
@@ -44,11 +47,19 @@ function portConflicts(port: Port, sources: Model["sources"]) {
 
 interface Card { position: Point; element: SVGGElement; height: number; wires: Wire[] }
 interface Socket { card: Card; layout: PortLayout; ref: PortRef; element: SVGGElement }
-interface Wire { from: Socket; to: Socket; lines: SVGPathElement[]; labels: SVGTextElement[]; caption: SVGGElement }
+interface Wire { from: Socket; to: Socket; lines: SVGPathElement[]; labels: SVGTextElement[]; caption: SVGGElement; curves: Curve[]; tracks: FlowTrack[] }
+interface WireEnd { id: string; end: "from" | "to"; fixed: Socket }
+interface CanvasMarks {
+  assessed?: ReadonlyMap<string, readonly WireMark[]> | undefined;
+  measured?: CardMeasurements | undefined;
+  heat?: ReadonlyMap<string, readonly HeatMark[]> | undefined;
+  arrivals?: ReadonlySet<string> | undefined;
+}
 type Gesture = { pointer: number; start: Point } & (
   | { kind: "pan"; origin: Point }
   | { kind: "move"; instanceId: string; card: Card; origin: Point }
   | { kind: "connect"; source: Socket }
+  | { kind: "rewire"; endpoint: WireEnd; source: Socket }
 );
 
 const MIN_ZOOM = 0.14;
@@ -59,7 +70,8 @@ const WIRE_ARROWS = ["→", "↘", "↓", "↙", "←", "↖", "↑", "↗"];
 
 
 export function mountCanvas(root: HTMLElement, library: Library,
-  actions: { intent: (intent: SceneIntent) => void; status: (text: string) => void; selectConnection?: (id: string) => void; selectWorkload?: (id: string) => void }) {
+  actions: { intent: (intent: SceneIntent) => void; status: (text: string) => void; selectConnection?: (id: string) => void;
+    selectWorkload?: (id: string) => void; selectResource?: (row: number) => void }) {
   const surface = svg("svg", { class: "surface", "aria-label": "장면 캔버스", tabindex: "0" });
   const world = svg("g", { class: "world" });
   const wireLayer = svg("g", { class: "wires" });
@@ -74,13 +86,22 @@ export function mountCanvas(root: HTMLElement, library: Library,
   const cards = new Map<string, Card>();
   const sockets = new Map<string, Socket>();
   const wires = new Map<string, Wire>();
+  const ends = new Map<Socket, WireEnd>();
   const hidden = new Set<Layer>();
   let occupied = new Set<string>();
   let camera = { x: 0, y: 0, zoom: 1 };
+  const particles = mountParticles(root, () => camera, (x, y, padding) => {
+    for (const { position, height } of cards.values()) {
+      if (x + padding >= position.x && x - padding <= position.x + CARD_WIDTH &&
+          y + padding >= position.y && y - padding <= position.y + height) return true;
+    }
+    return false;
+  });
   let cameraFrame: number | undefined;
   let gesture: Gesture | undefined;
   const afterPointer: (() => void)[] = [];
   let selected: Socket | undefined;
+  let selectedEnd: WireEnd | undefined;
   let highlighted: string | undefined;
   let drawn = false;
 
@@ -137,18 +158,22 @@ export function mountCanvas(root: HTMLElement, library: Library,
     return { x: socket.card.position.x + socket.layout.x, y: socket.card.position.y + socket.layout.y };
   }
 
-  function curve(from: Point, to: Point, offset = 0) {
-    const a = { x: from.x, y: from.y + offset }, b = { x: to.x, y: to.y + offset };
-    const swing = Math.min(100, Math.max(20, Math.abs(b.x - a.x) / 2));
-    const sign = b.x >= a.x ? 1 : -1;
-    return `M${a.x},${a.y} C${a.x + swing * sign},${a.y} ${b.x - swing * sign},${b.y} ${b.x},${b.y}`;
+  function curve(a: Point, b: Point, offset = 0): Curve {
+    const swing = Math.min(100, Math.max(20, Math.abs(b.x - a.x) / 2)) * (b.x >= a.x ? 1 : -1);
+    return [a.x, a.y + offset, a.x + swing, b.x - swing, b.x, b.y + offset];
+  }
+
+  function path([ax, ay, c1, c2, bx, by]: Curve) {
+    return `M${ax},${ay} C${c1},${ay} ${c2},${by} ${bx},${by}`;
   }
 
   function paintWire(wire: Wire) {
     const a = coords(wire.from), b = coords(wire.to);
     const octant = Math.round(Math.atan2(b.y - a.y, b.x - a.x) / (Math.PI / 4));
     wire.lines.forEach((line, i) => {
-      line.setAttribute("d", curve(a, b, (i - (wire.lines.length - 1) / 2) * 5));
+      const geometry = curve(a, b, (i - (wire.lines.length - 1) / 2) * 5);
+      wire.curves[i] = geometry;
+      line.setAttribute("d", path(geometry));
       const direction = line.dataset.direction;
       const arrow = direction ? WIRE_ARROWS[(octant + (direction === "reverse" ? 4 : 0) + 8) % 8] + " " : "";
       const prefix = wire.labels[i]?.firstChild;
@@ -172,10 +197,11 @@ export function mountCanvas(root: HTMLElement, library: Library,
   function mark(socket: Socket | undefined) {
     selected?.element.removeAttribute("aria-pressed");
     selected = socket;
+    selectedEnd = undefined;
     selected?.element.setAttribute("aria-pressed", "true");
   }
 
-  function render(scene: SceneDocument, assessed?: ReadonlyMap<string, readonly WireMark[]>) {
+  function render(scene: SceneDocument, { assessed, measured, heat, arrivals }: CanvasMarks = {}) {
     const focused = socketAt(document.activeElement);
     const selectedKey = selected && portKey(selected.ref);
     gesture = undefined;
@@ -185,6 +211,7 @@ export function mountCanvas(root: HTMLElement, library: Library,
     cards.clear();
     sockets.clear();
     wires.clear();
+    ends.clear();
     wireLayer.replaceChildren();
     cardLayer.replaceChildren();
     occupied = occupiedPorts(scene);
@@ -200,7 +227,8 @@ export function mountCanvas(root: HTMLElement, library: Library,
       const model = models.get(modelKey(item));
       if (!model || model.kind === "cable" && parts.has(item.instanceId) &&
           model.ports.every(p => occupied.has(portKey({ instanceId: item.instanceId, id: p.id })))) continue;
-      const layout = cardLayout(model);
+      const stats = cardRows(model, measured?.get(item.instanceId));
+      const layout = cardLayout(model, stats.length);
       const column = index++ % 5;
       if (column === 0 && index > 1) {
         rowY += rowHeight + 72;
@@ -215,6 +243,24 @@ export function mountCanvas(root: HTMLElement, library: Library,
       body.append(fullName, svg("rect", { class: "device-body", width: CARD_WIDTH, height: layout.height, rx: 12 }),
         label(name.length > 15 ? name.slice(0, 14) + "…" : name, 16, 27, "device-name"),
         label(model.kind === "cable" ? "케이블" : model.kind === "adapter" ? "어댑터" : `포트 ${model.ports.length}개`, 16, 43, "device-meta"));
+      stats.forEach((stat, row) => {
+        const y = 58 + row * CARD_STAT_ROW;
+        const group = svg("g", { class: "card-stat", "data-confidence": stat.confidence });
+        const hint = svg("title");
+        hint.textContent = stat.title;
+        const text = stat.label + " " + stat.value;
+        const count = stat.conflict ? 13 : 19;
+        const badgeX = stat.conflict ? 129 : 146;
+        group.append(hint, label(text.length > count ? text.slice(0, count - 1) + "…" : text, 16, y, "device-stat"),
+          svg("rect", { class: "confidence-badge", x: badgeX, y: y - 10, width: 49, height: 13, rx: 4 }),
+          label(stat.badge, badgeX + 24.5, y, "badge-caption"));
+        if (stat.conflict) {
+          group.append(svg("rect", { class: "conflict-badge", x: 181, y: y - 10, width: 26, height: 13, rx: 4 }),
+            label("충돌", 194, y, "badge-caption"));
+        }
+        body.append(group);
+      });
+      if (heat) addHeat(body, heat.get(item.instanceId) ?? []);
       for (const face of layout.panels) {
         body.append(svg("rect", { class: "port-face", "data-face": face.face, x: face.x, y: face.y, width: face.width, height: face.height, rx: 5 }),
           label(face.label, face.x, face.y + face.height + 13, "face-name"));
@@ -258,7 +304,10 @@ export function mountCanvas(root: HTMLElement, library: Library,
           line.dataset.resultKind = mark.kind;
           line.dataset.direction = mark.direction ?? "";
           line.dataset.unit = mark.unit;
-          if (mark.verdict) line.dataset.verdict = mark.verdict;
+          if (mark.verdict) {
+            line.dataset.verdict = mark.verdict;
+            if (mark.layer !== "unclassified" && arrivals?.has(edge.id)) line.classList.add("wire-arrival");
+          }
           else if (mark.kind === "negotiation") line.classList.add("wire-capability");
           if (mark.pool) line.dataset.pool = mark.pool;
           if (mark.width !== undefined) line.style.setProperty("--flow-width", String(mark.width));
@@ -290,13 +339,28 @@ export function mountCanvas(root: HTMLElement, library: Library,
       caption.append(...labels);
       group.append(...lines, caption);
       wireLayer.append(group);
-      const wire = { from, to, lines, labels, caption };
+      const wire: Wire = { from, to, lines, labels, caption, curves: [], tracks: [] };
+      marks.forEach((mark, index) => {
+        if (mark.density && mark.direction) wire.tracks.push({
+          density: mark.density, direction: mark.direction, layer: mark.layer, curve: () => wire.curves[index]!,
+        });
+      });
       wires.set(edge.id, wire);
+      if (edge.parts.length) {
+        ends.set(from, { id: edge.id, end: "from", fixed: to });
+        ends.set(to, { id: edge.id, end: "to", fixed: from });
+        for (const socket of [from, to]) {
+          socket.element.classList.add("rewire-port");
+          socket.element.setAttribute("aria-keyshortcuts", "Shift+Enter");
+          socket.element.querySelector("title")!.textContent += "\n케이블 끝 옮기기 · 끌기 또는 Shift+Enter";
+        }
+      }
       from.card.wires.push(wire);
       if (to.card !== from.card) to.card.wires.push(wire);
       paintWire(wire);
       updateCaption(wire);
     }
+    refreshTracks();
     if (!drawn) {
       drawn = true;
       if (scene.layout?.viewport) lookAt(scene.layout.viewport);
@@ -304,6 +368,25 @@ export function mountCanvas(root: HTMLElement, library: Library,
     }
     if (selectedKey && !occupied.has(selectedKey)) mark(sockets.get(selectedKey));
     if (focused) sockets.get(portKey(focused.ref))?.element.focus({ preventScroll: true });
+  }
+
+  function addHeat(body: SVGGElement, marks: readonly HeatMark[]) {
+    const width = (CARD_WIDTH - 24) / marks.length;
+    marks.forEach(({ row, label: title, caption, usage, bottleneck }, index) => {
+      const mark = svg("g", { class: "heat-mark", "data-heat-resource": row, "data-usage": usage === null ? "unknown" : usage,
+        "data-bottleneck": String(bottleneck), role: "button", tabindex: "0", "aria-label": title });
+      const hint = svg("title");
+      hint.textContent = title;
+      const x = 12 + width * index;
+      const stripe = svg("rect", { x, y: 3, width: width - 3, height: 10, rx: 3 });
+      if (usage !== null) stripe.style.fill = `hsl(${(1 - Math.min(1, Math.max(0, usage))) * 118} 67% 43%)`;
+      mark.append(hint, stripe, label(caption, x + (width - 3) / 2, 11, "heat-caption"));
+      body.append(mark);
+    });
+  }
+
+  function refreshTracks() {
+    particles.setTracks([...wires.values()].flatMap(wire => wire.tracks.filter(track => !hidden.has(track.layer))));
   }
 
   function updateCaption(wire: Wire) {
@@ -322,6 +405,7 @@ export function mountCanvas(root: HTMLElement, library: Library,
       for (const line of wire.lines) if (line.dataset.layer === layer) line.classList.toggle("layer-hidden", !visible);
       updateCaption(wire);
     }
+    refreshTracks();
   }
 
   function socketAt(target: EventTarget | null) {
@@ -341,6 +425,12 @@ export function mountCanvas(root: HTMLElement, library: Library,
   function connect(a: Socket, b: Socket) {
     if (a === b) { actions.status("연결할 다른 포트를 선택하세요."); return; }
     if (beginPort(b)) actions.intent({ kind: "connect", from: a.ref, to: b.ref });
+  }
+
+  function rewire(endpoint: WireEnd, source: Socket, target: Socket) {
+    if (source !== target && beginPort(target)) actions.intent({
+      kind: "move-connection-end", id: endpoint.id, end: endpoint.end, target: target.ref,
+    });
   }
 
   function afterGesture(draw: () => void) {
@@ -374,6 +464,8 @@ export function mountCanvas(root: HTMLElement, library: Library,
   surface.addEventListener("pointerdown", event => {
     if (event.button !== 0 || gesture || !(event.target instanceof Element)) return;
     const start = { x: event.clientX, y: event.clientY };
+    const resource = event.target.closest<SVGGElement>("[data-heat-resource]");
+    if (resource) { actions.selectResource?.(Number(resource.dataset.heatResource)); return; }
     const socket = socketAt(event.target);
     const connection = event.target.closest<SVGGElement>("[data-connection]");
     const id = event.target.closest<SVGGElement>("[data-instance]")?.dataset.instance;
@@ -381,8 +473,10 @@ export function mountCanvas(root: HTMLElement, library: Library,
     mark(undefined);
     if (socket) {
       socket.element.focus({ preventScroll: true });
-      if (!beginPort(socket)) return;
-      gesture = { ...state, kind: "connect", source: socket };
+      const endpoint = ends.get(socket);
+      if (endpoint) gesture = { ...state, kind: "rewire", endpoint, source: socket };
+      else if (beginPort(socket)) gesture = { ...state, kind: "connect", source: socket };
+      else return;
     } else if (connection) {
       const workload = event.target.closest<SVGElement>("[data-workload]")?.dataset.workload;
       if (workload) actions.selectWorkload?.(workload);
@@ -402,8 +496,10 @@ export function mountCanvas(root: HTMLElement, library: Library,
     if (!gesture || event.pointerId !== gesture.pointer) return;
     const p = { x: event.clientX, y: event.clientY };
     const dx = p.x - gesture.start.x, dy = p.y - gesture.start.y;
-    if (gesture.kind === "connect") preview.setAttribute("d", curve(coords(gesture.source), toWorld(local(p))));
-    else if (gesture.kind === "move") move(gesture.card, { x: gesture.origin.x + dx / camera.zoom, y: gesture.origin.y + dy / camera.zoom });
+    if (gesture.kind === "connect" || gesture.kind === "rewire") {
+      const fixed = gesture.kind === "connect" ? gesture.source : gesture.endpoint.fixed;
+      preview.setAttribute("d", path(curve(coords(fixed), toWorld(local(p)))));
+    } else if (gesture.kind === "move") move(gesture.card, { x: gesture.origin.x + dx / camera.zoom, y: gesture.origin.y + dy / camera.zoom });
     else { camera.x = gesture.origin.x + dx; camera.y = gesture.origin.y + dy; scheduleCamera(); }
   });
 
@@ -418,6 +514,11 @@ export function mountCanvas(root: HTMLElement, library: Library,
     } else if (active.kind === "connect") {
       const target = socketAt(document.elementFromPoint(event.clientX, event.clientY));
       if (target) connect(active.source, target);
+    } else if (active.kind === "rewire") {
+      if (Math.hypot(event.clientX - active.start.x, event.clientY - active.start.y) > DRAG_DISTANCE) {
+        const target = socketAt(document.elementFromPoint(event.clientX, event.clientY));
+        if (target) rewire(active.endpoint, active.source, target);
+      } else beginPort(active.source);
     } else if (active.kind === "move") {
       const dx = event.clientX - active.start.x, dy = event.clientY - active.start.y;
       if (Math.hypot(dx, dy) > DRAG_DISTANCE)
@@ -447,19 +548,28 @@ export function mountCanvas(root: HTMLElement, library: Library,
       return;
     }
     if (event.key !== "Enter" && event.key !== " ") return;
+    const resource = event.target instanceof Element ? event.target.closest<SVGGElement>("[data-heat-resource]") : null;
+    if (resource) { event.preventDefault(); actions.selectResource?.(Number(resource.dataset.heatResource)); return; }
     const wire = event.target instanceof Element ? event.target.closest<SVGGElement>("[data-connection]") : null;
     if (wire) { event.preventDefault(); highlight(wire); return; }
     const target = socketAt(event.target);
     if (!target) return;
     event.preventDefault();
     if (selected) {
-      const from = selected;
+      const from = selected, endpoint = selectedEnd;
       mark(undefined);
-      connect(from, target);
+      if (endpoint) rewire(endpoint, from, target);
+      else connect(from, target);
+    } else if (event.shiftKey && ends.has(target)) {
+      mark(target);
+      selectedEnd = ends.get(target);
+      actions.status("케이블을 옮길 포트에서 Enter 또는 Space를 누르세요.");
     } else if (beginPort(target)) {
       mark(target);
       actions.status("연결할 반대편 포트에서 Enter 또는 Space를 누르세요.");
     }
   });
-  return { render, setLayer, zoom, fit, afterGesture, fromClient: (point: Point) => toWorld(local(point)), center: () => toWorld(center()) };
+  return { render, setLayer, zoom, fit, afterGesture, setReduced: particles.setReduced,
+    dispose() { particles.dispose(); if (cameraFrame !== undefined) cancelAnimationFrame(cameraFrame); },
+    fromClient: (point: Point) => toWorld(local(point)), center: () => toWorld(center()) };
 }
