@@ -5,6 +5,8 @@ export type Confidence = "official" | "review" | "community" | "user_verified" |
 export type Owner = "item" | "port" | "interface" | "edge" | "resource" | "mate" | "connector" | "connection" | "workload";
 export interface Claim {
   id: string; scope: "model" | "personal" | "scene" | "catalog"; ownerKind: Owner; owner: number;
+  // 같은 모델 판본의 같은 주장에 기대는 실물은 후보 세계 안에서도 값을 공유한다.
+  conflictGroup?: number; inferredFrom?: string;
   reference?: number | null; domain: string; field: string; condition: string; value: Value; unit: string; confidence: Confidence;
 }
 export interface Scene {
@@ -26,7 +28,7 @@ export interface Scene {
   members: { scenario: number; workload: number; priority?: number; evidence?: number }[];
   claims: Claim[];
   sources: { id: string; title: string; locator: string; retrievedAt: string }[];
-  claimSources: { claim: number; source: number }[];
+  claimSources: { claim: number; source: number; candidate?: { value: Exclude<Value, null>; confidence: Confidence; inferredFrom?: string } }[];
 }
 
 // 조건이 맞는 주장을 먼저 쓰고 같은 조건에서는 개인 검증을 우선한다.

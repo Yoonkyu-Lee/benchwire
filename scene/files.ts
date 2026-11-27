@@ -4,16 +4,36 @@ import { z } from "zod";
 export const id = z.string().min(1);
 const ids = z.array(id).nonempty();
 const confidence = z.enum(["official", "review", "community", "user_verified", "inferred", "unknown"]);
+const fileId = z.string().regex(/^[\p{L}\p{N}_-]+(?:\.[\p{L}\p{N}_-]+)*$/u, "파일 이름에 쓸 수 없는 ID입니다");
+const revisionRef = z.string().refine(key => {
+  const parts = key.split("@");
+  return parts.length === 2 && parts.every(part => fileId.safeParse(part).success);
+}, "원본 판본은 modelId@revision 형식입니다");
+const scalar = z.union([z.number(), z.string(), z.boolean()]);
+const conflict = z.strictObject({
+  value: scalar, unit: z.string().optional(), confidence: confidence.exclude(["unknown"]),
+  sources: ids, condition: z.string().optional(),
+});
 const fact = z.strictObject({
-  value: z.union([z.number(), z.string(), z.boolean(), z.null()]), unit: z.string().default(""),
-  confidence, sources: ids, condition: z.string().default(""),
-}).refine(f => f.confidence !== "unknown" || f.value === null, "미확인 값은 null이어야 합니다");
+  value: scalar.nullable(), unit: z.string().default(""), confidence, sources: ids, condition: z.string().default(""),
+  conflicts: z.array(conflict).optional(), inferredFrom: revisionRef.optional(),
+}).superRefine((f, ctx) => {
+  function error(path: (string | number)[], message: string) { ctx.addIssue({ code: "custom", path, message }); }
+  if (f.confidence === "unknown" && f.value !== null) error([], "미확인 값은 null이어야 합니다");
+  if (f.inferredFrom && (f.value === null || f.confidence !== "inferred"))
+    error(["inferredFrom"], "원본 판본은 복제한 추정값에 붙입니다");
+  if (f.conflicts?.length && f.value === null) error(["conflicts"], "출처 충돌에는 알려진 본값이 필요합니다");
+  f.conflicts?.forEach((c,i) => {
+    if (c.value === f.value) error(["conflicts",i,"value"], "본값과 같으면 본값의 출처에 합칩니다");
+    if (c.unit !== undefined && c.unit !== f.unit) error(["conflicts",i,"unit"], "충돌 후보의 단위가 다릅니다");
+    if (c.condition !== undefined && c.condition !== f.condition) error(["conflicts",i,"condition"], "조건이 다르면 별도 주장입니다");
+  });
+});
 export type Fact = z.infer<typeof fact>;
-const evidence = fact.refine(f => f.value === true && !f.unit && !f.condition, "구조 근거에는 무조건 성립하는 참값이 필요합니다");
+const evidence = fact.refine(f => f.value === true && !f.unit && !f.condition && !f.conflicts?.length, "구조 근거에는 무조건 성립하는 참값이 필요합니다");
 const fields = z.record(id, fact);
 const sources = z.array(z.strictObject({ id, title: id, locator: id, retrievedAt: z.iso.date() }));
 const localRef = z.strictObject({ instanceId: id, id });
-const fileId = z.string().regex(/^[\p{L}\p{N}_-]+(?:\.[\p{L}\p{N}_-]+)*$/u, "파일 이름에 쓸 수 없는 ID입니다");
 
 export const connectorsFile = z.strictObject({
   sources, connectors: z.array(z.strictObject({ id, endForm: fact, glyph: fileId.optional() })),
@@ -53,7 +73,7 @@ export const sceneFile = z.strictObject({
   })),
   workloads: z.array(z.strictObject({ id, domain: id, kind: id, from: localRef, to: localRef, request: fields })),
   scenarios: z.array(z.strictObject({ id, members: z.array(z.union([id, z.strictObject({ workload: id, priority: fact.refine(f =>
-    typeof f.value === "number" && Number.isSafeInteger(f.value) && !f.unit && !f.condition, "우선순위에는 단위 없는 정수가 필요합니다") })])) })),
+    typeof f.value === "number" && Number.isSafeInteger(f.value) && !f.conflicts?.some(c => !Number.isSafeInteger(c.value)) && !f.unit && !f.condition, "우선순위에는 단위 없는 정수가 필요합니다") })])) })),
 });
 
 // 파일·메모리 입력에서 같은 문서 위치를 오류에 남긴다.

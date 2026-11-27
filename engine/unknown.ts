@@ -9,6 +9,9 @@ import { addReason, type Results } from "./results.ts";
 const MAX_WIRINGS = 64;
 // 두 끝의 기본 핀(각 6종)과 대안 지원 여부(각 2종)의 144개 조합도 함께 검산한다.
 const MAX_PROFILE_WORLDS = 256;
+type SourceCandidate = NonNullable<Scene["claimSources"][number]["candidate"]>;
+// 한 값을 여러 출처가 지지하면 세계의 대표 신뢰도는 가장 높은 것을 쓰고 인용은 모두 남긴다.
+const confidenceOrder: readonly SourceCandidate["confidence"][] = ["user_verified", "official", "review", "community", "inferred", "unknown"];
 type Metric = Results["metrics"][number];
 type Variable = { claim: number; samples: { value: string | number | boolean; node?: number; reference?: number }[] };
 
@@ -153,12 +156,21 @@ function merge(scene: Scene, plugins: readonly DomainPlugin[], r: Results, row: 
   for (const id of new Set(samples.flatMap(s => s.quests))) ask(scene, plugins, r, row, id);
 
   // 나머지 주장을 고정한 채 이 주장 하나를 바꿔 결과가 달라지는지 비교한다.
-  const changed = variables.flatMap((v, j) => {
+  let changed = false;
+  variables.forEach((v,j) => {
     const stride = strides[j]!;
-    return samples.some((s,i) => Math.floor(i / stride) % v.samples.length !== 0 &&
-      !sameOutcome(s, samples[i - (Math.floor(i / stride) % v.samples.length) * stride]!)) ? [v.claim] : [];
+    let impact: "verdict" | "range" | undefined;
+    for (const [i,s] of samples.entries()) {
+      const position = Math.floor(i / stride) % v.samples.length;
+      if (!position) continue;
+      const other = samples[i - position * stride]!;
+      if (s.possible.length !== other.possible.length || s.possible.some((p,n) => p !== other.possible[n])) {
+        impact = "verdict"; break;
+      }
+      if (!sameOutcome(s,other)) impact = "range";
+    }
+    if (impact) { changed = true; ask(scene, plugins, r, row, v.claim, impact); }
   });
-  for (const id of changed) ask(scene, plugins, r, row, id);
   // 고정 옵션이 사라져도 연결의 실효 한도와 두 경계를 지지한 후보를 남긴다.
   const limit = samples.flatMap(s => s.metrics.filter(m => m.kind === "limit"))[0];
   if (limit && o.option === undefined) r.metrics.push({ ...limit, outcome:row });
@@ -193,10 +205,11 @@ function merge(scene: Scene, plugins: readonly DomainPlugin[], r: Results, row: 
   }
   r.needs = r.needs.filter(n => n.outcome !== row);
   for (const requiredCapability of first.needs) if (samples.every(s => s.needs.includes(requiredCapability))) r.needs.push({ outcome: row, requiredCapability });
-  if (!changed.length && priorVerdict !== "unknown" && priorVerdict === o.verdict) return;
+  if (!changed && priorVerdict !== "unknown" && priorVerdict === o.verdict) return;
   const evidence = [...new Set([...samples.flatMap(s => s.inputs), ...variables.map(v => v.claim)])];
   const parent = r.reasons.findLastIndex(reason => reason.outcome === row);
-  const rule = variables.some(v => v.samples[0]?.node === undefined) ? "연결 설정 후보별 판정과 범위" : "일관된 배선 후보별 판정과 범위";
+  const rule = variables.some(v => scene.claims[v.claim]!.conflictGroup !== undefined) ? "출처 충돌 후보별 판정과 범위"
+    : variables.some(v => v.samples[0]?.node === undefined) ? "연결 설정 후보별 판정과 범위" : "일관된 배선 후보별 판정과 범위";
   const parents = parent < 0 ? [] : [parent];
   const limitRange = r.metrics.find(m => m.outcome === row && m.kind === "limit");
   if (limitRange && limitRange.low !== limitRange.high) {
@@ -220,10 +233,18 @@ export function resolveUnknowns(scene: Scene, plugins: readonly DomainPlugin[], 
   completeUnknowns(scene, plugins, result);
   const all: Variable[] = [];
   const profileLinks = new Map<number, Set<number>>();
+  const conflicts = new Map<number, Map<SourceCandidate["value"], SourceCandidate>>();
+  for (const { claim, candidate } of scene.claimSources) if (candidate) {
+    const values = conflicts.get(claim) ?? new Map<SourceCandidate["value"], SourceCandidate>();
+    const previous = values.get(candidate.value);
+    if (!previous || confidenceOrder.indexOf(candidate.confidence) < confidenceOrder.indexOf(previous.confidence))
+      values.set(candidate.value, candidate);
+    conflicts.set(claim, values);
+  }
   scene.claims.forEach((c,claim) => {
     if (c.value !== null || effectiveClaim(scene, c.ownerKind, c.owner, c.domain, c.field, c.condition) !== claim) return;
     const owners = c.domain ? plugins.filter(p => p.id === c.domain) : plugins;
-    const values = new Set(owners.flatMap(p => p.profileValues?.(c) ?? []));
+    const values = new Set(conflicts.get(claim)?.keys() ?? owners.flatMap(p => p.profileValues?.(c) ?? []));
     if (!values.size) return;
     const samples: Variable["samples"] = [];
     for (const value of values) {
@@ -260,8 +281,10 @@ export function resolveUnknowns(scene: Scene, plugins: readonly DomainPlugin[], 
       for (const opt of result.options.filter(v => v.connection === o.subjectRow && v.direction === o.direction && v.domain === o.domain))
         for (const id of opt.inputs) claims.add(id);
     } else {
-      const members = scene.members.filter(m => m.scenario === o.scenario).map(m => m.workload);
-      for (const w of competingWorks(o.subjectRow, members, routeInputs)) {
+      const members = scene.members.filter(m => m.scenario === o.scenario);
+      for (const w of competingWorks(o.subjectRow, members.map(m => m.workload), routeInputs)) {
+        const rank = members.find(m => m.workload === w)?.evidence;
+        if (rank !== undefined) claims.add(rank);
         for (const id of routeInputs[w]!.claims) claims.add(id);
         for (const resource of routeInputs[w]!.resources) {
           const link = result.linkResources[resource - scene.resources.length];
@@ -283,10 +306,17 @@ export function resolveUnknowns(scene: Scene, plugins: readonly DomainPlugin[], 
   const updated = new Set<number>();
   let world = 0;
   for (const { variables, affected } of groups) {
-    const count = variables.reduce((n,v) => n * v.samples.length, 1);
+    const axes = new Map<number, number>();
+    let count = 1;
+    const strides = variables.map(v => {
+      const group = scene.claims[v.claim]!.conflictGroup ?? v.claim;
+      if (!axes.has(group)) { axes.set(group, count); count *= v.samples.length; }
+      return axes.get(group)!;
+    });
     const scenarios = new Set(affected.map(i => result.outcomes[i]!.scenario));
     const scope = provisional.flatMap((u,i) => scenarios.has(u.scenario) || scenarios.has(null) ? [i] : []);
     const profileChanged = variables.some(v => profileLinks.has(v.claim));
+    const disputed = variables.some(v => conflicts.has(v.claim));
     if (!count || count > (profileChanged ? MAX_PROFILE_WORLDS : MAX_WIRINGS)) {
       if (profileChanged) {
         const links = new Set(variables.flatMap(v => [...(profileLinks.get(v.claim) ?? [])]));
@@ -316,34 +346,41 @@ export function resolveUnknowns(scene: Scene, plugins: readonly DomainPlugin[], 
         for (const m of result.measures.filter(m => m.outcome === row)) m.low = m.high = null;
         const runs = new Set(result.assessments.filter(a => a.outcome === row).map(a => a.run));
         result.assessments = result.assessments.filter(a => a.outcome !== row);
-        for (const run of runs) for (const verdict of ["ok","conditional","impossible"] as const)
+        if (!disputed) for (const run of runs) for (const verdict of ["ok","conditional","impossible"] as const)
           result.assessments.push({ outcome: row, run, verdict });
         if (o.subjectKind === "workload") {
           for (const a of result.allocations) if (a.workload === o.subjectRow && a.scenario === o.scenario) a.value = null;
           result.bindings = result.bindings.filter(b => b.workload !== o.subjectRow || b.scenario !== o.scenario);
         }
         result.possibleVerdicts = result.possibleVerdicts.filter(v => v.outcome !== row);
-        for (const verdict of ["ok", "conditional", "impossible"] as const) result.possibleVerdicts.push({ outcome: row, verdict });
+        if (!disputed) for (const verdict of ["ok", "conditional", "impossible"] as const) result.possibleVerdicts.push({ outcome: row, verdict });
         const claims = variables.map(v => v.claim);
-        addReason(result, { outcome: row, stage: "judge", rule: count ? "배선 조합 상한" : "부착점 후보 없음", targetKind: o.subjectKind, targetRow: o.subjectRow }, claims);
+        addReason(result, { outcome: row, stage: "judge", rule: disputed ? "출처 후보 조합 상한" : count ? "배선 조합 상한" : "부착점 후보 없음", targetKind: o.subjectKind, targetRow: o.subjectRow }, claims);
         for (const id of claims) ask(scene, plugins, result, row, id);
       }
       continue;
     }
-    const strides: number[] = [];
-    let stride = 1;
-    for (const v of variables) { strides.push(stride); stride *= v.samples.length; }
+    const assignments = all.filter(v => axes.has(scene.claims[v.claim]!.conflictGroup ?? v.claim));
     const observations = affected.map((): ReturnType<typeof snapshot>[] => []), worlds: number[] = [];
     const totals = new Map<number, Pick<Results["resourceUsage"][number], "used" | "capacity" | "basis">>();
     for (let i = 0; i < count; i++, world++) {
       const claims = [...scene.claims];
-      variables.forEach((v,j) => {
-        const {value,node,reference = node} = v.samples[Math.floor(i / strides[j]!) % v.samples.length]!;
-        claims[v.claim] = { ...claims[v.claim]!, value, ...(reference === undefined ? {} : {reference}) };
+      for (const v of assignments) {
+        const stride = axes.get(claims[v.claim]!.conflictGroup ?? v.claim)!;
+        const {value,node,reference = node} = v.samples[Math.floor(i / stride) % v.samples.length]!;
+        const candidate = conflicts.get(v.claim)?.get(value);
+        claims[v.claim] = { ...claims[v.claim]!, ...candidate, value, ...(reference === undefined ? {} : {reference}) };
         if (node === undefined) result.profileWorlds.push({world,claim:v.claim,value});
         else result.wirings.push({world,claim:v.claim,node});
-      });
-      const concrete = { ...scene, claims }, answer = evaluateWiring(concrete, plugins, profileChanged);
+      }
+      const members = disputed ? scene.members.map(m => {
+        if (m.evidence === undefined || !conflicts.has(m.evidence)) return m;
+        const priority = claims[m.evidence]!.value;
+        return typeof priority === "number" ? { ...m, priority } : m;
+      }) : scene.members;
+      const claimSources = disputed ? scene.claimSources.filter(s => !s.candidate || claims[s.claim]!.value === null ||
+        claims[s.claim]!.value === s.candidate.value) : scene.claimSources;
+      const concrete = { ...scene, claims, members, claimSources }, answer = evaluateWiring(concrete, plugins, profileChanged);
       if (profileChanged) result.choices = result.choices.filter(c => answer.choices.some(other =>
         other.scenario === c.scenario && other.connection === c.connection && other.profile === c.profile));
       completeUnknowns(concrete, plugins, answer);
@@ -376,7 +413,15 @@ export function resolveUnknowns(scene: Scene, plugins: readonly DomainPlugin[], 
           observations[j]!.push(snapshot(answer, silent, result));
           return;
         }
-        // 이 배선에서 해당 예산의 서비스 선언 자체가 사라졌다.
+        // 같은 영역이 다른 예산만 선언한 세계에서는 이 예산으로 보낼 수 있는 양은 0이다.
+        const others = answer.outcomes.flatMap((o,index) => sameSubject(o) ? [snapshot(answer,index,result)] : []);
+        if (base.unit && others.length) {
+          const sample = others[0]!;
+          observations[j]!.push({ ...sample, selected:null, o:{...base, verdict:"impossible", mode:"", label:"연결 불가"},
+            possible:["impossible"], metrics:[{outcome:row, kind:"limit", unit:base.unit, value:0, low:0, high:0, basis:"calculated"}],
+            inputs:others.flatMap(s => s.inputs), specs:others.flatMap(s => s.specs), quests:[], needs:[] });
+          return;
+        }
         const absent = snapshot(result, row);
         observations[j]!.push({ ...absent, selected: null, o: { ...base, verdict: "unknown", mode: "" },
           possible: ["ok","conditional","impossible"], metrics: [], measures: [], assessments: [], bindings: [], needs: [] });

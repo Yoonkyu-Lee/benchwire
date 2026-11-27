@@ -21,6 +21,11 @@ function validateFields(schema: InputSchema, fields: Record<string, Pick<Fact, "
     fail([at, ...path].join("."), issue.message);
   }
 }
+// 후보는 본값과 같은 필드 경계를 통과하며 생략한 단위·조건은 본값에서 받는다.
+function checkValues(fact: Fact, at: string, check: (sample: Pick<Fact, "value" | "unit">, where: string) => void) {
+  check(fact, at);
+  fact.conflicts?.forEach((c,i) => check({ value: c.value, unit: fact.unit }, at + ".conflicts." + i));
+}
 function interfaceSchema(plugin: DomainPlugin, protocol: string) {
   return plugin.paramsFor?.(protocol) ?? plugin.params;
 }
@@ -45,19 +50,46 @@ export function loadSceneDocuments(document: unknown, library: { connectors: unk
     rows.forEach((s, i) => unique(index, s.id, scene.sources.push(s) - 1, at + ".sources." + i));
     return index;
   }
+  const conflictGroups = new Map<Fact, number>();
   function claim(ownerKind: Claim["ownerKind"], owner: number, scope: Claim["scope"], domain: string, field: string,
     fact: Fact, citations: Map<string, number>, at: string) {
     const { value, unit, confidence, condition } = fact;
-    if ((scope === "model" || scope === "catalog") && confidence === "user_verified")
-      fail(at + ".confidence", "사용자 검증값은 장면에서 해당 실물에만 적용합니다");
-    const row = scene.claims.push({ id: JSON.stringify([domain, field, condition]), ownerKind, owner, scope, domain, field, value, unit, confidence, condition }) - 1;
-    fact.sources.forEach((id, i) => scene.claimSources.push({ claim: row, source: ref(citations, id, at + ".sources." + i) }));
+    const row = scene.claims.length, disputed = !!fact.conflicts?.length;
+    const common = { id: JSON.stringify([domain, field, condition]), ownerKind, owner, scope, domain, field, unit, condition };
+    if (disputed) {
+      const group = conflictGroups.get(fact) ?? row;
+      conflictGroups.set(fact, group);
+      scene.claims.push({ ...common, value: null, confidence: "unknown", conflictGroup: group });
+    } else scene.claims.push({ ...common, value, confidence, ...(fact.inferredFrom && { inferredFrom: fact.inferredFrom }) });
+    const seen = new Set<string>();
+    function cite(sample: Pick<Fact, "value" | "confidence" | "sources" | "inferredFrom">, where: string) {
+      if ((scope === "model" || scope === "catalog") && sample.confidence === "user_verified")
+        fail(where + ".confidence", "사용자 검증값은 장면에서 해당 실물에만 적용합니다");
+      if (scope === "personal" && sample.confidence !== "user_verified")
+        fail(where + ".confidence", "개인 주장에는 사용자 검증이 필요합니다");
+      const candidate = disputed && sample.value !== null ? { value: sample.value, confidence: sample.confidence,
+        ...(sample.inferredFrom && { inferredFrom: sample.inferredFrom }) } : undefined;
+      sample.sources.forEach((id,i) => {
+        const source = ref(citations, id, where + ".sources." + i);
+        const key = JSON.stringify([source, candidate]);
+        if (!seen.has(key)) scene.claimSources.push({ claim: row, source, ...(candidate && { candidate }) });
+        seen.add(key);
+      });
+    }
+    cite(fact, at);
+    fact.conflicts?.forEach((c,i) => cite(c, at + ".conflicts." + i));
     return row;
   }
   function fields(ownerKind: Claim["ownerKind"], owner: number, scope: Claim["scope"], domain: string,
     values: Record<string, Fact>, schema: InputSchema, citations: Map<string, number>, at: string) {
-    validateFields(schema, Object.fromEntries(Object.entries(values).map(([key, f]) => [key, { value: f.value, unit: f.unit }])), at);
-    for (const [key, fact] of Object.entries(values)) claim(ownerKind, owner, scope, domain, key, fact, citations, at + "." + key);
+    const base = Object.fromEntries(Object.entries(values).map(([key, f]) => [key, { value: f.value, unit: f.unit }]));
+    validateFields(schema, base, at);
+    for (const [key, fact] of Object.entries(values)) {
+      const where = at + "." + key;
+      fact.conflicts?.forEach((c,i) => validateFields(schema, { ...base, [key]: { value: c.value, unit: fact.unit } },
+        where + ".conflicts." + i, key));
+      claim(ownerKind, owner, scope, domain, key, fact, citations, where);
+    }
   }
 
   const registry = parseDocument(connectorsFile, library.connectors, names.connectors);
@@ -65,8 +97,10 @@ export function loadSceneDocuments(document: unknown, library: { connectors: unk
   const connectors = new Map<string, number>();
   registry.connectors.forEach((c, row) => {
     const at = names.connectors + "#connectors." + row;
-    if (c.endForm.unit || c.endForm.condition || c.endForm.value !== null && typeof c.endForm.value !== "string")
-      fail(at + ".endForm", "결합 형태는 문자열 또는 null입니다");
+    checkValues(c.endForm, at + ".endForm", (sample,where) => {
+      if (sample.unit || c.endForm.condition || sample.value !== null && typeof sample.value !== "string")
+        fail(where, "결합 형태는 문자열 또는 null입니다");
+    });
     const endForm = claim("connector", row, "catalog", "", "endForm", c.endForm, catalogSources, at + ".endForm");
     unique(connectors, c.id, scene.connectors.push({ id: c.id, endForm }) - 1, at + ".id");
   });
@@ -81,15 +115,21 @@ export function loadSceneDocuments(document: unknown, library: { connectors: unk
   const instances = new Map<string, Local>();
 
   function checkResource(field: string, fact: Fact, unit: string, at: string) {
-    const valid = field === "capacity"
-      ? fact.unit === unit && (fact.value === null || typeof fact.value === "number" && fact.value >= 0)
-      : !fact.unit && (fact.value === null || typeof fact.value === "string");
-    if (!valid) fail(at + (fact.unit !== (field === "capacity" ? unit : "") ? ".unit" : ".value"), "자원 " + field + "의 값 또는 단위가 맞지 않습니다");
+    checkValues(fact, at, (sample,where) => {
+      const valid = field === "capacity"
+        ? sample.unit === unit && (sample.value === null || typeof sample.value === "number" && sample.value >= 0)
+        : !sample.unit && (sample.value === null || typeof sample.value === "string");
+      if (!valid) fail(where + (sample.unit !== (field === "capacity" ? unit : "") ? ".unit" : ".value"), "자원 " + field + "의 값 또는 단위가 맞지 않습니다");
+    });
   }
   function referenceRow(fact: Fact, index: Map<string, number>, at: string) {
-    if (fact.unit) fail(at + ".unit", "참조 ID에는 단위를 붙일 수 없습니다");
-    if (fact.value !== null && typeof fact.value !== "string") fail(at + ".value", "지역 ID 또는 null이 필요합니다");
-    return fact.value === null ? null : ref(index, fact.value, at + ".value");
+    let reference: number | null = null;
+    checkValues(fact, at, (sample,where) => {
+      if (sample.unit) fail(where + ".unit", "참조 ID에는 단위를 붙일 수 없습니다");
+      if (sample.value !== null && typeof sample.value !== "string") fail(where + ".value", "지역 ID 또는 null이 필요합니다");
+      if (sample.value !== null) reference = ref(index, sample.value, where + ".value");
+    });
+    return fact.conflicts?.length ? null : reference;
   }
   saved.items.forEach((instance, item) => {
     const { instanceId, modelId, revision, alias, state } = instance;
@@ -196,7 +236,8 @@ export function loadSceneDocuments(document: unknown, library: { connectors: unk
         !(ownerKind === "interface" && c.field === "declaration") &&
         (!c.condition || c.condition === p.claim.condition));
       const values = Object.fromEntries(group.map(c => [c.field, { value: c.value, unit: c.unit }]));
-      validateFields(ownerKind === "item" ? plugin.attributes : interfaceSchema(plugin, scene.interfaces[owner]!.protocol), values, at + ".claim", field);
+      const schema = ownerKind === "item" ? plugin.attributes : interfaceSchema(plugin, scene.interfaces[owner]!.protocol);
+      checkValues(p.claim, at + ".claim", (sample,where) => validateFields(schema, { ...values, [field]: {value:sample.value,unit:sample.unit} }, where, field));
     }
   });
   function endpoint(r: { instanceId: string; id: string }, kind: "nodes" | "ports", at: string) {
@@ -252,7 +293,8 @@ export function loadSceneDocuments(document: unknown, library: { connectors: unk
       else {
         const evidence = claim("workload", workload, "scene", "", "priority", { ...entry.priority, condition: s.id },
           sceneSources, pos + ".priority");
-        scene.members.push({ scenario, workload, priority: entry.priority.value as number, evidence });
+        const priority = scene.claims[evidence]!.value as number | null;
+        scene.members.push({ scenario, workload, ...(priority === null ? {} : { priority }), evidence });
       }
     });
   });

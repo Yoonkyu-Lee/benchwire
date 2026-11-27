@@ -80,10 +80,23 @@ export function printResults(scene: Scene, result: Results): string {
     const c = scene.claims[claim]!;
     const value = c.value === null ? "미확인" : JSON.stringify(c.value);
     const condition = c.condition ? ` · 조건 ${c.condition}` : "";
-    evidence.push(`${pad}주장 ${targetName(c.ownerKind, c.owner)} · ${c.field} = ${value}${c.unit ? ` ${c.unit}` : ""} [${c.confidence}]${condition}`);
-    for (const { source } of scene.claimSources.filter(s => s.claim === claim)) {
-      const s = scene.sources[source]!;
-      evidence.push(`${pad}  출처 ${s.title} (${s.locator})`);
+    const unit = c.unit ? " " + c.unit : "";
+    const origin = c.inferredFrom ? " · 원본 " + c.inferredFrom : "";
+    const field = `${pad}주장 ${targetName(c.ownerKind, c.owner)} · ${c.field}`;
+    evidence.push(c.conflictGroup === undefined ? `${field} = ${value}${unit} [${c.confidence}]${condition}${origin}`
+      : `${field} · 출처 충돌${condition}`);
+    const citations = scene.claimSources.filter(s => s.claim === claim);
+    const groups = Map.groupBy(citations, s => JSON.stringify(s.candidate));
+    for (const rows of groups.values()) {
+      const candidate = rows[0]!.candidate;
+      if (candidate) {
+        const origin = candidate.inferredFrom ? " · 원본 " + candidate.inferredFrom : "";
+        evidence.push(`${pad}  충돌 후보 ${JSON.stringify(candidate.value)}${unit} [${candidate.confidence}]${origin}`);
+      }
+      for (const { source } of rows) {
+        const s = scene.sources[source]!;
+        evidence.push(`${pad}${candidate ? "    " : "  "}출처 ${s.title} (${s.locator})`);
+      }
     }
   }
 
