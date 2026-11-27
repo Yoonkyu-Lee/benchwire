@@ -90,7 +90,7 @@ export function judgeConnections(scene: Scene, plugins: readonly DomainPlugin[],
           if (rows.length && profile) {
             const parents = rows.map(r => linkReason(scene,result,outcome,r));
             const c = choices.find(c => c.connection === connection)!;
-            addReason(result,{outcome,stage:"negotiate",rule:"선택한 설정에서 서비스 미지원: " + profile,targetKind:"connection",targetRow:connection},
+            addReason(result,{outcome,stage:"negotiate",rule:"선택한 설정에서 서비스 미지원: " + profile,profile,targetKind:"connection",targetRow:connection},
               c.inputs,parents,c.domain,c.specs);
           } else noOptionReason(scene, result, outcome, connection, direction, domain);
           continue;

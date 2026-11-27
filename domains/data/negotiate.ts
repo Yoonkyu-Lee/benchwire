@@ -47,6 +47,16 @@ export function usbServices({ scene, connection, ports }: Link): { options: Opti
     });
   }
 
+  const observation = effectiveClaim(scene,"connection",connection,DATA,"usbMode");
+  const observed = observation === undefined ? undefined : scene.claims[observation]!.value;
+  // USB 2·3 벌크 모드 관측은 USB4 패브릭이나 PCIe 서비스의 한도를 정하지 않는다.
+  function bulkRange(rows: readonly (typeof usbModes[number])[], ends: (string[] | null)[], rates: (number | null)[]) {
+    if (observed === undefined) return modeRange(rows,ends,rates);
+    const {possible} = modeRange(rows.filter(r => r.mode === observed),ends,rates);
+    return {possible, confirmed:possible};
+  }
+  const bulkInputs = () => observation === undefined ? [...inputs] : [...inputs,observation];
+
   const nativeModes = modes(endRows(USB), "modes");
   const fabricEnds = endRows(USB4);
   const fabricModes = modes(fabricEnds, "modes");
@@ -71,7 +81,7 @@ export function usbServices({ scene, connection, ports }: Link): { options: Opti
   let tunneledBulk: Option | undefined;
 
   if (fabric.possible) {
-    const usb3 = modeRange(USB_3_2_PROTOCOL_ESTIMATES, modes(fabricEnds, "usb3Modes"), []);
+    const usb3 = bulkRange(USB_3_2_PROTOCOL_ESTIMATES, modes(fabricEnds, "usb3Modes"), []);
     const pcie = fabricEnds.map(row => read("interface", row, "pcie"));
     const poolRef = { domain: DATA, id: TUNNEL_POOL, perUnit: GIGABITS_PER_MEGABYTE };
     if (!pcie.includes(false)) {
@@ -82,14 +92,14 @@ export function usbServices({ scene, connection, ports }: Link): { options: Opti
         rule: "USB4의 PCIe 터널이 방향별 공용 예산을 사용", inputs: [...inputs], specs, pool: poolRef });
     }
     if (usb3.possible) tunneledBulk = {
-      ...bulkOption(usb3.possible, fabric.confirmed ? usb3.confirmed : undefined, [...inputs], [...specs, USB3_ESTIMATE], "USB4 USB3 터널 "),
+      ...bulkOption(usb3.possible, fabric.confirmed ? usb3.confirmed : undefined, bulkInputs(), [...specs, USB3_ESTIMATE], "USB4 USB3 터널 "),
       pool: poolRef,
     };
   }
 
   // USB4가 성립하면 USB 2.0만 전용 배선으로 동시에 지나갈 수 있다.
-  const native = modeRange(fabric.confirmed ? [highSpeed] : usbModes, nativeModes, cableRates);
-  const facts = [...inputs];
+  const native = bulkRange(fabric.confirmed ? [highSpeed] : usbModes, nativeModes, cableRates);
+  const facts = bulkInputs();
   const usb2 = native.possible === highSpeed;
   if (native.possible && (tunneledBulk?.verdict === "unknown" || !usb2 && fabric.possible && !fabric.confirmed)) {
     // 링크의 설정을 확정할 수 없어 공용 예산이 다른 대안들을 한 범위로 보존한다.
@@ -105,14 +115,14 @@ export function usbServices({ scene, connection, ports }: Link): { options: Opti
   } else if (native.possible) {
     const alt = !fabric.possible && !usb2 ? altModePins(scene, ports) : null;
     if (alt) {
-      const usb2Fallback = modeRange([highSpeed], nativeModes, cableRates);
+      const usb2Fallback = bulkRange([highSpeed], nativeModes, cableRates);
       if (usb2Fallback.possible) addNative(usb2Fallback.possible, usb2Fallback.confirmed);
       addNative(native.possible, native.confirmed, "usb-only");
 
       if (alt.twoLane) {
         // 핀 D가 USB에 남기는 송·수신 쌍으로는 USB 3.x 한 레인만 쓸 수 있다.
         const oneLane = USB_3_2_PROTOCOL_ESTIMATES.filter(row => row.mode.endsWith("x1"));
-        const usb3 = modeRange(oneLane, nativeModes, cableRates);
+        const usb3 = bulkRange(oneLane, nativeModes, cableRates);
         if (usb3.possible) addNative(usb3.possible, usb3.confirmed, "dp-2lane", alt.twoLane);
       }
     } else {

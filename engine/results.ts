@@ -39,7 +39,7 @@ export interface Results {
   metrics: { outcome: number; kind: "solo" | "together" | "drop" | "dropPercent" | "unused" | "limit"; unit: string;
     range?: "witnessed" | "conservative"; lowWorld?: number; highWorld?: number;
     value: number | null; low: number | null; high: number | null; basis: "calculated" | "assumed" }[];
-  reasons: { outcome: number; run?: Run; stage: "physical" | "negotiate" | "path" | "allocate" | "judge"; rule: string; targetKind: Target; targetRow: number }[];
+  reasons: { outcome: number; run?: Run; profile?: string; stage: "physical" | "negotiate" | "path" | "allocate" | "judge"; rule: string; targetKind: Target; targetRow: number }[];
   reasonInputs: { reason: number; claim: number }[];
   reasonParents: { reason: number; prior: number }[];
   needs: { outcome: number; requiredCapability: string }[];

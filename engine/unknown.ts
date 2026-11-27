@@ -378,6 +378,10 @@ export function resolveUnknowns(scene: Scene, plugins: readonly DomainPlugin[], 
       if (profileChanged) {
         result.choices = result.choices.filter(c => !scenarios.has(c.scenario));
         result.reservations = result.reservations.filter(c => !scenarios.has(c.scenario));
+        for (const reason of result.reasons) if (reason.profile && scenarios.has(result.outcomes[reason.outcome]!.scenario)) {
+          reason.rule = "후보 조합 상한으로 연결 설정 검산 안 함";
+          delete reason.profile;
+        }
       }
       for (const i of scope) {
         const u = result.resourceUsage[i]!;

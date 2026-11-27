@@ -20,6 +20,9 @@ export function parseModes(value: string): string[] {
 }
 
 const usb3Modes = USB_3_2_PROTOCOL_ESTIMATES.map(row => row.mode);
+export const observations = z.strictObject({
+  usbMode: fact(z.enum([USB_2_HIGH_SPEED_MODE, ...usb3Modes])).meta({ title: "현재 USB 벌크 협상 모드" }),
+});
 const usbParams = z.strictObject({ modes: fact(modeList([USB_2_HIGH_SPEED_MODE, ...usb3Modes])).meta({ title: "지원 USB 모드" }) });
 const usb4Params = z.strictObject({
   modes: fact(modeList(USB4_LINK_MODES.map(row => row.mode))).meta({ title: "지원 USB4 모드" }),

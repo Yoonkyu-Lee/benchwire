@@ -80,11 +80,13 @@ export function printResults(scene: Scene, result: Results): string {
     const c = scene.claims[claim]!;
     const value = c.value === null ? "미확인" : JSON.stringify(c.value);
     const condition = c.condition ? ` · 조건 ${c.condition}` : "";
+    const context = [c.firmware && "펌웨어 " + c.firmware,c.measurementCondition && "측정 조건 " + c.measurementCondition].filter(Boolean).join(" · ");
     const unit = c.unit ? " " + c.unit : "";
     const origin = c.inferredFrom ? " · 원본 " + c.inferredFrom : "";
     const field = `${pad}주장 ${targetName(c.ownerKind, c.owner)} · ${c.field}`;
     evidence.push(c.conflictGroup === undefined ? `${field} = ${value}${unit} [${c.confidence}]${condition}${origin}`
       : `${field} · 출처 충돌${condition}`);
+    if (context) evidence.push(pad + "  " + context);
     const citations = scene.claimSources.filter(s => s.claim === claim);
     const groups = Map.groupBy(citations, s => JSON.stringify(s.candidate));
     for (const rows of groups.values()) {
@@ -95,7 +97,7 @@ export function printResults(scene: Scene, result: Results): string {
       }
       for (const { source } of rows) {
         const s = scene.sources[source]!;
-        evidence.push(`${pad}${candidate ? "    " : "  "}출처 ${s.title} (${s.locator})`);
+        evidence.push(`${pad}${candidate ? "    " : "  "}출처 ${s.title} (${s.locator})${c.scope === "personal" ? " · 사용자 검증 " + s.retrievedAt : ""}`);
       }
     }
   }
@@ -208,7 +210,16 @@ export function printResults(scene: Scene, result: Results): string {
       lines.push(`  ${e.domain} · ${steps[e.stage]} · ${name}${resource} · ${what}`);
     }
   }
-  return terminalText(result.reasons.length || result.choices.length ? lines.concat("", "근거", evidence) : lines);
+  const history = scene.claims.flatMap((claim,row) => claim.inactive ? [{row,why:claim.inactive}] : []);
+  if (history.length) {
+    evidence.push("", "개인 측정 이력");
+    const why = {firmware:"펌웨어 다름",measurementCondition:"측정 조건 다름",wiring:"배선 다름"};
+    for (const h of history) {
+      evidence.push("  적용 안 됨: " + why[h.why]);
+      writeClaim(h.row,"    ");
+    }
+  }
+  return terminalText(result.reasons.length || result.choices.length || history.length ? lines.concat("", "근거", evidence) : lines);
 }
 
 export function printVariant(scene: Scene, base: Results, variant: Results, scenario: number, order: number): string {

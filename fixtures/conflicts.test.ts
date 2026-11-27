@@ -1,7 +1,5 @@
 // 저장 문서에 적힌 출처 충돌을 로더·후보별 재협상·판정 근거 출력까지 확인한다.
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
-import { join } from "node:path";
 import { test } from "node:test";
 import { plugins } from "../cli/domains.ts";
 import { printResults } from "../cli/print.ts";
@@ -9,19 +7,8 @@ import { effectiveClaim } from "../engine/contract.ts";
 import { evaluate } from "../engine/evaluate.ts";
 import { availableOption } from "../engine/pools.ts";
 import type { Results } from "../engine/results.ts";
+import { fixture } from "./document.ts";
 import { modelFile } from "../scene/files.ts";
-import { loadSceneDocuments } from "../scene/load.ts";
-
-function fixture(folder: string, name: string) {
-  const read = (key: string) => JSON.parse(readFileSync(join(import.meta.dirname, folder, key + ".json"), "utf8"));
-  const document = read(name), connectors = read("connectors");
-  const models = new Map<string, ReturnType<typeof read>>();
-  for (const { modelId, revision } of document.items) {
-    const key = modelId + "@" + revision;
-    if (!models.has(key)) models.set(key, read(key));
-  }
-  return { document, models, load: () => loadSceneDocuments(document, { models, connectors }, plugins) };
-}
 
 function competing(value: number | boolean | string, source: string) {
   return { value, confidence: "review", sources: [source] };
@@ -478,7 +465,9 @@ test("T2 출처 후보 512개인 시나리오는 설정과 선택을 확정할 �
     assert.equal(o.path,null);
     assert.deepEqual(r.possibleVerdicts.filter(v=>v.outcome===row),[]);
   }
-  assert.doesNotMatch(printResults(scene,r),/^\s*연결 설정 display-hub · /mu);
+  const output = printResults(scene,r);
+  assert.doesNotMatch(output,/^\s*연결 설정 display-hub · /mu);
+  assert.doesNotMatch(output.split("\n근거\n")[1]!, /\[링크 협상\] 연결 설정 dp-/u);
 });
 
 test("T5 후보에만 있는 양방향 예산을 사용량 표와 CLI 제목에서 구별한다", () => {

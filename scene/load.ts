@@ -1,6 +1,6 @@
 // 고정한 모델 판본을 실물별로 펼치고 저장 ID를 행 번호로 바꾼다. 입력 오류는 파일과 필드를 가리킨다.
 import type { z } from "zod";
-import type { Scene, Claim, DomainPlugin, InputSchema } from "../engine/contract.ts";
+import type { Scene, Claim, DomainPlugin, InputSchema, MeasurementContext } from "../engine/contract.ts";
 import { connectorsFile, modelFile, sceneFile, parseDocument, type Fact } from "./files.ts";
 
 function fail(at: string, why: string): never { throw new Error(at + " — " + why); }
@@ -9,6 +9,22 @@ function unique<T>(map: Map<string, T>, id: string, value: T, at: string): T {
   if (map.has(id)) fail(at, "중복 ID: " + id);
   map.set(id, value);
   return value;
+}
+// 같은 수집 파일을 다시 가져오면 같은 측정과 출처는 한 번만 펼친다.
+function readDistinct<T>(rows: T[], read: (value: T, index: number) => void) {
+  const seen = new Set<string>();
+  rows.forEach((row,i) => {
+    // 인용 순서는 측정의 일부가 아니며, 오류 위치는 원본 배열의 번호를 따른다.
+    const key = JSON.stringify(row,(field,value) => field === "sources" ? [...new Set<string>(value)].sort() : value);
+    if (seen.has(key)) return;
+    seen.add(key);
+    read(row,i);
+  });
+}
+function contextDifference(measured: MeasurementContext, current: MeasurementContext) {
+  if (measured.firmware !== current.firmware) return "firmware";
+  if (measured.measurementCondition !== current.measurementCondition) return "measurementCondition";
+  return undefined;
 }
 function ref<T>(map: Map<string, T>, id: string, at: string): T {
   return map.get(id) ?? fail(at, "찾을 수 없는 참조: " + id);
@@ -45,9 +61,13 @@ export function loadSceneDocuments(document: unknown, library: { connectors: unk
   };
   const domains = new Map<string, DomainPlugin>();
   plugins.forEach(p => unique(domains, p.id, p, file + "#plugins"));
-  function sources(rows: Scene["sources"], at: string) {
+  function sources(rows: Scene["sources"], at: string, repeated = false) {
     const index = new Map<string, number>();
-    rows.forEach((s, i) => unique(index, s.id, scene.sources.push(s) - 1, at + ".sources." + i));
+    function add(s: Scene["sources"][number], i: number) {
+      unique(index,s.id,scene.sources.push(s) - 1,at + ".sources." + i);
+    }
+    if (repeated) readDistinct(rows,add);
+    else rows.forEach(add);
     return index;
   }
   const conflictGroups = new Map<Fact, number>();
@@ -110,7 +130,7 @@ export function loadSceneDocuments(document: unknown, library: { connectors: unk
     if (scene.mates.some(pair => pair.a === a && pair.b === b || pair.a === b && pair.b === a)) fail(at, "중복 결합쌍");
     scene.mates.push({ a, b, evidence: claim("mate", i, "catalog", "", "mate", m.evidence, catalogSources, at + ".evidence") });
   });
-  const sceneSources = sources(saved.sources, file + "#");
+  const sceneSources = sources(saved.sources,file + "#",true);
   const models = new Map<string, { row: number; model: Model; citations: Map<string, number> }>();
   const instances = new Map<string, Local>();
 
@@ -132,7 +152,7 @@ export function loadSceneDocuments(document: unknown, library: { connectors: unk
     return fact.conflicts?.length ? null : reference;
   }
   saved.items.forEach((instance, item) => {
-    const { instanceId, modelId, revision, alias, state } = instance;
+    const { instanceId, modelId, revision, alias, state, firmware, measurementCondition } = instance;
     const instanceAt = file + "#items." + item;
     const key = modelId + "@" + revision;
     const modelPath = names.model(key);
@@ -146,7 +166,7 @@ export function loadSceneDocuments(document: unknown, library: { connectors: unk
       models.set(key, pinned);
     }
     const { model, citations } = pinned;
-    scene.items.push({ id: instanceId, model: pinned.row, alias, state });
+    scene.items.push({ id: instanceId, model: pinned.row, alias, state, ...(firmware && {firmware}), ...(measurementCondition && {measurementCondition}) });
     const local = unique<Local>(instances, instanceId, { item, nodes: new Map(), ports: new Map(), resources: new Map(), interfaces: new Map() }, instanceAt + ".instanceId");
     const at = modelPath + "#";
     for (const [domain, values] of Object.entries(model.attributes))
@@ -209,7 +229,7 @@ export function loadSceneDocuments(document: unknown, library: { connectors: unk
     if (placed.has(instanceId)) fail(at, "중복 배치: " + instanceId);
     placed.add(instanceId);
   });
-  saved.personal.forEach((p, i) => {
+  readDistinct(saved.personal,(p, i) => {
     const at = file + "#personal." + i;
     const local = ref(instances, p.instanceId, at + ".instanceId");
     const { ownerKind, domain, field } = p;
@@ -223,8 +243,13 @@ export function loadSceneDocuments(document: unknown, library: { connectors: unk
     }
     const candidates = scene.claims.filter(c => c.ownerKind === ownerKind && c.owner === owner && c.domain === domain && c.field === field);
     if (!candidates.some(c => c.scope === "model")) fail(at + ".field", "대상 모델에 없는 주장");
-    if (candidates.some(c => c.scope === "personal" && c.condition === p.claim.condition)) fail(at, "같은 조건에 중복된 개인 주장");
+    if (candidates.some(c => c.scope === "personal" && c.condition === p.claim.condition && !contextDifference(c,p))) fail(at, "같은 조건에 중복된 개인 주장");
     const row = claim(ownerKind, owner, "personal", domain, field, p.claim, sceneSources, at + ".claim");
+    const measured = scene.claims[row]!;
+    const inactive = contextDifference(p,scene.items[local.item]!);
+    if (inactive) measured.inactive = inactive;
+    if (p.firmware) measured.firmware = p.firmware;
+    if (p.measurementCondition) measured.measurementCondition = p.measurementCondition;
     if (ownerKind === "resource") {
       const r = scene.resources[owner]!;
       checkResource(field, p.claim, r.unit, at + ".claim");
@@ -233,7 +258,7 @@ export function loadSceneDocuments(document: unknown, library: { connectors: unk
     } else {
       const plugin = ref(domains, domain, at + ".domain");
       const group = scene.claims.filter(c => c.ownerKind === ownerKind && c.owner === owner && c.domain === domain &&
-        !(ownerKind === "interface" && c.field === "declaration") &&
+        (c.scope !== "personal" || !contextDifference(c,p)) && !(ownerKind === "interface" && c.field === "declaration") &&
         (!c.condition || c.condition === p.claim.condition));
       const values = Object.fromEntries(group.map(c => [c.field, { value: c.value, unit: c.unit }]));
       const schema = ownerKind === "item" ? plugin.attributes : interfaceSchema(plugin, scene.interfaces[owner]!.protocol);
@@ -269,6 +294,27 @@ export function loadSceneDocuments(document: unknown, library: { connectors: unk
       partItems.set(p.instanceId, pos + ".instanceId");
       scene.parts.push({ connection, order, item: local.item, entry, exit });
     });
+    if (c.observations?.length) {
+      const ports = [c.from,...c.parts.flatMap(p => [{instanceId:p.instanceId,id:p.entry},{instanceId:p.instanceId,id:p.exit}]),c.to];
+      const active = new Set<string>();
+      readDistinct(c.observations,(observation,i) => {
+        const where = at + ".observations." + i;
+        const {domain,field,claim:fact} = observation;
+        const plugin = ref(domains,domain,where + ".domain");
+        if (plugin.observations) validateFields(plugin.observations,{ [field]:{value:fact.value,unit:fact.unit} },where + ".claim",field);
+        const row = claim("connection",connection,"personal",domain,field,fact,sceneSources,where + ".claim");
+        const changed = ports.length !== observation.ports.length || ports.some((p,j) =>
+          p.instanceId !== observation.ports[j]!.instanceId || p.id !== observation.ports[j]!.id);
+        const inactive = changed ? "wiring" : observation.ports.map(p =>
+          contextDifference(p,scene.items[instances.get(p.instanceId)!.item]!)).find(reason => reason !== undefined);
+        if (inactive) scene.claims[row]!.inactive = inactive;
+        else {
+          const key = JSON.stringify([domain,field]);
+          if (active.has(key)) fail(where, "같은 배선·조건에 중복된 연결 관측");
+          active.add(key);
+        }
+      });
+    }
   });
   const works = new Map<string, number>();
   saved.workloads.forEach((w, workload) => {

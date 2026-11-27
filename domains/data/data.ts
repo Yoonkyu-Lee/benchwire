@@ -1,13 +1,13 @@
 // USB 데이터의 벌크·PCIe 터널 수요와 허브·호스트 컨트롤러 자원 소비를 등록한다.
 import { effectiveClaim, type DomainPlugin, type Verdict } from "../../engine/contract.ts";
-import { attributes, BULK, DATA, MB_PER_SECOND, params, paramsFor, PCIE_TUNNEL, request } from "./input.ts";
+import { attributes, BULK, DATA, MB_PER_SECOND, observations, params, paramsFor, PCIE_TUNNEL, request } from "./input.ts";
 import { usbServices } from "./negotiate.ts";
 import { sources } from "./sources.ts";
 
 const labels: Record<Verdict, string> = { ok: "성립", conditional: "조건부", impossible: "불가", unknown: "미확인" };
 
 export const data: DomainPlugin = {
-  id: DATA, sources, params, paramsFor, attributes, request, resourceUnits: [MB_PER_SECOND],
+  id: DATA, sources, observations, params, paramsFor, attributes, request, resourceUnits: [MB_PER_SECOND],
   negotiate(link) { return usbServices(link).options; },
   pools(link) { return usbServices(link).pools; },
   demand(scene, workload) {

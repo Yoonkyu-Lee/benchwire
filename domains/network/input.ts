@@ -23,6 +23,9 @@ const modes = z.string().refine(value => {
 }, "지원하는 BASE-T 모드를 쉼표로 구분해 모두 적으세요");
 
 const fact = <T extends z.ZodType>(value: T, unit = "") => z.strictObject({ value: value.nullable(), unit: z.literal(unit) });
+export const observations = z.strictObject({
+  linkSpeed: fact(z.literal(ETHERNET_BASE_T_RATES.map(rate => rate.lineMbps)), MBPS).meta({title:"현재 BASE-T 회선 속도",unit:MBPS}),
+});
 const quantity = (unit: string) => fact(z.number().nonnegative(), unit);
 const power = quantity(WATTS);
 const poeType = fact(z.literal([0, ...ETHERNET_POE_TYPE_LIMITS.map(row => row.type)])).meta({ title: "PoE 유형" });

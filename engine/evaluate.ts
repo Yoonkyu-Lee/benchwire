@@ -192,7 +192,7 @@ function render(scene: Scene, plugins: readonly DomainPlugin[], result: Results,
         }),[prior]);
       const edges = result.steps.filter(s => s.path === f.path && s.kind === "connection");
       for (const c of choices) if (edges.some(e => e.row === c.connection))
-        addReason(result,{outcome:row,stage:"negotiate",rule:"연결 설정 " + c.profile,targetKind:"connection",targetRow:c.connection},
+        addReason(result,{outcome:row,stage:"negotiate",rule:"연결 설정 " + c.profile,profile:c.profile,targetKind:"connection",targetRow:c.connection},
           c.inputs,[prior],c.domain,c.specs);
       if (result.searches[scenario]!.truncated) addReason(result,{outcome:row,stage:"judge",rule:"조합 탐색 상한에서 확인한 결과",
         targetKind:"workload",targetRow:w},[],[prior]);

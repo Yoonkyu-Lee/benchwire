@@ -3,7 +3,9 @@
 export type Value = string | number | boolean | null;
 export type Confidence = "official" | "review" | "community" | "user_verified" | "inferred" | "unknown";
 export type Owner = "item" | "port" | "interface" | "edge" | "resource" | "mate" | "connector" | "connection" | "workload";
-export interface Claim {
+export interface MeasurementContext { firmware?: string | undefined; measurementCondition?: string | undefined }
+export interface Claim extends MeasurementContext {
+  inactive?: "firmware" | "measurementCondition" | "wiring";
   id: string; scope: "model" | "personal" | "scene" | "catalog"; ownerKind: Owner; owner: number;
   // 같은 모델 판본의 같은 주장에 기대는 실물은 후보 세계 안에서도 값을 공유한다.
   conflictGroup?: number; inferredFrom?: string;
@@ -17,7 +19,7 @@ export interface Scene {
   claimIndex?: ClaimIndex;
   id: string;
   models: { id: string; revision: string; kind: string; name: string; brand: string; category: string }[];
-  items: { id: string; model: number; alias: string; state: string }[];
+  items: ({ id: string; model: number; alias: string; state: string } & MeasurementContext)[];
   nodes: { item: number; id: string; kind: string; label: string }[];
   ports: { item: number; id: string; label: string; location: string }[];
   interfaces: { id: string; port: number; domain: string; protocol: string; role: string; evidence: number }[];
@@ -62,7 +64,7 @@ export function effectiveClaim(scene: Scene, ownerKind: Owner, owner: number, do
   const first = index ? index.first[ownerKind][owner] ?? -1 : 0;
   for (let row = first; row >= 0 && row < scene.claims.length; row = index ? index.next[row]! : row + 1) {
     const c = scene.claims[row]!;
-    if (c.ownerKind !== ownerKind || c.owner !== owner || c.domain !== domain || c.field !== field) continue;
+    if (c.inactive || c.ownerKind !== ownerKind || c.owner !== owner || c.domain !== domain || c.field !== field) continue;
     if (c.condition && c.condition !== condition) continue;
     const priority = (c.condition === condition ? 2 : 0) + (c.scope === "personal" ? 1 : 0);
     if (priority > rank) { best = row; rank = priority; }

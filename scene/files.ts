@@ -35,6 +35,12 @@ const evidence = fact.refine(f => f.value === true && !f.unit && !f.condition &&
 const fields = z.record(id, fact);
 const sources = z.array(z.strictObject({ id, title: id, locator: id, retrievedAt: z.iso.date() }));
 const localRef = z.strictObject({ instanceId: id, id });
+const measurementContext = { firmware: id.optional(), measurementCondition: id.optional() };
+const personalFact = fact.refine(f => f.confidence === "user_verified", "개인 주장에는 사용자 검증이 필요합니다");
+const observation = z.strictObject({
+  ports: z.array(localRef.extend(measurementContext)).min(2), domain: id, field: id,
+  claim: personalFact.refine(f => f.value !== null && !f.condition && !f.conflicts?.length, "관측에는 측정한 값 하나가 필요합니다"),
+});
 
 export const connectorsFile = z.strictObject({
   sources, connectors: z.array(z.strictObject({ id, endForm: fact, glyph: fileId.optional() })),
@@ -65,13 +71,13 @@ export const sceneFile = z.strictObject({
     placements: z.array(z.strictObject({ instanceId: id, x: z.number(), y: z.number() })).optional(),
     viewport: z.strictObject({ cx: z.number(), cy: z.number(), zoom: z.number().positive() }).optional(),
   }).optional(),
-  items: z.array(z.strictObject({ instanceId: id, modelId: fileId, revision: fileId, alias: z.string().default(""), state: z.string().default("") })),
+  items: z.array(z.strictObject({ instanceId: id, modelId: fileId, revision: fileId, alias: z.string().default(""), state: z.string().default(""), ...measurementContext })),
   personal: z.array(z.strictObject({
     instanceId: id, ownerKind: z.enum(["resource", "interface", "item", "port"]), ownerId: id,
-    domain: z.string(), field: id, claim: fact.refine(f => f.confidence === "user_verified", "개인 주장에는 사용자 검증이 필요합니다"),
+    domain: z.string(), field: id, ...measurementContext, claim: personalFact,
   })).default([]),
   connections: z.array(z.strictObject({
-    id, from: localRef, to: localRef, evidence, parts: z.array(z.strictObject({ instanceId: id, entry: id, exit: id })),
+    id, from: localRef, to: localRef, evidence, observations: z.array(observation).optional(), parts: z.array(z.strictObject({ instanceId: id, entry: id, exit: id })),
   })),
   workloads: z.array(z.strictObject({ id, domain: id, kind: id, from: localRef, to: localRef, request: fields })),
   scenarios: z.array(z.strictObject({ id, members: z.array(z.union([id, z.strictObject({ workload: id, priority: fact.refine(f =>

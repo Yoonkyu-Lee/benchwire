@@ -1,7 +1,7 @@
 // 영역은 저장 입력의 모양과 협상·수요·소비 규칙을 선언하고 계산에 읽은 주장 번호를 돌려준다.
 import type { Claim, Scene, Value } from "./scene.ts";
 export { effectiveClaim } from "./scene.ts";
-export type { Scene, Claim, Value } from "./scene.ts";
+export type { Scene, Claim, Value, MeasurementContext } from "./scene.ts";
 
 export type Verdict = "ok" | "conditional" | "impossible" | "unknown";
 export type Direction = "forward" | "reverse";
@@ -63,6 +63,7 @@ export interface DomainPlugin {
   sources: readonly { id: string; title: string; locator: string }[];
   // 각 스키마는 필드 이름을 키로, {value, unit}을 값으로 받는다. null은 미확인이다.
   resourceUnits?: readonly string[];
+  observations?: InputSchema;
   paramsFor?(protocol: string): InputSchema | undefined;
   params: InputSchema; attributes: InputSchema; request: InputSchema;
   negotiate(link: Link): Option[];
