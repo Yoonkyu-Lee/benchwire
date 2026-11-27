@@ -13,37 +13,38 @@
       "retrievedAt": "2026-11-26"
     }
   ],
+  "attributes": {"data": {"cableDataGbps": {"value": 10, "unit": "Gbps", "confidence": "inferred", "sources": ["one-way"]}}},
   "nodes": [{"id": "in", "label": "진입", "kind": "junction"}, {"id": "out", "label": "이탈", "kind": "junction"}],
   "ports": [
     {
       "id": "entry",
       "label": "진입 포트",
-      "connector": {"value": "storage-plug", "confidence": "inferred", "sources": ["one-way"]},
+      "connector": {"value": "usb-c-plug", "confidence": "inferred", "sources": ["one-way"]},
       "attachment": {"value": "in", "confidence": "inferred", "sources": ["one-way"]},
       "interfaces": [
         {
-          "id": "entry-copy",
-          "domain": "storage",
-          "protocol": "copy",
+          "id": "entry-usb",
+          "domain": "data",
+          "protocol": "USB",
           "role": "bidirectional",
           "evidence": {"value": true, "confidence": "inferred", "sources": ["one-way"]},
-          "params": {"throughput": {"value": 1200, "unit": "MB/s", "confidence": "inferred", "sources": ["one-way"]}}
+          "params": {"modes": {"value": "High Speed, Gen 1x1, Gen 2x1", "unit": "", "confidence": "inferred", "sources": ["one-way"]}}
         }
       ]
     },
     {
       "id": "exit",
       "label": "이탈 포트",
-      "connector": {"value": "storage-socket", "confidence": "inferred", "sources": ["one-way"]},
+      "connector": {"value": "usb-c-receptacle", "confidence": "inferred", "sources": ["one-way"]},
       "attachment": {"value": "out", "confidence": "inferred", "sources": ["one-way"]},
       "interfaces": [
         {
-          "id": "exit-copy",
-          "domain": "storage",
-          "protocol": "copy",
+          "id": "exit-usb",
+          "domain": "data",
+          "protocol": "USB",
           "role": "bidirectional",
           "evidence": {"value": true, "confidence": "inferred", "sources": ["one-way"]},
-          "params": {"throughput": {"value": 1200, "unit": "MB/s", "confidence": "inferred", "sources": ["one-way"]}}
+          "params": {"modes": {"value": "High Speed, Gen 1x1, Gen 2x1", "unit": "", "confidence": "inferred", "sources": ["one-way"]}}
         }
       ]
     }

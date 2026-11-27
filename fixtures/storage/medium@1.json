@@ -13,16 +13,16 @@
     {
       "id": "port",
       "label": "전송 포트",
-      "connector": {"value": "storage-plug", "confidence": "inferred", "sources": ["medium"]},
+      "connector": {"value": "usb-c-plug", "confidence": "inferred", "sources": ["medium"]},
       "attachment": {"value": "bus", "confidence": "inferred", "sources": ["medium"]},
       "interfaces": [
         {
-          "id": "port-copy",
-          "domain": "storage",
-          "protocol": "copy",
+          "id": "port-usb",
+          "domain": "data",
+          "protocol": "USB",
           "role": "bidirectional",
           "evidence": {"value": true, "confidence": "inferred", "sources": ["medium"]},
-          "params": {"throughput": {"value": 1200, "unit": "MB/s", "confidence": "inferred", "sources": ["medium"]}}
+          "params": {"modes": {"value": "High Speed, Gen 1x1, Gen 2x1", "unit": "", "confidence": "inferred", "sources": ["medium"]}}
         }
       ]
     }

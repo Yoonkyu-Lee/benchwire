@@ -1,0 +1,14 @@
+{
+  "sources": [{"id": "connector", "title": "합성 USB Type-C 커넥터 결합", "locator": "fixture:data-connector", "retrievedAt": "2026-11-26"}],
+  "connectors": [
+    {"id": "usb-c-receptacle", "endForm": {"value": "receptacle", "unit": "", "confidence": "inferred", "sources": ["connector"]}},
+    {"id": "usb-c-plug", "endForm": {"value": "plug", "unit": "", "confidence": "inferred", "sources": ["connector"]}}
+  ],
+  "mates": [
+    {
+      "a": "usb-c-receptacle",
+      "b": "usb-c-plug",
+      "evidence": {"value": true, "unit": "", "confidence": "inferred", "sources": ["connector"]}
+    }
+  ]
+}

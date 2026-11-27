@@ -18,64 +18,64 @@
     {
       "id": "hub",
       "label": "허브 포트",
-      "connector": {"value": "storage-socket", "confidence": "inferred", "sources": ["host"]},
+      "connector": {"value": "usb-c-receptacle", "confidence": "inferred", "sources": ["host"]},
       "attachment": {"value": "copy-service", "confidence": "inferred", "sources": ["host"]},
       "interfaces": [
         {
-          "id": "hub-copy",
-          "domain": "storage",
-          "protocol": "copy",
+          "id": "hub-usb",
+          "domain": "data",
+          "protocol": "USB",
           "role": "bidirectional",
           "evidence": {"value": true, "confidence": "inferred", "sources": ["host"]},
-          "params": {"throughput": {"value": 1200, "unit": "MB/s", "confidence": "inferred", "sources": ["host"]}}
+          "params": {"modes": {"value": "High Speed, Gen 1x1, Gen 2x1", "unit": "", "confidence": "inferred", "sources": ["host"]}}
         }
       ]
     },
     {
       "id": "a",
       "label": "독립 포트 a",
-      "connector": {"value": "storage-socket", "confidence": "inferred", "sources": ["host"]},
+      "connector": {"value": "usb-c-receptacle", "confidence": "inferred", "sources": ["host"]},
       "attachment": {"value": "controller-a", "confidence": "inferred", "sources": ["host"]},
       "interfaces": [
         {
-          "id": "a-copy",
-          "domain": "storage",
-          "protocol": "copy",
+          "id": "a-usb",
+          "domain": "data",
+          "protocol": "USB",
           "role": "bidirectional",
           "evidence": {"value": true, "confidence": "inferred", "sources": ["host"]},
-          "params": {"throughput": {"value": 1200, "unit": "MB/s", "confidence": "inferred", "sources": ["host"]}}
+          "params": {"modes": {"value": "High Speed, Gen 1x1, Gen 2x1", "unit": "", "confidence": "inferred", "sources": ["host"]}}
         }
       ]
     },
     {
       "id": "b",
       "label": "독립 포트 b",
-      "connector": {"value": "storage-socket", "confidence": "inferred", "sources": ["host"]},
+      "connector": {"value": "usb-c-receptacle", "confidence": "inferred", "sources": ["host"]},
       "attachment": {"value": "controller-b", "confidence": "inferred", "sources": ["host"]},
       "interfaces": [
         {
-          "id": "b-copy",
-          "domain": "storage",
-          "protocol": "copy",
+          "id": "b-usb",
+          "domain": "data",
+          "protocol": "USB",
           "role": "bidirectional",
           "evidence": {"value": true, "confidence": "inferred", "sources": ["host"]},
-          "params": {"throughput": {"value": 1200, "unit": "MB/s", "confidence": "inferred", "sources": ["host"]}}
+          "params": {"modes": {"value": "High Speed, Gen 1x1, Gen 2x1", "unit": "", "confidence": "inferred", "sources": ["host"]}}
         }
       ]
     },
     {
       "id": "c",
       "label": "독립 포트 c",
-      "connector": {"value": "storage-socket", "confidence": "inferred", "sources": ["host"]},
+      "connector": {"value": "usb-c-receptacle", "confidence": "inferred", "sources": ["host"]},
       "attachment": {"value": "controller-c", "confidence": "inferred", "sources": ["host"]},
       "interfaces": [
         {
-          "id": "c-copy",
-          "domain": "storage",
-          "protocol": "copy",
+          "id": "c-usb",
+          "domain": "data",
+          "protocol": "USB",
           "role": "bidirectional",
           "evidence": {"value": true, "confidence": "inferred", "sources": ["host"]},
-          "params": {"throughput": {"value": 1200, "unit": "MB/s", "confidence": "inferred", "sources": ["host"]}}
+          "params": {"modes": {"value": "High Speed, Gen 1x1, Gen 2x1", "unit": "", "confidence": "inferred", "sources": ["host"]}}
         }
       ]
     }
@@ -128,7 +128,7 @@
     {
       "id": "bus-a",
       "kind": "bandwidth",
-      "domain": "storage",
+      "domain": "data",
       "unit": "MB/s",
       "capacity": {"value": 900, "unit": "MB/s", "confidence": "inferred", "sources": ["host"]},
       "policy": {"value": "max-min", "confidence": "inferred", "sources": ["host"]}
@@ -136,7 +136,7 @@
     {
       "id": "bus-b",
       "kind": "bandwidth",
-      "domain": "storage",
+      "domain": "data",
       "unit": "MB/s",
       "capacity": {"value": 900, "unit": "MB/s", "confidence": "inferred", "sources": ["host"]},
       "policy": {"value": "max-min", "confidence": "inferred", "sources": ["host"]}
@@ -144,7 +144,7 @@
     {
       "id": "bus-c",
       "kind": "bandwidth",
-      "domain": "storage",
+      "domain": "data",
       "unit": "MB/s",
       "capacity": {"value": 900, "unit": "MB/s", "confidence": "inferred", "sources": ["host"]},
       "policy": {"value": "max-min", "confidence": "inferred", "sources": ["host"]}

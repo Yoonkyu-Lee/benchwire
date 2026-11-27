@@ -6,6 +6,7 @@ import { test, type TestContext } from "node:test";
 import { fileURLToPath } from "node:url";
 import { modelFile, sceneFile } from "../../cli/files.ts";
 import { loadScene } from "../../cli/load.ts";
+import { data } from "../../domains/data/data.ts";
 import { storageDomain } from "../../domains/storage/copy.ts";
 import { evaluate } from "../../engine/evaluate.ts";
 
@@ -13,7 +14,7 @@ const dir = fileURLToPath(new URL(".", import.meta.url));
 function read(name: string): unknown { return JSON.parse(readFileSync(join(dir, name + ".json"), "utf8")); }
 
 function run(file: string, modelsDir = dir) {
-  const plugins = [storageDomain];
+  const plugins = [data, storageDomain];
   const scene = loadScene(file, { modelsDir, connectorsFile: join(dir, "connectors.json") }, plugins);
   const result = evaluate(scene, plugins);
   const copies = result.outcomes.flatMap((o, outcome) => {
@@ -88,7 +89,7 @@ test("T6 같은 장치와 요청을 독립 컨트롤러에 연결하면 동시 �
       r.claims.some(c => c.field === "capacity" && c.sources.includes("fixture:storage-host")));
     assert.deepEqual(controllers.map(r => r.targetRow), [controller]);
     assert.ok(copy.proof.some(r => r.stage === "negotiate" &&
-      r.claims.some(c => c.field === "throughput" && c.sources.includes("fixture:storage-medium"))));
+      r.claims.some(c => c.field === "modes" && c.sources.includes("fixture:storage-medium"))));
   }
 });
 
@@ -146,7 +147,7 @@ test("T5 매체 읽기 한도가 미확인이면 해당 매체와 허브를 공�
   }
 });
 
-test("T5 요청이 매체·포트 한도를 넘으면 낮은 한도가 병목이다", t => {
+test("T5 요청이 매체·USB 한도를 넘으면 낮은 한도가 병목이다", t => {
   const f = variant(t, "independent-controllers");
   f.saved.scenarios[0]!.members = ["copy-a"];
   f.saved.workloads[0]!.request.throughput!.value = 200;
@@ -157,11 +158,12 @@ test("T5 요청이 매체·포트 한도를 넘으면 낮은 한도가 병목이
   assert.ok(mediaBound.copies[0]!.proof.some(r => r.stage === "allocate" && r.targetRow === readRate.resource &&
     r.claims.some(c => c.field === "capacity" && c.value === 100 && c.sources.includes("fixture:storage-scene"))));
 
-  f.host.ports.find(p => p.id === "a")!.interfaces[0]!.params.throughput!.value = 50;
-  const linkBound = f.open().copies[0]!;
-  assert.deepEqual([linkBound.verdict, ...linkBound.metrics], ["conditional", 50, 50, 0, 0]);
-  assert.deepEqual(linkBound.bindings.map(b => b.resourceKind), ["link"]);
-  assert.ok(linkBound.proof.some(r => r.stage === "negotiate" && r.claims.some(c => c.field === "throughput" && c.value === 50 && c.sources.includes("fixture:storage-host"))));
+  f.host.ports.find(p => p.id === "a")!.interfaces[0]!.params.modes!.value = "High Speed";
+  const { copies: [linkBound], result } = f.open();
+  assert.deepEqual([linkBound!.verdict, ...linkBound!.metrics], ["conditional", 53.248, 53.248, 0, 0]);
+  assert.ok(linkBound!.bindings.every(b => b.resourceKind === "link") && linkBound!.bindings.length > 0);
+  assert.ok(linkBound!.proof.some(r => r.stage === "negotiate" && r.claims.some(c => c.field === "modes" && c.value === "High Speed" && c.sources.includes("fixture:storage-host"))));
+  assert.ok(result.reasonSpecs.some(s => result.reasons[s.reason]!.outcome === linkBound!.outcome && result.specSources[s.source]!.id === "usb2-bulk"));
 });
 
 test("T5 읽기 경로의 상시 발열 한도는 적용하고 온도 조건이 붙은 값은 근거 계산에서 제외한다", t => {
@@ -202,16 +204,36 @@ test("T5 영역과 단위가 다른 매체 자원은 모델 필드에서 거절�
   assert.throws(() => f.open(), /medium@1.json#resources.0.unit/);
 });
 
-test("T5 복사 포트 한도가 50과 미확인이면 100 요청의 범위는 0–50이다", t => {
+test("T5 USB High Speed 포트의 상대 모드가 미확인이면 복사 범위는 0–53.248 MB/s다", t => {
   const f = variant(t, "shared-hub");
-  f.hub.ports.find(p => p.id === "a")!.interfaces[0]!.params.throughput!.value = 50;
-  f.medium.ports[0]!.interfaces[0]!.params.throughput!.value = null;
+  f.hub.ports.find(p => p.id === "a")!.interfaces[0]!.params.modes!.value = "High Speed";
+  f.medium.ports[0]!.interfaces[0]!.params.modes!.value = null;
   const { copies, result, scene } = f.open(), a = copies.find(c => c.id === "copy-a")!;
   for (const kind of ["solo", "together"]) {
     const m = result.metrics.find(m => m.outcome === a.outcome && m.kind === kind)!;
-    assert.deepEqual([m.low, m.high, m.value], [0, 50, null]);
+    assert.deepEqual([m.low, m.high, m.value], [0, 53.248, null]);
   }
   assert.deepEqual(result.possibleVerdicts.filter(p => p.outcome === a.outcome).map(p => p.verdict).sort(), ["conditional", "impossible"]);
-  assert.ok(result.quests.some(q => q.outcome === a.outcome && scene.claims[q.claim]!.field === "throughput"));
-  assert.ok(a.proof.some(r => r.claims.some(c => c.value === 50 && c.sources.includes("fixture:storage-hub"))));
+  assert.ok(result.quests.some(q => q.outcome === a.outcome && scene.claims[q.claim]!.field === "modes"));
+  assert.ok(a.proof.some(r => r.claims.some(c => c.value === "High Speed" && c.sources.includes("fixture:storage-hub"))));
+});
+
+test("T5 데이터 전송과 저장장치 복사가 같은 허브 업스트림을 한 번씩 소비한다", t => {
+  const f = variant(t, "shared-hub");
+  f.saved.workloads.push({
+    ...f.saved.workloads[1]!, id: "upload", domain: "data", kind: "bulk",
+    from: { instanceId: "hub", id: "fanout" },
+  });
+  f.saved.scenarios[0]!.members = ["copy-b", "upload"];
+  const { scene, copies } = f.open();
+  const trunk = scene.resources.findIndex(r => r.id === "uplink" && r.domain === "data");
+  assert.deepEqual(copies.map(o => [o.id, o.verdict, ...o.metrics]), [
+    ["copy-b", "conditional", 800, 450, 350, 43.75], ["upload", "conditional", 800, 450, 350, 43.75],
+  ]);
+  for (const flow of copies) {
+    assert.deepEqual(flow.bindings.map(b => [b.resourceKind, b.resource]), [["scene", trunk]]);
+    assert.ok(flow.proof.some(r => r.stage === "allocate" && r.targetRow === trunk &&
+      r.claims.some(c => c.value === 900 && c.field === "capacity" && c.sources.includes("fixture:storage-hub"))));
+    assert.ok(flow.proof.some(r => r.stage === "negotiate" && r.claims.some(c => c.field === "modes")));
+  }
 });

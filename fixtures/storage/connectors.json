@@ -1,15 +1,15 @@
 {
   "sources": [
-    {"id": "mate", "title": "합성 복사 커넥터 결합 정의", "locator": "fixture:storage-mate", "retrievedAt": "2026-11-26"}
+    {"id": "mate", "title": "합성 USB Type-C 커넥터 결합 정의", "locator": "fixture:storage-mate", "retrievedAt": "2026-11-26"}
   ],
   "connectors": [
-    {"id": "storage-plug", "endForm": {"value": "plug", "confidence": "inferred", "sources": ["mate"]}},
-    {"id": "storage-socket", "endForm": {"value": "receptacle", "confidence": "inferred", "sources": ["mate"]}}
+    {"id": "usb-c-plug", "endForm": {"value": "plug", "confidence": "inferred", "sources": ["mate"]}},
+    {"id": "usb-c-receptacle", "endForm": {"value": "receptacle", "confidence": "inferred", "sources": ["mate"]}}
   ],
   "mates": [
     {
-      "a": "storage-plug",
-      "b": "storage-socket",
+      "a": "usb-c-plug",
+      "b": "usb-c-receptacle",
       "evidence": {"value": true, "confidence": "inferred", "sources": ["mate"]}
     }
   ]

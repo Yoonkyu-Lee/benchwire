@@ -1,0 +1,45 @@
+{
+  "modelId": "usb-endpoint",
+  "revision": "1",
+  "kind": "device",
+  "brand": "합성",
+  "name": "USB 단말",
+  "category": "시험 단말",
+  "sources": [{"id": "endpoint", "title": "합성 USB 단말의 지원 모드와 터널 예산", "locator": "fixture:data-endpoint", "retrievedAt": "2026-11-26"}],
+  "nodes": [{"id": "router", "label": "router", "kind": "router"}],
+  "ports": [
+    {
+      "id": "usb",
+      "label": "usb",
+      "connector": {"value": "usb-c-receptacle", "unit": "", "confidence": "inferred", "sources": ["endpoint"]},
+      "attachment": {"value": "router", "unit": "", "confidence": "inferred", "sources": ["endpoint"]},
+      "interfaces": [
+        {
+          "id": "usb",
+          "domain": "data",
+          "protocol": "USB",
+          "role": "bidirectional",
+          "evidence": {"value": true, "unit": "", "confidence": "inferred", "sources": ["endpoint"]},
+          "params": {
+            "modes": {"value": "High Speed, Gen 1x1, Gen 1x2, Gen 2x1, Gen 2x2", "unit": "", "confidence": "inferred", "sources": ["endpoint"]}
+          }
+        },
+        {
+          "id": "usb4",
+          "domain": "data",
+          "protocol": "USB4",
+          "role": "bidirectional",
+          "evidence": {"value": true, "unit": "", "confidence": "inferred", "sources": ["endpoint"]},
+          "params": {
+            "modes": {"value": "Gen 2x2, Gen 3x2", "unit": "", "confidence": "inferred", "sources": ["endpoint"]},
+            "usb3Modes": {"value": "Gen 1x1, Gen 2x2", "unit": "", "confidence": "inferred", "sources": ["endpoint"]},
+            "pcie": {"value": true, "unit": "", "confidence": "inferred", "sources": ["endpoint"]},
+            "tunnelGbps": {"value": 28, "unit": "Gbps", "confidence": "inferred", "sources": ["endpoint"]}
+          }
+        }
+      ]
+    }
+  ],
+  "edges": [],
+  "resources": []
+}

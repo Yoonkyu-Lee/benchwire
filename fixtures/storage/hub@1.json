@@ -14,64 +14,64 @@
     {
       "id": "up",
       "label": "업스트림 포트",
-      "connector": {"value": "storage-plug", "confidence": "inferred", "sources": ["hub"]},
+      "connector": {"value": "usb-c-plug", "confidence": "inferred", "sources": ["hub"]},
       "attachment": {"value": "upstream", "confidence": "inferred", "sources": ["hub"]},
       "interfaces": [
         {
-          "id": "up-copy",
-          "domain": "storage",
-          "protocol": "copy",
+          "id": "up-usb",
+          "domain": "data",
+          "protocol": "USB",
           "role": "bidirectional",
           "evidence": {"value": true, "confidence": "inferred", "sources": ["hub"]},
-          "params": {"throughput": {"value": 1200, "unit": "MB/s", "confidence": "inferred", "sources": ["hub"]}}
+          "params": {"modes": {"value": "High Speed, Gen 1x1, Gen 2x1", "unit": "", "confidence": "inferred", "sources": ["hub"]}}
         }
       ]
     },
     {
       "id": "a",
       "label": "다운스트림 포트 a",
-      "connector": {"value": "storage-socket", "confidence": "inferred", "sources": ["hub"]},
+      "connector": {"value": "usb-c-receptacle", "confidence": "inferred", "sources": ["hub"]},
       "attachment": {"value": "fanout", "confidence": "inferred", "sources": ["hub"]},
       "interfaces": [
         {
-          "id": "a-copy",
-          "domain": "storage",
-          "protocol": "copy",
+          "id": "a-usb",
+          "domain": "data",
+          "protocol": "USB",
           "role": "bidirectional",
           "evidence": {"value": true, "confidence": "inferred", "sources": ["hub"]},
-          "params": {"throughput": {"value": 1200, "unit": "MB/s", "confidence": "inferred", "sources": ["hub"]}}
+          "params": {"modes": {"value": "High Speed, Gen 1x1, Gen 2x1", "unit": "", "confidence": "inferred", "sources": ["hub"]}}
         }
       ]
     },
     {
       "id": "b",
       "label": "다운스트림 포트 b",
-      "connector": {"value": "storage-socket", "confidence": "inferred", "sources": ["hub"]},
+      "connector": {"value": "usb-c-receptacle", "confidence": "inferred", "sources": ["hub"]},
       "attachment": {"value": "fanout", "confidence": "inferred", "sources": ["hub"]},
       "interfaces": [
         {
-          "id": "b-copy",
-          "domain": "storage",
-          "protocol": "copy",
+          "id": "b-usb",
+          "domain": "data",
+          "protocol": "USB",
           "role": "bidirectional",
           "evidence": {"value": true, "confidence": "inferred", "sources": ["hub"]},
-          "params": {"throughput": {"value": 1200, "unit": "MB/s", "confidence": "inferred", "sources": ["hub"]}}
+          "params": {"modes": {"value": "High Speed, Gen 1x1, Gen 2x1", "unit": "", "confidence": "inferred", "sources": ["hub"]}}
         }
       ]
     },
     {
       "id": "c",
       "label": "다운스트림 포트 c",
-      "connector": {"value": "storage-socket", "confidence": "inferred", "sources": ["hub"]},
+      "connector": {"value": "usb-c-receptacle", "confidence": "inferred", "sources": ["hub"]},
       "attachment": {"value": "fanout", "confidence": "inferred", "sources": ["hub"]},
       "interfaces": [
         {
-          "id": "c-copy",
-          "domain": "storage",
-          "protocol": "copy",
+          "id": "c-usb",
+          "domain": "data",
+          "protocol": "USB",
           "role": "bidirectional",
           "evidence": {"value": true, "confidence": "inferred", "sources": ["hub"]},
-          "params": {"throughput": {"value": 1200, "unit": "MB/s", "confidence": "inferred", "sources": ["hub"]}}
+          "params": {"modes": {"value": "High Speed, Gen 1x1, Gen 2x1", "unit": "", "confidence": "inferred", "sources": ["hub"]}}
         }
       ]
     }
@@ -96,7 +96,7 @@
     {
       "id": "uplink",
       "kind": "bandwidth",
-      "domain": "storage",
+      "domain": "data",
       "unit": "MB/s",
       "capacity": {"value": 900, "unit": "MB/s", "confidence": "inferred", "sources": ["hub"]},
       "policy": {"value": "max-min", "confidence": "inferred", "sources": ["hub"]}

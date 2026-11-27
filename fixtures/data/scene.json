@@ -1,0 +1,29 @@
+{
+  "sceneId": "usb-data",
+  "sources": [{"id": "scene", "title": "합성 USB 배선과 데이터 전송 수요", "locator": "fixture:data-scene", "retrievedAt": "2026-11-26"}],
+  "items": [
+    {"instanceId": "left", "modelId": "usb-endpoint", "revision": "1"},
+    {"instanceId": "right", "modelId": "usb-endpoint", "revision": "1"},
+    {"instanceId": "cable", "modelId": "usb-cable", "revision": "1"}
+  ],
+  "connections": [
+    {
+      "id": "usb",
+      "from": {"instanceId": "left", "id": "usb"},
+      "to": {"instanceId": "right", "id": "usb"},
+      "parts": [{"instanceId": "cable", "entry": "a", "exit": "b"}],
+      "evidence": {"value": true, "unit": "", "confidence": "inferred", "sources": ["scene"]}
+    }
+  ],
+  "workloads": [
+    {
+      "id": "send",
+      "domain": "data",
+      "kind": "bulk",
+      "from": {"instanceId": "left", "id": "router"},
+      "to": {"instanceId": "right", "id": "router"},
+      "request": {"throughput": {"value": 500, "unit": "MB/s", "confidence": "inferred", "sources": ["scene"]}}
+    }
+  ],
+  "scenarios": [{"id": "together", "members": ["send"]}]
+}
