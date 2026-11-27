@@ -210,13 +210,18 @@ function evaluatePlans(scene: Scene, plugins: readonly DomainPlugin[], scenario?
   const primary = scenarios.map(plans => plans[0]!);
   function solve(selected: Plan[], explicit: boolean, tables: Results) {
     const result = render(scene,plugins,tables,routes,selected,prepared.gross);
-    resolveUnknowns(scene,plugins,result,(world,domains,profileChanged) => {
+    function evaluateWorld(world: Scene, domains: readonly DomainPlugin[], profileChanged: boolean, resolveWiring: boolean,
+      prior = selected) {
       const modeLock = explicit && scenario !== undefined && scenarios[scenario]!.some(p => p !== selected[scenario] &&
         p.choices === selected[scenario]!.choices) ? scenario : undefined;
-      const locks = profileChanged ? (explicit ? selected.map((p,j) => j === scenario ? p : undefined) : undefined) : selected;
+      const locks = profileChanged ? (explicit ? prior.map((p,j) => j === scenario ? p : undefined) : undefined) : prior;
       const next = prepare(world,domains,locks,modeLock);
-      return render(world,domains,next.result,next.routes,next.scenarios.map(list => list[0]!),next.gross);
-    },routes);
+      const plans = next.scenarios.map(list => list[0]!);
+      const answer = render(world,domains,next.result,next.routes,plans,next.gross);
+      if (resolveWiring) resolveUnknowns(world,domains,answer,(s,p,changed,again) => evaluateWorld(s,p,changed,again,plans),next.routes,false);
+      return answer;
+    }
+    resolveUnknowns(scene,plugins,result,evaluateWorld,routes);
     return { choices: scenario === undefined ? [] : result.choices.filter(c => c.scenario === scenario).map(({scenario: _scenario,...choice}) => choice), result };
   }
   if (scenario === undefined) return [solve(primary,false,prepared.result)];

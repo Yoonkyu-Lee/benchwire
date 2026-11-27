@@ -167,7 +167,8 @@ export function printResults(scene: Scene, result: Results): string {
   function writeConnection(o: Results["outcomes"][number], row: number, indent: string) {
     const c = scene.connections[o.subjectRow]!;
     const [from, to] = o.direction === "reverse" ? [c.to, c.from] : [c.from, c.to];
-    writeOutcome(row, `연결 ${c.id} · ${targetName("port", from)} → ${targetName("port", to)}`, indent);
+    const budget = o.pool ? ` · ${o.pool.id}` : "";
+    writeOutcome(row, `연결 ${c.id} · ${targetName("port", from)} → ${targetName("port", to)}${budget}`, indent);
   }
 
   result.outcomes.forEach((o, row) => {

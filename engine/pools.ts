@@ -64,7 +64,8 @@ export function bindPools(result: Results) {
 // 단일 작업이 이 옵션을 쓸 때도 공용 예산을 넘을 수 없다. 배분에는 원래의 두 한도를 각각 쓴다.
 export function availableOption(result: Results, row: number): Option {
   const o = result.options[row]!;
-  if (o.poolResource === undefined) return o;
+  // 후보 세계에서 합친 옵션은 운반 한도와 공용 예산을 이미 함께 적용한 결과다.
+  if (o.effective || o.poolResource === undefined) return o;
   const pool = result.linkResources[o.poolResource]!.pool!, scale = o.pool!.perUnit;
   const serviceLow = o.verdict === "unknown" && !o.bounds ? 0 : o.limit ?? o.bounds?.low ?? 0;
   const low = Math.min(serviceLow, (pool.limit ?? pool.bounds?.low ?? 0) / scale);

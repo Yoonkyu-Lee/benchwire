@@ -26,7 +26,7 @@ export interface Results {
   reasonSpecs: { reason: number; source: number }[];
   assessments: { outcome: number; run: Run; verdict: KnownVerdict }[];
   measures: (Measure & { outcome: number; run: Run })[];
-  options: (Option & { poolResource?: number; serviceResource?: number; linkResource: number; connection: number; domain: string; direction: Direction })[];
+  options: (Option & { effective?: true; poolResource?: number; serviceResource?: number; linkResource: number; connection: number; domain: string; direction: Direction })[];
   demands: (Demand & { workload: number })[];
   paths: { workload: number; demand: number; verdict: Verdict; bestCase?: Verdict; conditioned?: boolean; disconnected?: number[]; disconnectedEdges?: number[]; key: string; truncated: boolean }[];
   matches: (Trace & { demand: number; option: number; verdict: Verdict })[];

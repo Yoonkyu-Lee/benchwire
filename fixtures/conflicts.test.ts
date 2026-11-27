@@ -7,6 +7,8 @@ import { plugins } from "../cli/domains.ts";
 import { printResults } from "../cli/print.ts";
 import { effectiveClaim } from "../engine/contract.ts";
 import { evaluate } from "../engine/evaluate.ts";
+import { availableOption } from "../engine/pools.ts";
+import type { Results } from "../engine/results.ts";
 import { modelFile } from "../scene/files.ts";
 import { loadSceneDocuments } from "../scene/load.ts";
 
@@ -300,4 +302,200 @@ test("T8 케이블이 먼저 제한하면 출력 충돌의 두 근거를 보존�
   assert.ok(r.reasonInputs.some(i => i.claim === cap && r.reasons[i.reason]!.outcome === row));
   assert.deepEqual(scene.claimSources.filter(c => c.claim === cap).map(c => [c.candidate?.value,scene.sources[c.source]!.id]),
     [[100,"supply"],[1000,"table"]]);
+});
+
+type CandidateField = { value: number | boolean | string; sources: string[];
+  conflicts?: ReturnType<typeof competing>[] };
+type Axis = [CandidateField, number | boolean | string];
+function oracle(f: ReturnType<typeof fixture>, axes: Axis[]) {
+  const originals = axes.map(([fact]) => fact.value);
+  const worlds = Array.from({length:2 ** axes.length},(_,i) => {
+    axes.forEach(([fact,alt],j) => { fact.value = i & (1 << j) ? alt : originals[j]!; delete fact.conflicts; });
+    return evaluate(f.load(), plugins);
+  });
+  axes.forEach(([fact,alt],j) => { fact.value=originals[j]!; fact.conflicts=[competing(alt,fact.sources[0]!)]; });
+  const scene = f.load(), merged = evaluate(scene,plugins);
+  const claims = axes.map(([fact,alt],j) => scene.claimSources.filter(s => s.candidate?.value === alt &&
+    scene.claimSources.some(other => other.claim === s.claim && other.candidate?.value === originals[j] &&
+      scene.sources[other.source]!.id === fact.sources[0])).map(s => s.claim));
+  function verdicts(r: Results,row: number) {
+    return r.possibleVerdicts.filter(v => v.outcome === row).map(v => v.verdict).sort();
+  }
+  function assessments(r: Results,row: number) {
+    return r.assessments.filter(a => a.outcome === row).map(a => [a.run,a.verdict].join("/")).sort();
+  }
+  for (const r of worlds) for (const o of r.outcomes) {
+    assert.ok(merged.outcomes.some(m => m.subjectKind === o.subjectKind && m.subjectRow === o.subjectRow &&
+      (m.scenario === o.scenario || o.subjectKind === "connection" && o.scenario === null) &&
+      m.direction === o.direction && m.domain === o.domain && m.unit === o.unit && m.pool?.id === o.pool?.id));
+  }
+  for (const [row,o] of merged.outcomes.entries()) {
+    const matches = worlds.map(r => r.outcomes.findIndex(s => s.subjectKind === o.subjectKind && s.subjectRow === o.subjectRow &&
+      (s.scenario === o.scenario || s.subjectKind === "connection" && s.scenario === null) && s.direction === o.direction && s.domain === o.domain &&
+      s.unit === o.unit && s.pool?.domain === o.pool?.domain && s.pool?.id === o.pool?.id));
+    const expected = worlds.map((r,i) => matches[i]! < 0 ? ["impossible"] : verdicts(r,matches[i]!));
+    const possible = [...new Set(expected.flat())].sort();
+    const label = JSON.stringify([o.subjectKind,o.subjectRow,o.domain,o.scenario,o.direction,o.pool]);
+    assert.deepEqual(verdicts(merged,row),possible,label);
+    assert.equal(o.verdict,possible.length === 1 ? possible[0] : "unknown",label);
+    if (o.subjectKind === "connection") {
+      const options = worlds.map((r,i) => {
+        const n = r.outcomes[matches[i]!]?.option;
+        return n === undefined ? null : availableOption(r,n);
+      });
+      const identity = (option: typeof options[number]) => option && [option.mode, option.profile, option.unit, option.limit, option.verdict,option.condition,option.bounds,option.pool];
+      const identities = options.map(o => JSON.stringify(identity(o)));
+      const actual = o.option === undefined ? null : availableOption(merged,o.option);
+      assert.deepEqual(identity(actual),identities.every(s => s === identities[0]) ? identity(options[0]!) : null,label);
+      if (!actual && options.some(o => o !== null)) {
+        const bounds = (side: "low" | "high") => options.map((opt,i) => {
+          const index = matches[i]!, result = worlds[i]!;
+          if (index < 0 || result.outcomes[index]!.verdict === "impossible") return 0;
+          return opt?.limit ?? opt?.bounds?.[side] ?? result.metrics.find(m => m.outcome === index && m.kind === "limit")?.[side] ?? null;
+        });
+        const lows = bounds("low"), highs = bounds("high");
+        const limit = merged.metrics.find(m => m.outcome === row && m.kind === "limit");
+        assert.deepEqual([limit?.low,limit?.high],
+          [lows.every(n => n !== null) ? Math.min(...lows) : null,highs.every(n => n !== null) ? Math.max(...highs) : null],label);
+      }
+      continue;
+    }
+    const metrics = worlds.map((r,i) => r.metrics.filter(m => m.outcome === matches[i]));
+    const measures = worlds.map((r,i) => r.measures.filter(m => m.outcome === matches[i]));
+    const scores = worlds.map((r,i) => assessments(r,matches[i]!));
+    assert.deepEqual(assessments(merged,row), [...new Set(scores.flat())].sort(),label);
+    for (const m of metrics.flat()) assert.ok(merged.metrics.some(v => v.outcome === row && v.kind === m.kind && v.unit === m.unit),label);
+    for (const m of measures.flat()) {
+      const same = (n: typeof m) => n.kind === m.kind && n.unit === m.unit && n.run === m.run;
+      const values = measures.map(ms => ms.find(same)), measure = merged.measures.find(n => n.outcome === row && same(n));
+      assert.deepEqual([measure?.low,measure?.high],[values.every(v=>v?.low != null) ? Math.min(...values.map(v=>v!.low!)) : null,
+        values.every(v=>v?.high != null) ? Math.max(...values.map(v=>v!.high!)) : null],label);
+    }
+    for (const metric of merged.metrics.filter(m => m.outcome === row)) {
+      const values = metrics.map(ms => ms.find(m => m.kind === metric.kind && m.unit === metric.unit));
+      const low = values.every(m => m?.low != null) ? Math.min(...values.map(m => m!.low!)) : null;
+      const high = values.every(m => m?.high != null) ? Math.max(...values.map(m => m!.high!)) : null;
+      assert.deepEqual([metric.low,metric.high],[low,high],label + metric.kind);
+    }
+    const exact = worlds.map((r,i) => JSON.stringify([r.outcomes[matches[i]!]!.mode,
+      metrics[i]!.map(m => [m.kind,m.unit,m.value,m.low,m.high,m.basis]),measures[i]!.map(m=>[m.run,m.kind,m.unit,m.low,m.high])]));
+    for (const [j,ids] of claims.entries()) {
+      assert.ok(ids.length);
+      let impact: string | undefined;
+      for (let i=0; i<worlds.length; i++) if (!(i & (1<<j))) {
+        const paired = i | (1<<j);
+        if (JSON.stringify([expected[i],scores[i]]) !== JSON.stringify([expected[paired],scores[paired]])) { impact="verdict"; break; }
+        if (exact[i] !== exact[paired]) impact="range";
+      }
+      assert.deepEqual([...new Set(merged.quests.filter(q => q.outcome === row && ids.includes(q.claim)).map(q => q.impact))],
+        impact ? [impact] : [], label + " · 확인할 주장 " + j);
+    }
+  }
+  const key = (c: Results["choices"][number]) => JSON.stringify([c.scenario,c.connection,c.profile]);
+  const common = worlds[0]!.choices.map(key).filter(k => worlds.every(r => r.choices.some(c => key(c) === k)));
+  assert.deepEqual(merged.choices.map(key).sort(),common.sort());
+  function usage(r: Results) {
+    return new Map(r.resourceUsage.map(u => {
+      const link = u.resourceKind === "link" ? r.linkResources[u.resource]! : null;
+      const pool = link?.service?.poolResource === undefined ? null : r.linkResources[link.service.poolResource]!.pool;
+      return [JSON.stringify([u.scenario,u.unit,link ? [link.connection,link.domain,link.pool?.scope === "connection" ? null : link.direction,
+        link.pool?.id,link.service?.unit,link.service?.mode,pool?.id] : u.resource]), u];
+    }));
+  }
+  const byWorld = worlds.map(usage), actualUsage = usage(merged);
+  for (const id of new Set(byWorld.flatMap(us => [...us.keys()]))) {
+    const u = actualUsage.get(id);
+    assert.ok(u,id);
+    for (const key of ["used","capacity"] as const) {
+      const values = byWorld.map(us => us.has(id) ? us.get(id)![key] : 0);
+      assert.equal(u[key],values.every(v => v === values[0]) ? values[0] : null,id + key);
+    }
+  }
+  return {scene,merged};
+}
+
+test("T4 후보 오라클 · 내부 부착점이 운반 경로를 바꾸는 PCIe 경쟁", () => {
+  const f=fixture("t4","scene"), doc=f.document, dock=f.models.get("t4-dock@1");
+  const eth=doc.workloads.find((w:{id:string})=>w.id === "ethernet");
+  const pcie=doc.workloads.find((w:{id:string})=>w.id === "nic-pcie");
+  eth.from={...pcie.from}; eth.request.throughput.value=1200; pcie.request.throughput.value=140;
+  dock.ports[0].interfaces[0].params.tunnelGbps.value=1.2;
+  doc.scenarios=[{id:"경쟁",members:[eth.id,pcie.id]}];
+  const port=dock.ports.find((p:{id:string})=>p.id === "lan");
+  const {scene,merged}=oracle(f,[[port.attachment,"storage"]]);
+  const row=merged.outcomes.findIndex(o=>o.subjectKind==="workload" && scene.workloads[o.subjectRow]!.id===pcie.id);
+  const m=merged.metrics.find(m=>m.outcome===row && m.kind==="together")!;
+  assert.deepEqual([m.low,m.high],[75,140]);
+});
+
+test("T7 후보 오라클 · PoE 포트 예산 선택과 고정 요청의 우선순위", () => {
+  const f=fixture("network","scene"), doc=f.document, pse=f.models.get("network-pse@1");
+  const seed=doc.workloads.find((w:{id:string})=>w.id==="poe-12");
+  const wire=doc.connections.find((c:{id:string})=>c.id==="poe");
+  doc.items=doc.items.filter((x:{instanceId:string})=>["pse","pd","poe-wire"].includes(x.instanceId));
+  doc.items.push({...doc.items[1],instanceId:"pd2"},{...doc.items[2],instanceId:"wire2"});
+  pse.resources[0].capacity.value=16;
+  pse.resources.push({...structuredClone(pse.resources[0]),id:"separate"});
+  const port=structuredClone(pse.ports[0]); port.id="pse2";
+  for(const iface of port.interfaces) iface.id += "2";
+  pse.ports.push(port);
+  doc.connections=[wire,{...wire,id:"poe2",from:{...wire.from,id:"pse2"},to:{...wire.to,instanceId:"pd2"},
+    parts:[{...wire.parts[0],instanceId:"wire2"}]}];
+  doc.workloads=[seed,{...structuredClone(seed),id:"second",to:{...seed.to,instanceId:"pd2"}}];
+  doc.scenarios=[{id:"함께",members:[{workload:seed.id,priority:{value:0,confidence:"inferred",sources:["network-scene"]}},"second"]}];
+  const {merged}=oracle(f,[[pse.ports[0].interfaces[0].params.budgetResource,"separate"]]);
+  const row=merged.outcomes.findIndex(o=>o.subjectKind==="workload" && o.subjectRow===1);
+  const m=merged.metrics.find(m=>m.outcome===row && m.kind==="together")!;
+  assert.deepEqual([m.low,m.high],[0,12]);
+});
+
+test("T2 후보 오라클 · 직접 연결의 두 요청과 핀으로 정한 영상·데이터 설정", () => {
+  const f=fixture("t2","scene"), host=f.models.get("t2-host@1");
+  oracle(f,[[f.document.workloads[0].request.refresh,60],[f.document.workloads[1].request.throughput,30],
+    [host.ports[0].interfaces[0].params.pin,"D"]]);
+});
+
+test("T8 후보 오라클 · 상시 부하와 내부 자원 한도", () => {
+  const f=fixture("power","passthrough");
+  oracle(f,[[f.models.get("relay@1").ports[0].interfaces[0].params.reserveW,22],
+    [f.models.get("supply@1").resources[0].capacity,38]]);
+});
+
+test("T2 출처 후보 512개인 시나리오는 설정과 선택을 확정할 수 없다", () => {
+  const f=fixture("t2","scene"), doc=f.document, video=doc.workloads[0], bulk=doc.workloads[1];
+  video.request.refresh.conflicts=[competing(60,"scene")];
+  for(let i=0;i<8;i++) {
+    const extra=structuredClone(bulk); extra.id="extra-"+i;
+    Object.assign(extra.request.throughput,{value:1,conflicts:[competing(2,"scene")]});
+    doc.workloads.push(extra); doc.scenarios[0].members.push(extra.id);
+  }
+  const scene=f.load(), r=evaluate(scene,plugins);
+  assert.deepEqual(r.choices,[]);
+  assert.deepEqual(r.reservations,[]);
+  for(const [row,o] of r.outcomes.entries()) if(o.scenario===0) {
+    assert.equal(o.verdict,"unknown");
+    assert.equal(o.option,undefined);
+    assert.equal(o.path,null);
+    assert.deepEqual(r.possibleVerdicts.filter(v=>v.outcome===row),[]);
+  }
+  assert.doesNotMatch(printResults(scene,r),/^\s*연결 설정 display-hub · /mu);
+});
+
+test("T5 후보에만 있는 양방향 예산을 사용량 표와 CLI 제목에서 구별한다", () => {
+  const f=conflictingUsb(), scene=f.load(), r=evaluate(scene,plugins);
+  const use=r.resourceUsage.find(u=>u.resourceKind==="link" && r.linkResources[u.resource]!.pool?.id==="usb2-bulk");
+  assert.ok(use && use.reasonRows.length);
+  assert.deepEqual([use.used,use.capacity],[null,null]);
+  const titles=printResults(scene,r).split("\n근거\n")[0]!.split("\n").filter(line=>line.includes("연결 usb · left/usb → right/usb"));
+  assert.ok(titles.some(line=>line.includes("usb2-bulk")));
+  assert.ok(titles.some(line=>!line.includes("usb2-bulk")));
+});
+
+test("T5 후보 오라클 · 직결 USB의 양방향 요청과 후보별 공용 예산", () => {
+  const f=conflictingUsb(), send=f.document.workloads[0], back=structuredClone(send);
+  Object.assign(back,{id:"return",from:send.to,to:send.from});
+  f.document.workloads.push(back);
+  f.document.scenarios[0].members.push(back.id);
+  const modes=f.models.get("usb-endpoint@1").ports[0].interfaces[0].params.modes;
+  oracle(f,[[modes,"Gen 1x1"],[back.request.throughput,10]]);
 });
