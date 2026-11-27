@@ -61,7 +61,8 @@ export function printResults(scene: Scene, result: Results): string {
 
     for (const m of result.metrics.filter(m => m.outcome === row)) {
       const range = (m.low !== null || m.high !== null) && (m.low !== m.value || m.high !== m.value);
-      if (range) lines.push(`${indent}${metrics[m.kind]} 범위 ${quantity(m.low, m.unit)} ~ ${quantity(m.high, m.unit)}`);
+      const bound = m.range === "conservative" ? " (보수적 경계)" : "";
+      if (range) lines.push(`${indent}${metrics[m.kind]} 범위 ${quantity(m.low, m.unit)} ~ ${quantity(m.high, m.unit)}${bound}`);
       if (m.value !== null || (!range && m.kind !== "dropPercent")) {
         const basis = m.basis === "assumed" && m.value !== null ? " (가정)" : "";
         lines.push(`${indent}${metrics[m.kind]} ${quantity(m.value, m.unit)}${basis}`);
@@ -74,6 +75,12 @@ export function printResults(scene: Scene, result: Results): string {
       }
     }
     for (const n of result.needs.filter(n => n.outcome === row)) lines.push(`${indent}필요한 결합 형태 ${n.requiredCapability}`);
+    const possible = result.possibleVerdicts.filter(p => p.outcome === row).map(p => verdicts[p.verdict]);
+    if (possible.length > 1) lines.push(`${indent}가능한 판정 ${possible.join(" ")}`);
+    for (const q of result.quests.filter(q => q.outcome === row)) {
+      const c = scene.claims[q.claim]!;
+      lines.push(`${indent}확인할 것 · ${q.instruction} (${targetName(c.ownerKind, c.owner)} · ${c.field})`);
+    }
 
     const seen = new Set<number>();
     function writeReason(reason: number, pad: string) {
@@ -129,7 +136,9 @@ export function printResults(scene: Scene, result: Results): string {
     for (const e of result.errors) {
       const name = e.stage === "negotiate" ? targetName("linkResource", e.row)
         : targetName("workload", e.stage === "demand" ? e.row : result.paths[e.row]!.workload);
-      lines.push(`  ${e.domain} · ${steps[e.stage]} · ${name} · 미등록 규격 ${e.spec}`);
+      const what = e.spec ? `미등록 규격 ${e.spec}` : `유한하지 않은 ${e.field}`;
+      const resource = e.resource === undefined ? "" : ` · 자원 ${targetName("resource", e.resource)}`;
+      lines.push(`  ${e.domain} · ${steps[e.stage]} · ${name}${resource} · ${what}`);
     }
   }
   const report = result.reasons.length ? lines.concat("", "근거", evidence) : lines;

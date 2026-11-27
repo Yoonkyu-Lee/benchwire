@@ -79,3 +79,18 @@ test("CLI 명령은 경로 옵션으로 장면을 열고 시험 전용 영역을
   assert.match(processResult.stdout, /시험 전용 영역 trial/u);
   assert.match(processResult.stdout, /시나리오 all/u);
 });
+
+test("CLI 출력에 모르는 정책의 범위와 가정값, 가능한 판정, 확인할 것이 보인다", () => {
+  const plugins = [trialDomain()];
+  const scene = loadScene(sceneFile, files, plugins);
+  const trunk = scene.resources.findIndex(r => r.id === "trunk");
+  const policy = effectiveClaim(scene, "resource", trunk, "trial", "policy")!;
+  scene.claims[policy]!.value = null;
+  scene.claims[policy]!.confidence = "unknown";
+  const output = printResults(scene, evaluate(scene, plugins)).split("\n근거\n")[0]!;
+  const b = output.split(/❓ 워크로드 b\b/u)[1]!.split(/❓ 워크로드 c\b/u)[0]!;
+  assert.match(b, /동시 성능 범위 0 회\/s ~ 800 회\/s/u);
+  assert.match(b, /동시 성능 400 회\/s \(가정\)/u);
+  assert.match(b, /가능한 판정 .*✅.*/u);
+  assert.match(b, /확인할 것 · .+ \(host\/trunk · policy\)/u);
+});
