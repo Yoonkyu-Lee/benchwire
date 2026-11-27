@@ -2,6 +2,7 @@
 import { dirname, join } from "node:path";
 import { parseArgs } from "node:util";
 import { evaluate } from "../engine/evaluate.ts";
+import { data } from "../domains/data/data.ts";
 import { display } from "../domains/display/display.ts";
 import { network } from "../domains/network/network.ts";
 import { power } from "../domains/power/power.ts";
@@ -12,7 +13,7 @@ import { printResults } from "./print.ts";
 
 function main() {
   const trial = trialDomain();
-  const plugins = [display, network, power, storageDomain, trial];
+  const plugins = [data, display, network, power, storageDomain, trial];
   let scene;
   try {
     const { positionals, values } = parseArgs({
