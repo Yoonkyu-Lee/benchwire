@@ -2,6 +2,7 @@
 import assert from "node:assert/strict";
 import { join } from "node:path";
 import { test } from "node:test";
+import { printResults } from "../../cli/print.ts";
 import { plugins } from "../../cli/domains.ts";
 import { loadScene } from "../../cli/load.ts";
 import type { Scene } from "../../engine/contract.ts";
@@ -215,4 +216,34 @@ test("T2 양 끝의 기본 핀과 대안 핀이 모두 미확인이어도 허브
   assert.ok(r.quests.some(q => q.outcome === hub && pins.includes(q.claim)));
   assert.deepEqual(r.choices,[]);
   assert.ok(r.outcomes.some(o => o.subjectKind === "connection" && o.scenario === 0 && o.domain === "display"));
+});
+
+test("T2 미확인 핀의 연결 한도는 두 설정의 경계와 확인할 주장을 함께 낸다", () => {
+  const s = fixture("scene");
+  const pin = s.claims.findIndex(c => c.field === "pin" && c.value === "C");
+  Object.assign(s.claims[pin]!, {value:null,confidence:"unknown"});
+  const r = evaluate(s,plugins);
+  const row = r.outcomes.findIndex(o => o.subjectKind === "connection" && o.domain === "display" && o.direction === "forward");
+  assert.equal(r.outcomes[row]!.verdict,"ok");
+  const limit = r.metrics.find(m => m.outcome === row && m.kind === "limit");
+  assert.deepEqual([limit?.low,limit?.high,limit?.unit],[12.96,25.92,"Gbps"]);
+  assert.ok(r.quests.some(q => q.outcome === row && q.claim === pin && q.impact === "range"));
+  assert.ok(r.reasonInputs.some(i => i.claim === pin && r.reasons[i.reason]!.outcome === row));
+  for (const endpoint of ["12.96","25.92"]) assert.ok(r.reasons.some(reason => reason.outcome === row && reason.rule.includes(endpoint)));
+  const evidence = printResults(s,r).split("\n근거\n")[1]!;
+  assert.match(evidence,/상한 25\.92 Gbps[^\n]*pin[^\n]*C/u);
+});
+
+test("T2 기본이 핀에 따라 달라져도 확인된 2레인 설정을 고정해 비교할 수 있다", () => {
+  const s = fixture("scene");
+  Object.assign(s.claims.find(c => c.field === "pin" && c.value === "C")!, {value:null,confidence:"unknown"});
+  const variants = evaluateVariants(s,plugins,0);
+  assert.deepEqual(variants[0]!.choices,[]);
+  assert.deepEqual(variants[0]!.result,evaluate(s,plugins));
+  const alternatives = variants.slice(1).filter(v => v.choices.some(c => c.profile === "dp-2lane"));
+  assert.equal(alternatives.length,1);
+  const {work} = inspect(s,alternatives[0]!.result);
+  assert.deepEqual([work("video").metric.value,work("hub").metric.value],[12.542736,400]);
+  assert.ok(work("video").reasons.some(r => r.rule.includes("60 Hz")));
+  assert.ok(variants.slice(1).some(v => v.choices.some(c => c.profile === "usb-only")));
 });

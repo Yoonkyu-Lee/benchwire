@@ -297,3 +297,76 @@ test("T4 역환산을 유한하게 표현할 수 없는 운반 단위는 계약 
   assert.ok(r.errors.some(e => e.stage === "demand" && e.field === "carriers"));
   assert.equal(r.outcomes[row(0)]!.verdict,"unknown");
 });
+
+test("T4 역방향의 다른 환산은 순방향 두 작업의 운반 몫을 바꾸지 않는다", () => {
+  const {scene, client, carrier, run} = setup([200,200,200], 0.8);
+  const reverse = scene.workloads[2]!;
+  [reverse.from, reverse.to] = [reverse.to, reverse.from];
+  reverse.id = "0-역방향";
+  const demand = client.demand;
+  client.demand = (s,w) => demand(s,w).map(d => ({...d, unit:w === 1 ? "frames/s" : "blocks/s",
+    carriers:[{domain:carrier.id,mode:"bulk",conversion:{unit:"MB/s",perUnit:[1,2,0.5][w]!}}]}));
+  scene.members = scene.members.filter(m => m.workload !== 2);
+  const first = run();
+  assert.deepEqual([0,1].map(w => first.r.metrics.find(m => m.outcome === first.row(w) && m.kind === "together")!.value), [50,25]);
+  scene.members.push({scenario:0,workload:2});
+  const both = run();
+  assert.deepEqual(both.values("together"), [50,25,200]);
+  for (const w of [0,1]) assert.ok(both.r.reasons.some(p => p.outcome === both.row(w) && p.stage === "allocate"));
+  scene.workloads[1]!.id = "1-동일단위";
+  client.demand = (s,w) => demand(s,w).map(d => ({...d, unit:"blocks/s",
+    carriers:[{domain:carrier.id,mode:"bulk",conversion:{unit:"MB/s",perUnit:[1,2,0.5][w]!}}]}));
+  assert.deepEqual(run().values("together"), [50,25,200]);
+});
+
+for (const ownerKind of ["item","port","resource"] as const) test("T10 설정 후보는 " + ownerKind + " 주장도 한도와 퀘스트에 반영한다", () => {
+  const {scene, carrier, run, capacity} = setup([400]);
+  const c = scene.connections[0]!;
+  const claim = scene.claims.push({...scene.claims[capacity]!, id:"후보", ownerKind,
+    owner:ownerKind === "port" ? c.from : ownerKind === "item" ? scene.ports[c.from]!.item : 0,
+    domain:carrier.id, field:"negotiated", value:null, confidence:"unknown", unit:"MB/s"}) - 1;
+  scene.claimSources.push(...scene.claimSources.filter(s => s.claim === capacity).map(s => ({...s,claim})));
+  carrier.profileValues = f => f.field === "negotiated" ? [25,100] : [];
+  const negotiate = carrier.negotiate;
+  carrier.negotiate = link => negotiate(link).map(o => ({...o, limit:link.scene.claims[claim]!.value as number | null,
+    inputs:[...o.inputs,claim]}));
+  const {r,row} = run(), outcome = row(0);
+  const metric = r.metrics.find(m => m.outcome === outcome && m.kind === "together")!;
+  assert.deepEqual([metric.low,metric.high,r.outcomes[outcome]!.verdict], [25,100,"conditional"]);
+  assert.ok(r.quests.some(q => q.outcome === outcome && q.claim === claim && q.impact === "range"));
+});
+
+test("T4 작업이 왕복할 때 구간마다 다른 환산으로 그 방향의 경쟁 작업과 나눈다", () => {
+  const {scene,client,carrier,run} = setup([200,200,200],0.8);
+  const [roundtrip,,reverse] = scene.workloads;
+  const via = roundtrip!.to;
+  roundtrip!.to = roundtrip!.from;
+  [reverse!.from,reverse!.to] = [reverse!.to,reverse!.from];
+  const demand = client.demand;
+  client.demand = (s,w) => demand(s,w).map(d => ({...d, unit:"frames/s", via:w === 0 ? [via] : [],
+    carriers:(w === 0 ? [2,4] : [1]).map(perUnit => ({domain:carrier.id,mode:"bulk",conversion:{unit:"MB/s",perUnit}}))}));
+  const rates = run().values("together");
+  for (const [i,expected] of [12.5,75,50].entries()) assert.ok(Math.abs(rates[i]! - expected) < 1e-10);
+});
+
+test("T10 미확인 커넥터의 지역 ID 후보가 실제 물리 결합과 작업 판정을 바꾼다", () => {
+  const {scene,carrier,run} = setup([100]);
+  const port = scene.connections[0]!.from;
+  const pin = scene.claims.findIndex(c => c.ownerKind === "port" && c.owner === port && c.field === "connector");
+  Object.assign(scene.claims[pin]!, {reference:null,value:null,confidence:"unknown"});
+  carrier.profileValues = c => c === scene.claims[pin] ? scene.connectors.map(c => c.id) : [];
+  const {r,row} = run();
+  const m = r.metrics.find(m => m.outcome === row(0) && m.kind === "together")!;
+  assert.deepEqual([m.low,m.high], [0,100]);
+  assert.deepEqual(r.possibleVerdicts.filter(v => v.outcome === row(0)).map(v => v.verdict).sort(), ["impossible","ok"]);
+  assert.ok(r.quests.some(q => q.outcome === row(0) && q.claim === pin));
+});
+
+test("T4 환산 뒤 표현 가능한 극소 처리량도 두 작업에 같은 몫이 돌아간다", () => {
+  const {client,carrier,run} = setup([100,100]);
+  const negotiate = carrier.negotiate, demand = client.demand;
+  carrier.negotiate = link => negotiate(link).slice(0,1).map(({pool,...o}) => ({...o,limit:Number.MIN_VALUE}));
+  client.demand = (s,w) => demand(s,w).map(d => ({...d,unit:"samples/s",
+    carriers:[{domain:carrier.id,mode:"bulk",conversion:{unit:"MB/s",perUnit:0.5}}]}));
+  assert.deepEqual(run().values("together"), [Number.MIN_VALUE,Number.MIN_VALUE]);
+});

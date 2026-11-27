@@ -36,7 +36,7 @@ export interface Results {
   allocations: { scenario: number; workload: number; run: Run; value: number | null; unit: string }[];
   bindings: { scenario: number; workload: number; run: Run; resourceKind: "scene" | "link"; resource: number }[];
   outcomes: { subjectKind: "connection" | "workload"; subjectRow: number; option?: number; path: number | null; soloPath?: number; direction: Direction | null; scenario: number | null; domain: string; unit?: string; pool?: { domain: string; id: string }; verdict: Verdict; mode: string; label: string }[];
-  metrics: { outcome: number; kind: "solo" | "together" | "drop" | "dropPercent" | "unused"; unit: string;
+  metrics: { outcome: number; kind: "solo" | "together" | "drop" | "dropPercent" | "unused" | "limit"; unit: string;
     range?: "witnessed" | "conservative"; lowWorld?: number; highWorld?: number;
     value: number | null; low: number | null; high: number | null; basis: "calculated" | "assumed" }[];
   reasons: { outcome: number; run?: Run; stage: "physical" | "negotiate" | "path" | "allocate" | "judge"; rule: string; targetKind: Target; targetRow: number }[];

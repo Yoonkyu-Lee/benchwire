@@ -39,11 +39,11 @@ function candidatesFor(scene: Scene, plugins: readonly DomainPlugin[], result: R
       for (const s of steps) if (s.option !== null && p.verdict !== "impossible") {
         const o = result.options[s.option]!;
         const rate = s.carrier?.conversion?.perUnit ?? 1;
-        uses.push({ resource: scene.resources.length + (o.serviceResource ?? o.linkResource), option: s.option, coefficient: d.elastic ? rate : 0,
+        uses.push({ resource: scene.resources.length + (o.serviceResource ?? o.linkResource), option: s.option, serviceRate: rate, coefficient: d.elastic ? rate : 0,
           fixed: d.elastic ? 0 : (d.requested ?? 0) * rate, rule: "같은 방향의 링크 한도", inputs: o.inputs, specs: o.specs });
         if (o.poolResource !== undefined) {
           const pool = result.linkResources[o.poolResource]!.pool!, scale = rate * o.pool!.perUnit;
-          uses.push({ resource: scene.resources.length + o.poolResource, option: s.option, pool: o.poolResource,
+          uses.push({ resource: scene.resources.length + o.poolResource, option: s.option, pool: o.poolResource, serviceRate: rate,
             coefficient: d.elastic ? scale : 0, fixed: d.elastic ? 0 : (d.requested ?? 0) * scale,
             rule: pool.rule, inputs: pool.inputs, specs: pool.specs });
         }
@@ -189,21 +189,24 @@ function render(scene: Scene, plugins: readonly DomainPlugin[], result: Results,
 function evaluatePlans(scene: Scene, plugins: readonly DomainPlugin[], scenario?: number) {
   const prepared = prepare(scene,plugins), { scenarios, routes } = prepared;
   const primary = scenarios.map(plans => plans[0]!);
-  const alternatives = scenario === undefined ? [] : scenarios[scenario]!.slice(1).filter(p => p.confirmed);
-  const selections = [primary, ...alternatives.map(p => primary.map((base,i) => i === scenario ? p : base))];
-  return selections.map((selected,i) => {
-    const tables = i === selections.length-1 ? prepared.result : structuredClone(prepared.result);
+  function solve(selected: Plan[], explicit: boolean, tables: Results) {
     const result = render(scene,plugins,tables,routes,selected,prepared.gross);
     resolveUnknowns(scene,plugins,result,(world,domains,profileChanged) => {
-      const modeLock = i > 0 && scenario !== undefined && scenarios[scenario]!.some(p => p !== selected[scenario] &&
+      const modeLock = explicit && scenario !== undefined && scenarios[scenario]!.some(p => p !== selected[scenario] &&
         p.choices === selected[scenario]!.choices) ? scenario : undefined;
-      const locks = profileChanged ? (i === 0 ? undefined : selected.map((p,j) => j === scenario ? p : undefined)) : selected;
+      const locks = profileChanged ? (explicit ? selected.map((p,j) => j === scenario ? p : undefined) : undefined) : selected;
       const next = prepare(world,domains,locks,modeLock);
-      const plans = next.scenarios.map(list => list[0]!);
-      return render(world,domains,next.result,next.routes,plans,next.gross);
+      return render(world,domains,next.result,next.routes,next.scenarios.map(list => list[0]!),next.gross);
     },routes);
     return { choices: scenario === undefined ? [] : result.choices.filter(c => c.scenario === scenario).map(({scenario: _scenario,...choice}) => choice), result };
-  });
+  }
+  if (scenario === undefined) return [solve(primary,false,prepared.result)];
+  const first = solve(primary,false,structuredClone(prepared.result));
+  // 임시 기본 설정이 후보마다 바뀌면, 그 설정을 고정한 결과도 사용자가 선택할 수 있는 별도 대안이다.
+  const alternatives = scenarios[scenario]!.filter(p => p.confirmed && (p !== primary[scenario] ||
+    p.choices.some(c => !first.choices.some(other => other.connection === c.connection && other.profile === c.profile))));
+  return [first, ...alternatives.map((plan,i) => solve(primary.map((p,j) => j === scenario ? plan : p),true,
+    i === alternatives.length - 1 ? prepared.result : structuredClone(prepared.result)))];
 }
 
 export function evaluate(scene: Scene, plugins: readonly DomainPlugin[]): Results {

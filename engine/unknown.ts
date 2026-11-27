@@ -2,6 +2,7 @@
 import type { DomainPlugin, Scene } from "./contract.ts";
 import type { RouteInputs } from "./path.ts";
 import { attachmentCandidates, effectiveClaim, portFacts } from "./scene.ts";
+import { availableOption } from "./pools.ts";
 import { addReason, type Results } from "./results.ts";
 
 // 연결된 장비의 후보 곱이 커지면 일부 표본 대신 물리 상한을 쓴다.
@@ -9,7 +10,7 @@ const MAX_WIRINGS = 64;
 // 두 끝의 기본 핀(각 6종)과 대안 지원 여부(각 2종)의 144개 조합도 함께 검산한다.
 const MAX_PROFILE_WORLDS = 256;
 type Metric = Results["metrics"][number];
-type Variable = { claim: number; samples: { value: string | number | boolean; node?: number }[] };
+type Variable = { claim: number; samples: { value: string | number | boolean; node?: number; reference?: number }[] };
 
 
 // 시나리오 안에서 가능한 경로가 자원을 직접 또는 다른 작업을 통해 함께 쓰는지 본다.
@@ -98,7 +99,13 @@ function snapshot(r: Results, row: number, base = r) {
   const o = r.outcomes[row]!;
   const metrics = r.metrics.filter(m => m.outcome === row);
   const possible = r.possibleVerdicts.filter(v => v.outcome === row).map(v => v.verdict).sort();
-  const option = o.option === undefined ? null : r.options[o.option]!;
+  const option = o.option === undefined ? null : availableOption(r,o.option);
+  if (o.subjectKind === "connection" && o.unit && (option || o.verdict === "impossible") && !metrics.some(m => m.kind === "limit")) {
+    const value = o.verdict === "impossible" ? 0 : option!.limit;
+    const low = value ?? option?.bounds?.low ?? null, high = value ?? option?.bounds?.high ?? null;
+    metrics.push({outcome:row, kind:"limit", unit:o.unit, value, low, high, basis:"calculated",
+      ...(value === null ? {range:"conservative" as const} : {})});
+  }
   const selected = option && JSON.stringify([option.mode, option.profile, option.rule, option.verdict, option.limit,
     option.bounds, option.unit, option.condition, option.inputs, option.specs]);
   return { o, selected, metrics, possible, inputs: inputs(r, row),
@@ -152,6 +159,9 @@ function merge(scene: Scene, plugins: readonly DomainPlugin[], r: Results, row: 
       !sameOutcome(s, samples[i - (Math.floor(i / stride) % v.samples.length) * stride]!)) ? [v.claim] : [];
   });
   for (const id of changed) ask(scene, plugins, r, row, id);
+  // 고정 옵션이 사라져도 연결의 실효 한도와 두 경계를 지지한 후보를 남긴다.
+  const limit = samples.flatMap(s => s.metrics.filter(m => m.kind === "limit"))[0];
+  if (limit && o.option === undefined) r.metrics.push({ ...limit, outcome:row });
   for (const m of r.metrics.filter(m => m.outcome === row)) {
     const ordinal = r.metrics.filter(other => other.outcome === row && other.kind === m.kind && other.unit === m.unit).indexOf(m);
     const values = samples.map(s => s.metrics.filter(x => x.kind === m.kind && x.unit === m.unit)[ordinal]);
@@ -187,26 +197,57 @@ function merge(scene: Scene, plugins: readonly DomainPlugin[], r: Results, row: 
   const evidence = [...new Set([...samples.flatMap(s => s.inputs), ...variables.map(v => v.claim)])];
   const parent = r.reasons.findLastIndex(reason => reason.outcome === row);
   const rule = variables.some(v => v.samples[0]?.node === undefined) ? "연결 설정 후보별 판정과 범위" : "일관된 배선 후보별 판정과 범위";
+  const parents = parent < 0 ? [] : [parent];
+  const limitRange = r.metrics.find(m => m.outcome === row && m.kind === "limit");
+  if (limitRange && limitRange.low !== limitRange.high) {
+    for (const [label,side] of [["하한","low"],["상한","high"]] as const) {
+      const value = limitRange[side];
+      if (value === null) continue;
+      const sample = samples.find(s => s.metrics.some(m => m.kind === "limit" && m[side] === value))!;
+      const bound = addReason(r, {outcome:row, stage:"negotiate", rule:`후보별 연결 한도 ${label} ${value} ${limitRange.unit}`,
+        targetKind:o.subjectKind, targetRow:o.subjectRow}, sample.inputs);
+      for (const source of new Set(sample.specs)) r.reasonSpecs.push({reason:bound,source});
+      parents.push(bound);
+    }
+  }
   const proof = addReason(r, { outcome: row, stage: "judge", rule, targetKind: o.subjectKind, targetRow: o.subjectRow },
-    evidence, parent < 0 ? [] : [parent]);
+    evidence, parents);
   for (const source of new Set(samples.flatMap(s => s.specs))) r.reasonSpecs.push({ reason: proof, source });
 }
 
 export function resolveUnknowns(scene: Scene, plugins: readonly DomainPlugin[], result: Results,
   evaluateWiring: (s: Scene, p: readonly DomainPlugin[], profileChanged: boolean) => Results, routeInputs: readonly RouteInputs[]) {
   completeUnknowns(scene, plugins, result);
-  const candidates = attachmentCandidates(scene, result.demands.flatMap(d => d.via));
-  const all: Variable[] = [...candidates].map(([port,nodes]) => ({claim:portFacts(scene,port).attachment,
-    samples:nodes.map(node => ({node,value:scene.nodes[node]!.id}))}));
-  const profilePorts = new Map<number, number>();
+  const all: Variable[] = [];
+  const profileLinks = new Map<number, Set<number>>();
   scene.claims.forEach((c,claim) => {
-    if (c.value !== null || c.ownerKind !== "interface") return;
-    if (effectiveClaim(scene, c.ownerKind, c.owner, c.domain, c.field, c.condition) !== claim) return;
-    const values = plugins.find(p => p.id === c.domain)?.profileValues?.(c);
-    if (!values?.length) return;
-    all.push({claim,samples:[...new Set(values)].map(value => ({value}))});
-    profilePorts.set(claim,scene.interfaces[c.owner]!.port);
+    if (c.value !== null || effectiveClaim(scene, c.ownerKind, c.owner, c.domain, c.field, c.condition) !== claim) return;
+    const owners = c.domain ? plugins.filter(p => p.id === c.domain) : plugins;
+    const values = new Set(owners.flatMap(p => p.profileValues?.(c) ?? []));
+    if (!values.size) return;
+    const samples: Variable["samples"] = [];
+    for (const value of values) {
+      if (c.ownerKind === "port" && c.reference !== undefined) {
+        const reference = c.field === "connector" ? scene.connectors.findIndex(row => row.id === value)
+          : scene.nodes.findIndex(n => n.item === scene.ports[c.owner]!.item && n.id === value);
+        if (reference < 0) return;
+        samples.push({value,reference});
+      } else samples.push({value});
+    }
+    all.push({claim,samples});
+    const links = new Set(result.options.filter(o => o.inputs.includes(claim)).map(o => o.connection));
+    const port = c.ownerKind === "interface" ? scene.interfaces[c.owner]!.port : c.ownerKind === "port" ? c.owner : undefined;
+    // 끝점 설정은 다른 영역의 서비스도 바꾼다. 중간 부품에서는 실제로 읽은 주장만 조합한다.
+    scene.connections.forEach(({from,to},connection) => {
+      if (port === from || port === to || c.ownerKind === "item" &&
+          (scene.ports[from]!.item === c.owner || scene.ports[to]!.item === c.owner)) links.add(connection);
+    });
+    profileLinks.set(claim,links);
   });
+  for (const [port,nodes] of attachmentCandidates(scene,result.demands.flatMap(d => d.via))) {
+    const claim = portFacts(scene,port).attachment;
+    if (!profileLinks.has(claim)) all.push({claim,samples:nodes.map(node => ({node,value:scene.nodes[node]!.id}))});
+  }
   if (!all.length) return;
   const groups: { variables: Variable[]; affected: number[] }[] = [];
   result.outcomes.forEach((o, row) => {
@@ -228,10 +269,7 @@ export function resolveUnknowns(scene: Scene, plugins: readonly DomainPlugin[], 
         }
       }
     }
-    for (const connection of links) {
-      const {from,to} = scene.connections[connection]!;
-      for (const [claim,port] of profilePorts) if (port === from || port === to) claims.add(claim);
-    }
+    for (const [claim,connections] of profileLinks) if ([...links].some(c => connections.has(c))) claims.add(claim);
     const variables = all.filter(v => claims.has(v.claim));
     if (!variables.length) return;
     const group = groups.find(g => g.variables.length === variables.length && g.variables.every((v,i) => v === variables[i]));
@@ -248,14 +286,11 @@ export function resolveUnknowns(scene: Scene, plugins: readonly DomainPlugin[], 
     const count = variables.reduce((n,v) => n * v.samples.length, 1);
     const scenarios = new Set(affected.map(i => result.outcomes[i]!.scenario));
     const scope = provisional.flatMap((u,i) => scenarios.has(u.scenario) || scenarios.has(null) ? [i] : []);
-    const profileChanged = variables.some(v => profilePorts.has(v.claim));
+    const profileChanged = variables.some(v => profileLinks.has(v.claim));
     if (!count || count > (profileChanged ? MAX_PROFILE_WORLDS : MAX_WIRINGS)) {
       if (profileChanged) {
-        const ports = new Set(variables.map(v => profilePorts.get(v.claim)));
-        result.choices = result.choices.filter(c => {
-          const {from, to} = scene.connections[c.connection]!;
-          return (!scenarios.has(c.scenario) && !scenarios.has(null)) || (!ports.has(from) && !ports.has(to));
-        });
+        const links = new Set(variables.flatMap(v => [...(profileLinks.get(v.claim) ?? [])]));
+        result.choices = result.choices.filter(c => (!scenarios.has(c.scenario) && !scenarios.has(null)) || !links.has(c.connection));
       }
       for (const i of scope) {
         const u = result.resourceUsage[i]!;
@@ -303,8 +338,8 @@ export function resolveUnknowns(scene: Scene, plugins: readonly DomainPlugin[], 
     for (let i = 0; i < count; i++, world++) {
       const claims = [...scene.claims];
       variables.forEach((v,j) => {
-        const {value,node} = v.samples[Math.floor(i / strides[j]!) % v.samples.length]!;
-        claims[v.claim] = { ...claims[v.claim]!, value, ...(node === undefined ? {} : {reference:node}) };
+        const {value,node,reference = node} = v.samples[Math.floor(i / strides[j]!) % v.samples.length]!;
+        claims[v.claim] = { ...claims[v.claim]!, value, ...(reference === undefined ? {} : {reference}) };
         if (node === undefined) result.profileWorlds.push({world,claim:v.claim,value});
         else result.wirings.push({world,claim:v.claim,node});
       });

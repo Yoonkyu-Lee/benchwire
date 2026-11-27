@@ -3,6 +3,10 @@
 // IEC 80000-13의 옥텟 한 개는 8 bit다. 두 전송률 모두 십진 메가 단위를 쓴다.
 export const BITS_PER_BYTE = 8;
 
+// PCIe NIC 노드가 data 영역에서 쓰는 운반 서비스의 이름·단위다.
+export const PCIE_NIC = "pcie-nic";
+export const PCIE_CARRIER = { domain: "data", mode: "pcie-tunnel", conversion: { unit: "MB/s", perUnit: 1 / BITS_PER_BYTE } } as const;
+
 // 명목 MAC 속도는 한 방향 기준이다.
 // 출처: IEEE 802.3 개정 802.3i·u·ab·bz·an, Clause 14·25·40·126·55 (신뢰도: official)
 export const ETHERNET_BASE_T_RATES = [

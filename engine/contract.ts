@@ -51,7 +51,7 @@ export interface PolicyContext {
 // limit는 해당 자원 단위의 작업별 사용 상한이다. 적용할 표가 없으면 null을 돌려준다.
 export interface PolicyLimit extends Trace { workload: number; limit: number }
 export interface DomainPlugin {
-  // 연결 설정을 바꿀 수 있는 미확인 주장에 대해 가능한 이산 값을 준다.
+  // 소유 대상에 관계없이 유효한 미확인 주장의 이산 후보를 준다. 참조 필드는 파일의 지역 ID를 쓴다.
   profileValues?(claim: Claim): readonly Exclude<Value, null>[];
   standingLoads?(scene: Scene): readonly StandingLoad[];
   pools?(link: Link): readonly Pool[];

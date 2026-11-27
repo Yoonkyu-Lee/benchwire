@@ -12,7 +12,7 @@ const verdicts: Record<Verdict, string> = { ok: "✅", conditional: "⚠️", im
 const runs: Record<Run, string> = { solo: "단독", together: "동시" };
 const labels: Record<string, string> = { added: "추가", removed: "삭제", verdict: "판정", mode: "모드", value: "값",
   range: "범위", bottleneck: "병목", assumption: "가정", quest: "퀘스트", condition: "조건", need: "필요한 결합 형태" };
-const metricLabels = { solo: "단독", together: "동시", drop: "하락량", dropPercent: "하락률", unused: "미사용 성능" };
+const metricLabels = { solo: "단독", together: "동시", drop: "하락량", dropPercent: "하락률", unused: "미사용 성능", limit: "연결 한도" };
 const direction = (d: string | null) => d === "forward" ? "정방향" : d === "reverse" ? "역방향" : "양방향";
 
 function clean(text: string) {

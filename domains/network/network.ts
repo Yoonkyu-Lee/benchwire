@@ -1,6 +1,6 @@
 // 이더넷과 PoE의 협상·수요·공유 자원 소비를 네트워크 영역으로 등록한다.
 import { effectiveClaim, type Demand, type DomainPlugin, type Verdict } from "../../engine/contract.ts";
-import { BITS_PER_BYTE, MAC_PAYLOAD_FRACTION } from "./constants.ts";
+import { MAC_PAYLOAD_FRACTION, PCIE_CARRIER, PCIE_NIC } from "./constants.ts";
 import { negotiateEthernet } from "./ethernet.ts";
 import { readNetworkClaim } from "./evidence.ts";
 import {
@@ -28,15 +28,14 @@ export const network: DomainPlugin = {
       rule: power ? "수전 포트의 고정 전력 요청" : "태그 없는 MTU 1500 MAC 페이로드 요청", inputs, specs: power ? [] : [FRAMING] };
     if (power) return [direct];
     const w = scene.workloads[workload]!, demands = [direct];
-    const ethernet = {domain:NETWORK, mode:MAC};
-    const pcie = {domain:"data", mode:"pcie-tunnel", conversion:{unit:"MB/s",perUnit:1 / BITS_PER_BYTE}};
+    const ethernet = { domain: NETWORK, mode: MAC };
     for (const iface of scene.interfaces) {
       if (iface.domain !== NETWORK || iface.protocol !== ETHERNET) continue;
-      const attachment = effectiveClaim(scene,"port",iface.port,"","attachment")!;
+      const attachment = effectiveClaim(scene, "port", iface.port, "", "attachment")!;
       const node = scene.claims[attachment]!.reference;
-      if (node == null || scene.nodes[node]!.kind !== "pcie-nic" || w.from === node || w.to === node) continue;
-      for (const carriers of [[pcie,ethernet],[ethernet,pcie]]) demands.push({...direct, via:[node], carriers,
-        inputs:[...inputs,iface.evidence,attachment], rule:"PCIe NIC 경유 MAC 페이로드 · 8 Mbps당 터널 1 MB/s"});
+      if (node == null || scene.nodes[node]!.kind !== PCIE_NIC || w.from === node || w.to === node) continue;
+      for (const carriers of [[PCIE_CARRIER, ethernet], [ethernet, PCIE_CARRIER]]) demands.push({ ...direct, via: [node], carriers,
+        inputs: [...inputs, iface.evidence, attachment], rule: "PCIe NIC 경유 MAC 페이로드 · 8 Mbps당 터널 1 MB/s" });
     }
     return demands;
   },

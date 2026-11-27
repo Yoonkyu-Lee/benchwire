@@ -6,7 +6,7 @@ import type { Results, Target } from "../engine/results.ts";
 const verdicts: Record<Verdict, string> = { ok: "✅", conditional: "⚠️", impossible: "❌", unknown: "❓" };
 const stages = { physical: "물리 호환", negotiate: "링크 협상", path: "경로 합성", allocate: "자원 배분", judge: "판정" };
 const runs = { solo: "단독", together: "동시" };
-const metrics = { solo: "단독 성능", together: "동시 성능", drop: "하락량", dropPercent: "하락률", unused: "미사용 성능" };
+const metrics = { solo: "단독 성능", together: "동시 성능", drop: "하락량", dropPercent: "하락률", unused: "미사용 성능", limit: "연결 한도" };
 const impacts = { verdict: "판정을 가름", range: "범위만 좁힘" };
 
 // 사람이 읽는 출력이라 소수 셋째 자리까지만 보인다. 계산값은 결과 표에 그대로 있다.
@@ -97,8 +97,22 @@ export function printResults(scene: Scene, result: Results): string {
     lines.push(`${indent}모드 ${outcome.mode || "—"}`);
 
     const assessments = result.assessments.filter(a => a.outcome === row);
-    for (const m of result.metrics.filter(m => m.outcome === row))
+    for (const m of result.metrics.filter(m => m.outcome === row)) {
       for (const metric of metricLines(m, assessments.length > 0)) lines.push(indent + metric);
+      if (m.low === m.high || m.range !== "witnessed") continue;
+      for (const [side,world,value] of [["하한",m.lowWorld,m.low],["상한",m.highWorld,m.high]] as const) {
+        if (world === undefined) continue;
+        const claims = [
+          ...result.profileWorlds.filter(v => v.world === world),
+          ...result.wirings.filter(v => v.world === world).map(v => ({claim:v.claim, value:scene.nodes[v.node]!.id})),
+        ];
+        const values = claims.map(v => {
+          const c = scene.claims[v.claim]!;
+          return `${targetName(c.ownerKind,c.owner)} · ${c.field} = ${v.value}${c.unit ? " " + c.unit : ""}`;
+        });
+        if (values.length) evidence.push(`${indent}${metrics[m.kind]} ${side} ${quantity(value,m.unit)} ← ${values.join(", ")}`);
+      }
+    }
     const measures = result.measures.filter(m => m.outcome === row);
     for (const run of ["solo", "together"] as const) {
       for (const m of measures.filter(m => m.run === run)) lines.push(indent + measureLine(m));

@@ -11,7 +11,7 @@ function tied(a: number, b: number) {
 }
 
 // 배분 안에서만 장면 자원 뒤에 링크 자원의 번호를 이어 붙인다.
-export interface Use extends Consumption { option?: number; pool?: number; unknown?: boolean }
+export interface Use extends Consumption { option?: number; pool?: number; serviceRate?: number; unknown?: boolean }
 function linkLimit(result: Results, u: Use) {
   return u.pool === undefined ? result.options[u.option!]! : result.linkResources[u.pool]!.pool!;
 }
@@ -45,44 +45,27 @@ export function allocationGroup(flows: readonly Flow[], start: Flow): Flow[] {
   return [...group];
 }
 
-// 같은 단위의 실제 처리량이 같은 속도로 자라도록 선택 경로가 선언한 단위 환산을 잇는다.
-function rateUnits(result: Results, flows: readonly Flow[]) {
-  const links = new Map<string, { unit: string; factor: number }[]>();
-  function link(from: string, unit: string, factor: number) {
-    const next = links.get(from) ?? [];
-    next.push({unit, factor});
-    links.set(from,next);
-  }
-  const units = flows.map(f => f.path === null ? "" : result.demands[result.paths[f.path]!.demand]!.unit);
-  for (const [i, f] of flows.entries()) {
-    if (!f.elastic || f.path === null) continue;
-    for (const s of result.steps) {
-      const c = s.carrier?.conversion;
-      if (s.path !== f.path || !c) continue;
-      link(units[i]!,c.unit,c.perUnit);
-      link(c.unit,units[i]!,1 / c.perUnit);
-    }
-  }
-  const scale = new Map<string,{base:string; weight:number}>();
-  for (const base of units) {
-    if (scale.has(base)) continue;
-    const pending = new Set([base]);
-    scale.set(base,{base,weight:1});
-    for (const unit of pending) for (const edge of links.get(unit) ?? []) {
-      if (scale.has(edge.unit)) continue;
-      scale.set(edge.unit,{base,weight:scale.get(unit)!.weight * edge.factor});
-      pending.add(edge.unit);
-    }
-  }
-  return units.map(unit => scale.get(unit)!);
+// 같은 예산에서만 작업률을 비교한다. 공용 예산의 오버헤드와 구간을 여러 번 지나는 비용은 소비 계수에 남긴다.
+function sharingWeights(result: Results, flows: readonly Flow[], resource: number, users: number[]) {
+  const services = users.map(i => {
+    const flow = flows[i]!;
+    const request = flow.path === null ? "" : result.demands[result.paths[flow.path]!.demand]!.unit;
+    const uses = flow.uses.filter(u => u.resource === resource && u.coefficient > 0);
+    const units = new Set(uses.map(u => u.option === undefined ? request : result.options[u.option]!.unit));
+    if (units.size !== 1 || uses[0]!.option === undefined) return { request, unit: request, rate: 1 };
+    const rate = uses.reduce((sum, u) => sum + (u.serviceRate ?? 1) / uses.length, 0);
+    return { request, unit: result.options[uses[0]!.option]!.unit, rate };
+  });
+  const sameService = services.every(s => s.unit === services[0]!.unit);
+  if (!sameService && !services.every(s => s.request === services[0]!.request)) return null;
+  return new Map(users.map((i, j) => [i, sameService ? 1 / services[j]!.rate : 1]));
 }
 
 function fill(scene: Scene, result: Results, flows: readonly Flow[], fair: ReadonlySet<number>) {
-  const rates = rateUnits(result,flows);
   const shares = flows.map((f): Share => ({ workload: f.workload, value: 0, verdict: f.verdict, bindings: [] }));
   const active = new Set<number>(), uncertain = new Set<number>(), overbooked = new Set<number>();
   const pools = new Map<number, { capacity: number | null; policy: unknown; unit: string; reserved: number;
-    coefficients: Map<number, number>; fixed: Map<number, number> }>();
+    coefficients: Map<number, number>; weights: Map<number, number>; fixed: Map<number, number> }>();
   flows.forEach((f, i) => {
     if (f.verdict === "impossible" || f.cap === 0) return;
     if (f.cap === null || f.verdict === "unknown") uncertain.add(i);
@@ -95,7 +78,7 @@ function fill(scene: Scene, result: Results, flows: readonly Flow[], fair: Reado
         const capacity = facts ? resourceCapacity(scene, result, u.resource) : option!.limit;
         pool = { capacity: typeof capacity === "number" ? capacity : null,
           policy: facts ? scene.claims[facts.policy]!.value : "max-min",
-          unit: option?.unit ?? scene.resources[u.resource]!.unit, reserved: 0, coefficients: new Map(), fixed: new Map() };
+          unit: option?.unit ?? scene.resources[u.resource]!.unit, reserved: 0, coefficients: new Map(), weights: new Map(), fixed: new Map() };
         pools.set(u.resource, pool);
       }
       // 같은 링크에서 서로 다른 실효 한도를 협상하면 동시 모드 근거가 있어야 용량을 정할 수 있다.
@@ -120,16 +103,14 @@ function fill(scene: Scene, result: Results, flows: readonly Flow[], fair: Reado
     for (const i of p.fixed.keys()) if (!active.has(i)) p.fixed.delete(i);
     for (const i of p.coefficients.keys()) if (!active.has(i)) p.coefficients.delete(i);
     const users = new Set([...p.fixed.keys(), ...p.coefficients.keys()]);
-    if (result.linkResources[row - scene.resources.length]?.pool && p.coefficients.size > 1) {
-      const units = new Set([...p.coefficients.keys()].map(i => rates[i]!.base));
-      if (units.size > 1) {
-        for (const i of p.coefficients.keys()) {
-          uncertain.add(i);
-          const workload = flows[i]!.workload, field = "pool.elasticUnit";
-          if (!result.errors.some(e => e.stage === "demand" && e.row === workload && e.field === field))
-            result.errors.push({ domain: scene.workloads[workload]!.domain, stage: "demand", row: workload, spec: "", field });
-        }
-      }
+    const weighted = [...p.coefficients.keys()];
+    const weights = sharingWeights(result, flows, row, weighted);
+    if (weights) p.weights = weights;
+    else for (const i of weighted) {
+      uncertain.add(i);
+      const workload = flows[i]!.workload, field = "pool.elasticUnit";
+      if (!result.errors.some(e => e.stage === "demand" && e.row === workload && e.field === field))
+        result.errors.push({ domain: scene.workloads[workload]!.domain, stage: "demand", row: workload, spec: "", field });
     }
     p.reserved = [...p.fixed.values()].reduce((sum, x) => sum + x, 0);
     if (p.capacity !== null && p.reserved > p.capacity && !tied(p.reserved, p.capacity)) {
@@ -149,26 +130,53 @@ function fill(scene: Scene, result: Results, flows: readonly Flow[], fair: Reado
     }
   }
   while (active.size) {
-    const demandEvents = [...active].map(i => ({ i, delta: Math.max(0, flows[i]!.cap! - shares[i]!.value!) / rates[i]!.weight }));
-    const capacityEvents: { row: number; delta: number; users: number[] }[] = [];
+    // 각 예산이 자기 구간 단위로 제안하는 공정 몫 중 작업이 실제로 받을 수 있는 가장 작은 양이다.
+    const offers = new Map([...active].map(i => [i, flows[i]!.cap!]));
+    const budgets = [];
     for (const [row, p] of pools) {
       let remaining = (p.capacity ?? 0) - p.reserved, slope = 0;
-      const users: number[] = [];
+      const users = [];
       for (const [i, coefficient] of p.coefficients) {
-        remaining -= coefficient * (shares[i]!.value ?? 0);
-        if (active.has(i)) { slope += coefficient * rates[i]!.weight; users.push(i); }
+        if (active.has(i)) {
+          slope += coefficient * p.weights.get(i)!;
+          users.push(i);
+        } else remaining -= coefficient * (shares[i]!.value ?? 0);
       }
-      if (slope > 0) capacityEvents.push({ row, delta: Math.max(0, remaining / slope), users });
+      if (!users.length) continue;
+      remaining = Math.max(0, remaining);
+      for (const i of users) {
+        const weight = p.weights.get(i)!;
+        const cost = slope / weight;
+        const share = Number.isFinite(cost) && cost > 0 ? remaining / cost : remaining / slope * weight;
+        offers.set(i, Math.min(offers.get(i)!, share));
+      }
+      budgets.push({ row, remaining, users, coefficients: p.coefficients });
     }
-    const delta = Math.min(...demandEvents.map(e => e.delta), ...capacityEvents.map(e => e.delta));
-    for (const i of active) shares[i]!.value = Math.min(flows[i]!.cap!, shares[i]!.value! + delta * rates[i]!.weight);
-    for (const event of capacityEvents) if (tied(event.delta, delta)) for (const i of event.users) {
-      shares[i]!.bindings.push(event.row);
+    // 구간별 환산이 서로 달라도 실제 수요나 예산이 처음 포화되는 지점까지만 함께 늘린다.
+    const demandEvents = [...offers].map(([i, offer]) => ({ i, scale: flows[i]!.cap! / offer }));
+    const capacityEvents = budgets.map(({row, remaining, users, coefficients}) => {
+      if (remaining === 0) return { row, users, scale: 1 };
+      const fraction = users.reduce((sum, i) => {
+        const offer = offers.get(i)!, coefficient = coefficients.get(i)!;
+        const relative = offer / remaining;
+        return sum + (Number.isFinite(relative) ? relative * coefficient : offer * coefficient / remaining);
+      }, 0);
+      return { row, users, scale: 1 / fraction };
+    });
+    const scale = Math.min(...demandEvents.map(e => e.scale), ...capacityEvents.map(e => e.scale));
+    // 양수인 공정 몫이 표현 범위 밖이면 포화 시점을 확정할 수 없다.
+    if (!Number.isFinite(scale)) {
+      for (const i of active) { shares[i]!.value = null; shares[i]!.verdict = "unknown"; }
+      break;
+    }
+    for (const e of capacityEvents) if (Number.isFinite(e.scale) && tied(e.scale, scale)) for (const i of e.users) {
+      shares[i]!.value = Math.min(flows[i]!.cap!, offers.get(i)! * scale);
+      shares[i]!.bindings.push(e.row);
       active.delete(i);
     }
-    for (const event of demandEvents) if (tied(event.delta, delta)) {
-      shares[event.i]!.value = flows[event.i]!.cap;
-      active.delete(event.i);
+    for (const e of demandEvents) if (Number.isFinite(e.scale) && tied(e.scale, scale)) {
+      shares[e.i]!.value = flows[e.i]!.cap;
+      active.delete(e.i);
     }
   }
   return { shares, overbooked, pools };
@@ -246,7 +254,7 @@ function allocateKnown(scene: Scene, result: Results, flows: readonly Flow[], fa
 // 다른 작업이 먼저 멈추지 않아도 자기 자원들 중 첫 포화 시점까지는 모두 같은 처리량으로 자란다.
 function guaranteedFloor(scene: Scene, lower: Results, flow: Flow, group: Flow[], fair: ReadonlySet<number>) {
   if (group.some(f => (f.bestCase ?? f.verdict) === "unknown" || f.cap === null)) return 0;
-  const rates = rateUnits(lower,group), weight = rates[group.findIndex(f => f.workload === flow.workload)]!.weight;
+  const index = group.indexOf(flow);
   let rate = flow.cap ?? 0;
   for (const row of new Set(flow.uses.map(u => u.resource))) {
     const uses = group.flatMap(f => f.uses.filter(u => u.resource === row));
@@ -264,9 +272,11 @@ function guaranteedFloor(scene: Scene, lower: Results, flow: Flow, group: Flow[]
     const remaining = capacity - uses.reduce((n,u) => n + u.fixed, 0);
     if (remaining < 0) return 0;
     if (flow.uses.some(u => u.resource === row && u.coefficient > 0)) {
-      const slope = group.reduce((sum,f,i) => sum + f.uses.filter(u => u.resource === row)
-        .reduce((n,u) => n + u.coefficient * rates[i]!.weight,0),0);
-      rate = Math.min(rate,remaining * weight / slope);
+      const slopes = group.map(f => f.uses.filter(u => u.resource === row).reduce((sum,u) => sum + u.coefficient,0));
+      const weights = sharingWeights(lower,group,row,slopes.flatMap((s,i) => s > 0 ? [i] : []));
+      if (!weights) return 0;
+      const slope = [...weights].reduce((sum,[i,w]) => sum + slopes[i]! * w,0);
+      rate = Math.min(rate,remaining / slope * weights.get(index)!);
     }
   }
   return flow.elastic || rate === flow.cap ? rate : 0;
