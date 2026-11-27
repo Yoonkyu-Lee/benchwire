@@ -38,7 +38,7 @@ npm run check   # 형 검사(tsc), 전체 시험(node --test), 게이트(tools/g
 | 자원 배분 | max-min 공정 분배 + 영역별 이산 규칙 | 아래 [배분 모델](#배분-모델) |
 | 스키마 · 검증 | Zod 4 (첫 스키마를 쓸 때 들인다) | 한 스키마로 TS 형, 신뢰 경계 검증(아이템 파일, LLM 출력), JSON Schema(구조화 출력, 수동 생성기 폼)를 함께 낸다. `z.toJSONSchema`가 내장이다. [Zod JSON Schema](https://zod.dev/json-schema) |
 | 저장 | 평범한 JSON 파일. 공용 데이터는 `catalog/`(커밋), 개인 데이터는 `userdata/`(커밋 안 함) | 로컬 우선이고 아무 도구로나 열리며 이력은 git이 맡는다. 값마다 출처 · 신뢰도 · 조회일이 붙고, 사용자 검증값은 그 사용자의 인스턴스에만 쓴다. SQLite는 검색이나 동시 쓰기가 실제로 필요해지면 비교한다. |
-| 캔버스 화면 | M3 전에 스파이크로 정한다. 1순위 React 19 + React Flow 13 + Vite 8, 대안은 바닐라 DOM + SVG | React Flow는 MIT이고 노드마다 여러 포트(handle), `isValidConnection`, 애니메이션 엣지를 준다. 13.0.0이 2026-11-16에 나온 새 major라 정확한 판을 고정한다. 바닐라 안은 의존성이 없는 대신 끌기 · 확대 · 포트 연결을 직접 짠다. 같은 장면으로 재서 고른다. [Handles](https://reactflow.dev/learn/customization/handles), [성능 안내](https://reactflow.dev/learn/advanced-use/performance), [Vite 8](https://vite.dev/blog/announcing-vite8) |
+| 캔버스 화면 | 바닐라 DOM + SVG + Pointer Events (2026-11-27 스파이크로 정함) | 기기 50 · 포트 400 · 엣지 100 장면에서 React Flow 13과 나란히 쟀다(Edge, 세 번씩). 드래그 · 팬 · 줌 프레임 p95는 둘 다 8.4 ms로 같았고, 첫 렌더는 73 ms 대 158 ms, 번들은 gzip 7 KB 대 160 KB였다. React Flow가 줄여 준 직접 코드는 66줄(대부분 팬 · 줌)뿐이라 의존성을 들일 까닭이 없었다. 측정 원본은 지휘 작업 트리 `work/w-spike-canvas/`. |
 | 로컬 서버 | `node:http` | 파일 저장과 키가 필요한 호출(LLM, 가격)을 브라우저 밖에서 맡는다. 프레임워크는 쓰지 않는다. |
 | AI 조사 | Claude API (`@anthropic-ai/sdk` 1.14), 서버 도구 web search · web fetch, 구조화 출력 | 검색은 1,000회당 $10에 토큰 값이 붙고, fetch는 토큰 값만 든다. 구조화 출력과 인용은 한 호출에 함께 쓸 수 없어서 조사 호출과 추출 호출을 나누고, 출처 URL을 스키마 칸으로 받는다. 조사 1건마다 검색 횟수 상한(`max_uses`)을 두고 결과를 캐시한다. [Web search](https://platform.claude.com/docs/en/agents-and-tools/tool-use/web-search-tool), [Web fetch](https://platform.claude.com/docs/en/agents-and-tools/tool-use/web-fetch-tool), [Structured outputs](https://platform.claude.com/docs/en/build-with-claude/structured-outputs) |
 | 가격 | provider 계약 하나, 수동 입력과 스크린샷 파싱을 먼저 | 아래 [가격 provider](#가격-provider) |
@@ -100,7 +100,7 @@ npm run check   # 형 검사(tsc), 전체 시험(node --test), 게이트(tools/g
 3. 단위와 방향 약속(bps와 MB/s, 방향별 자원과 합산 자원)과 영역 플러그인 계약.
 4. 배포 형태(로컬 웹앱). 데스크톱으로 감싸는 길은 열려 있지만, 수집기를 앱 안에서 직접 돌리게 되면 수집기를 다시 짠다.
 
-캔버스 화면 라이브러리는 M3 스파이크 전까지 고르지 않으므로 지금 되돌릴 것이 없다.
+캔버스는 스파이크로 바닐라 DOM + SVG를 골랐다. 화면 코드는 엔진과 분리돼 있어 나중에 라이브러리로 바꿔도 엔진은 그대로다.
 
 ### 스파이크
 
@@ -108,7 +108,7 @@ npm run check   # 형 검사(tsc), 전체 시험(node --test), 게이트(tools/g
 |---|---|---|---|
 | 영속 ID와 모델 · 인스턴스 경계 | 같은 모델 SSD 두 대 중 한 대에만 실측값을 넣고 공용 데이터를 고친다 | 개인값이 한 대에만 적용되고, 이전 판정을 원래 근거로 재현 | M1 첫 시험 |
 | 배분 모델 | T5 · T6 · T8을 손계산 fixture로 | 엔진 값이 손계산과 같고, 포트 순서를 섞어도 같음 | M1 |
-| 캔버스 화면 | 기기 50 · 포트 400 · 엣지 100 장면을 React Flow와 바닐라 SVG로 | 드래그 중 p95 프레임 20ms 이하, 직접 쓴 줄 수, 손맛 | M3 전 |
+| 캔버스 화면 | 기기 50 · 포트 400 · 엣지 100 장면을 React Flow와 바닐라 SVG로 | 드래그 중 p95 프레임 20ms 이하, 직접 쓴 줄 수, 손맛 | 끝남: 바닐라 SVG(2026-11-27) |
 | 수집기 | 허브나 화면을 두 포트에 번갈아 꽂고 읽어 USBView · 설정 화면과 대조 | 일치한 칸만 승격 대상 | M5 전 |
 | 조사 품질과 비용 | 리비전 둘이 같은 이름인 장비 하나를 조사 | 리비전 확인 질문, 출처 충돌 보존, 1건 비용 기록 | M4 전 |
 
