@@ -12,7 +12,7 @@ import { uncertainPolicies } from "./policy-range.ts";
 import { uncertainPreferences } from "./preference.ts";
 import { recordUsage, type GrossLimits } from "./resource-usage.ts";
 import { reserveStanding } from "./standing.ts";
-import { combinations, compareScores, MAX_COMBINATIONS, planModes, profileGroups, reservationAlternatives, type Candidate, type Plan } from "./selection.ts";
+import { combinations, compareScores, MAX_COMBINATIONS, planModes, profileGroups, reservationAlternatives, type Candidate, type Plan, type WorkloadSelection } from "./selection.ts";
 import { evaluationScene } from "./scene.ts";
 import { resolveUnknowns } from "./unknown.ts";
 
@@ -110,7 +110,12 @@ function candidatesFor(scene: Scene, plugins: readonly DomainPlugin[], result: R
   });
 }
 
-function prepare(scene: Scene, plugins: readonly DomainPlugin[], locked?: (Plan | undefined)[], modeLock?: number) {
+type LockedSelection = { choices: Choice[]; confirmed: boolean; workloads?: WorkloadSelection };
+function profileKey(choices: Choice[]) {
+  return JSON.stringify(choices.map(c => [c.connection,c.profile]));
+}
+
+function prepare(scene: Scene, plugins: readonly DomainPlugin[], locked?: (LockedSelection | undefined)[]) {
   const result: Results = { physical: [], options: [], demands: [], paths: [], steps: [], resourceUsage: [], allocations: [], bindings: [], outcomes: [],
     reservations: [], choices: [], searches: [], standingErrors: [], standingLoads: [], matches: [], assessments: [], measures: [], possibleVerdicts: [], quests: [], rangeInputs: [], wirings: [], profileWorlds: [],
     metrics: [], reasons: [], reasonInputs: [], reasonParents: [], reasonSpecs: [], needs: [], errors: [], linkResources: [],
@@ -142,13 +147,13 @@ function prepare(scene: Scene, plugins: readonly DomainPlugin[], locked?: (Plan 
     for (const settings of settingsList) {
       if (budget.examined >= MAX_COMBINATIONS) { budget.truncated = true; break; }
       const choices = settings.map(s => s.choice);
-      const key = JSON.stringify(choices.map(c => [c.connection,c.profile]));
+      const key = profileKey(choices);
       let candidates = cache.get(key);
       if (!candidates) {
         candidates = candidatesFor(scene,plugins,result,routes,choices);
         cache.set(key,candidates);
       }
-      plans.push(...planModes(scene,plugins,result,members,candidates,choices,settings.every(s => s.confirmed),budget,modeLock === scenario ? fixed : undefined));
+      plans.push(...planModes(scene,plugins,result,members,candidates,choices,settings.every(s => s.confirmed),budget,fixed?.workloads));
     }
     plans.sort((a,b) => compareScores(b.score,a.score) || Number(b.confirmed)-Number(a.confirmed) || a.key.localeCompare(b.key));
     const alternatives = locked ? [] : plans.flatMap(p => reservationAlternatives(scene,plugins,result,p,budget));
@@ -164,7 +169,7 @@ function render(scene: Scene, plugins: readonly DomainPlugin[], result: Results,
   judgeConnections(scene,plugins,result, c => !configured.has(c));
   selected.forEach((plan, scenario) => {
     const { active, together, picked, candidates, choices } = plan;
-    for (const workload of plan.advances ?? []) result.reservations.push({ scenario, workload });
+    for (const workload of plan.workloads.advances ?? []) result.reservations.push({ scenario, workload });
     result.choices.push(...choices.map(c => ({ ...c, scenario })));
     if (configured.size) judgeConnections(scene,plugins,result,c => configured.has(c),choices,scenario);
     const chosen = candidates.map(list => {
@@ -184,9 +189,9 @@ function render(scene: Scene, plugins: readonly DomainPlugin[], result: Results,
       const ranks = scene.members.filter(m => m.scenario === scenario && m.priority !== undefined && peerIds.has(m.workload));
       if (ranks.length) addReason(result,{outcome: row,stage:"allocate",rule:"시나리오의 고정 예약 우선순위",targetKind:"workload",targetRow:w},
         ranks.flatMap(m => m.evidence === undefined ? [] : [m.evidence]),[prior]);
-      if (plan.advances?.some(w => peerIds.has(w))) addReason(result,{outcome:row,stage:"allocate",
+      if (plan.workloads.advances?.some(w => peerIds.has(w))) addReason(result,{outcome:row,stage:"allocate",
         rule:"선택 대안에서 먼저 들인 고정 예약",targetKind:"workload",targetRow:w},
-        plan.advances.flatMap(w => {
+        plan.workloads.advances.flatMap(w => {
           const f = active.find(f => f.workload === w)!;
           return f.path === null ? [] : result.demands[result.paths[f.path]!.demand]!.inputs;
         }),[prior]);
@@ -211,13 +216,21 @@ function evaluatePlans(input: Scene, plugins: readonly DomainPlugin[], scenario?
   const prepared = prepare(scene,plugins), { scenarios, routes } = prepared;
   const primary = scenarios.map(plans => plans[0]!);
   function solve(selected: Plan[], explicit: boolean, tables: Results) {
+    // 같은 연결 설정 안에 여러 모드·예약 대안이 있어야 사용자가 작업 수준의 선택까지 한 것이다.
+    const chosenProfile = explicit && scenario !== undefined ? profileKey(selected[scenario]!.choices) : undefined;
+    const fixWorkloads = scenario !== undefined && chosenProfile !== undefined &&
+      scenarios[scenario]!.filter(p => profileKey(p.choices) === chosenProfile).length > 1;
     const result = render(scene,plugins,tables,routes,selected,prepared.gross);
     function evaluateWorld(world: Scene, domains: readonly DomainPlugin[], profileChanged: boolean, resolveWiring: boolean,
       prior = selected) {
-      const modeLock = explicit && scenario !== undefined && scenarios[scenario]!.some(p => p !== selected[scenario] &&
-        p.choices === selected[scenario]!.choices) ? scenario : undefined;
-      const locks = profileChanged ? (explicit ? prior.map((p,j) => j === scenario ? p : undefined) : undefined) : prior;
-      const next = prepare(world,domains,locks,modeLock);
+      const locks = profileChanged && !explicit ? undefined : prior.map((plan,index) => {
+        const chosen = explicit && index === scenario;
+        if (profileChanged && !chosen) return undefined;
+        const lock: LockedSelection = { choices: plan.choices, confirmed: plan.confirmed };
+        if (chosen && fixWorkloads) lock.workloads = plan.workloads;
+        return lock;
+      });
+      const next = prepare(world,domains,locks);
       const plans = next.scenarios.map(list => list[0]!);
       const answer = render(world,domains,next.result,next.routes,plans,next.gross);
       if (resolveWiring) resolveUnknowns(world,domains,answer,(s,p,changed,again) => evaluateWorld(s,p,changed,again,plans),next.routes,false);

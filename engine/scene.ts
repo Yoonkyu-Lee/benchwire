@@ -10,7 +10,7 @@ export interface Claim extends MeasurementContext {
   id: string; scope: "model" | "personal" | "scene" | "catalog"; ownerKind: Owner; owner: number;
   // 같은 모델 판본의 같은 주장에 기대는 실물은 후보 세계 안에서도 값을 공유한다.
   conflictGroup?: number; inferredFrom?: string;
-  reference?: number | null; domain: string; field: string; condition: string; value: Value; unit: string; confidence: Confidence;
+  connectorRow?: number | null; attachmentNode?: number | null; domain: string; field: string; condition: string; value: Value; unit: string; confidence: Confidence;
 }
 // 순서가 같은 주장끼리는 앞선 행이 이긴다. 같은 소유자의 행 번호를 작은 번호부터 잇는다.
 // claims는 색인을 만든 주장 표다. 다른 표를 가진 장면(플러그인이 만든 복사본)에는 쓰지 않는다.
@@ -85,8 +85,8 @@ export function connectionPorts(scene: Scene, row: number) {
 export function portFacts(scene: Scene, row: number) {
   const attachment = effectiveClaim(scene, "port", row, "", "attachment")!;
   const connectorClaim = effectiveClaim(scene, "port", row, "", "connector")!;
-  return { ...scene.ports[row]!, attachment, connectorClaim, node: scene.claims[attachment]!.reference ?? null,
-    connector: scene.claims[connectorClaim]!.reference ?? null };
+  return { ...scene.ports[row]!, attachment, connectorClaim, node: scene.claims[attachment]!.attachmentNode ?? null,
+    connector: scene.claims[connectorClaim]!.connectorRow ?? null };
 }
 
 export function resourceFacts(scene: Scene, row: number) {

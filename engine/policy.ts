@@ -22,8 +22,8 @@ export function policyAllocation(scene: Scene, plugins: readonly DomainPlugin[],
     for (const p of limits) {
       const path = flows.find(f => f.workload === p.workload)?.path;
       if (path == null) continue;
-      const trace = checkedTrace(result, domain, "consume", path, p, resource);
-      if (checkedQuantity(result, domain, "consume", path, "limit", p.limit, resource) !== null) policies.push({ ...trace, resource });
+      const trace = checkedTrace(result, domain, "policy", path, p, resource);
+      if (checkedQuantity(result, domain, "policy", path, "limit", p.limit, resource) !== null) policies.push({ ...trace, resource });
     }
   }
   if (!named.size && !fair.size) return allocate(scene, result, flows);

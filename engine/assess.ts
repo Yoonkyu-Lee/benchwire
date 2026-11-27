@@ -29,10 +29,10 @@ export function assessWork(scene: Scene, plugin: DomainPlugin, result: Results, 
     const delivered = result.metrics.find(m => m.outcome === outcome && m.kind === run)!;
     const low = delivered.low ?? 0, high = delivered.high ?? demand.requested;
     const { raw, possible, verdict } = assessDelivery(scene,result,plugin.assess,o.subjectRow,pathRow,{ low, high },!o.mode);
-    const assessment = checkedTrace(result, plugin.id, "demand", o.subjectRow, raw);
+    const assessment = checkedTrace(result, plugin.id, "assess", o.subjectRow, raw);
     for (const verdict of possible) result.assessments.push({ outcome, run, verdict });
     for (const m of assessment.metrics) {
-      const bound = (side: "low" | "high") => checkedQuantity(result, plugin.id, "demand", o.subjectRow, m.kind + "." + side, m[side]);
+      const bound = (side: "low" | "high") => checkedQuantity(result, plugin.id, "assess", o.subjectRow, m.kind + "." + side, m[side]);
       result.measures.push({ outcome, run, kind: m.kind, unit: m.unit, low: o.mode && !path.truncated ? bound("low") : null,
         high: o.mode && !path.truncated ? bound("high") : null });
     }

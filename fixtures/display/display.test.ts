@@ -166,9 +166,9 @@ test("T3 포트의 출력 GPU가 미확인이면 후보 경로와 확인할 부�
   assert.ok(r.specs.includes("dp-rates"));
   assert.equal(display.quest("attachment"), "이 포트가 어느 출력 GPU에 연결되는지 확인하세요.");
   const attachment = scene.claims[portClaim(scene, "host", "unresolved", "attachment")]!;
-  attachment.reference = scene.nodes.findIndex(n => n.id === "gpu-a");
+  attachment.attachmentNode = scene.nodes.findIndex(n => n.id === "gpu-a");
   assert.equal(inspect(scene, "unresolved").outcome.verdict, "ok");
-  attachment.reference = scene.nodes.findIndex(n => n.id === "gpu-b");
+  attachment.attachmentNode = scene.nodes.findIndex(n => n.id === "gpu-b");
   assert.equal(evaluate(scene, [display]).outcomes.find(o => o.subjectKind === "workload" && o.subjectRow === r.demand.workload)?.verdict, "impossible");
 });
 
@@ -224,8 +224,8 @@ test("T4 USB4 DP 터널과 데이터가 방향별 예산을 나누고 디코더�
   for (const port of ports) {
     const endpoint = port === from || port === to;
     const connector = scene.claims.find(c => c.ownerKind === "port" && c.owner === port && c.field === "connector")!;
-    connector.reference = scene.connectors.findIndex(c => c.id === (endpoint ? "usb-c-receptacle" : "usb-c-plug"));
-    connector.value = scene.connectors[connector.reference]!.id;
+    connector.connectorRow = scene.connectors.findIndex(c => c.id === (endpoint ? "usb-c-receptacle" : "usb-c-plug"));
+    connector.value = scene.connectors[connector.connectorRow]!.id;
     const iface = scene.interfaces.find(i => i.port === port && i.domain === "display")!;
     if (endpoint) {
       iface.protocol = "DP Tunnel";

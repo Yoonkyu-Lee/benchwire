@@ -14,7 +14,7 @@ function setup(amounts: number[]) {
   const scene = loadScene("fixtures/three-flows.json", { modelsDir: "fixtures", connectorsFile: "fixtures/connectors.json" }, [plugin]);
   scene.connections = scene.connections.slice(0,1);
   const c = scene.connections[0]!;
-  const node = (port: number) => scene.claims[effectiveClaim(scene,"port",port,"","attachment")!]!.reference!;
+  const node = (port: number) => scene.claims[effectiveClaim(scene,"port",port,"","attachment")!]!.attachmentNode!;
   scene.workloads = amounts.map((_, i) => ({ id: "작업-" + i, domain: plugin.id, kind: "시험", from: node(c.from), to: node(c.to) }));
   scene.members = amounts.map((_,workload) => ({ scenario: 0, workload }));
   const inputs = [c.evidence], specs = ["pulse"];
@@ -159,7 +159,7 @@ test("T8 설정 비교는 일부 전력을 받는 작업도 목표 판정에 따
 test("T3 미확인 부착점을 전개할 때도 사용자가 고른 대안의 설정을 고정한다", () => {
   const { scene,plugin,option,demand } = setup([100]);
   const attachment = effectiveClaim(scene,"port",scene.connections[0]!.from,"","attachment")!;
-  Object.assign(scene.claims[attachment]!,{value:null,reference:null});
+  Object.assign(scene.claims[attachment]!,{value:null,attachmentNode:null});
   scene.edges.push({ ...scene.edges[0]!, from: scene.edges[0]!.to, to: scene.edges[0]!.from });
   plugin.negotiate = () => [option("bulk",100,"A"),option("bulk",40,"B")];
   plugin.demand = () => [demand("bulk",100,true)];
@@ -232,7 +232,7 @@ test("T8 물리 결합이 막힌 입력의 상시 부하는 다른 출력의 45 
   for (const port of ["a","b"]) scene.claims.push({ ...budget, field: "budget:a+b:" + port });
   const entry = scene.parts.find(p => p.connection === 0)!.entry;
   const c = scene.claims[effectiveClaim(scene,"port",entry,"","connector")!]!;
-  Object.assign(c, { value: "c-receptacle", reference: scene.connectors.findIndex(c => c.id === "c-receptacle") });
+  Object.assign(c, { value: "c-receptacle", connectorRow: scene.connectors.findIndex(c => c.id === "c-receptacle") });
   const result = engine.evaluate(scene,[power]);
   const upstream = result.outcomes.find(o => o.subjectKind === "connection" && o.subjectRow === 0 && o.direction === "forward")!;
   assert.equal(upstream.verdict,"impossible");
@@ -257,7 +257,7 @@ test("T3 같은 작업이 두 내부 경로 중 하나를 쓰면 경로별 소�
   const { scene,plugin,option,demand,inputs,specs } = setup([40]);
   const port = scene.connections[0]!.from;
   const attachment = effectiveClaim(scene,"port",port,"","attachment")!;
-  Object.assign(scene.claims[attachment]!,{value:null,reference:null});
+  Object.assign(scene.claims[attachment]!,{value:null,attachmentNode:null});
   const root = scene.workloads[0]!.from, item = scene.ports[port]!.item;
   const end = scene.nodes.push({item,id:"다른끝",kind:"bus",label:""}) - 1;
   scene.edges.push({ ...scene.edges[0]!, id:"돌아오는길", from:root, to:scene.edges[0]!.from });

@@ -1,7 +1,7 @@
 // 저장 문서에 적힌 출처 충돌을 로더·후보별 재협상·판정 근거 출력까지 확인한다.
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { plugins } from "../cli/domains.ts";
+import { plugins } from "../domains/registry.ts";
 import { printResults } from "../cli/print.ts";
 import { effectiveClaim } from "../engine/contract.ts";
 import { evaluate } from "../engine/evaluate.ts";

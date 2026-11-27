@@ -10,7 +10,7 @@ function setup(amounts: number[], limit: number | null = 100, scope: Pool["scope
   const trial = trialDomain();
   const scene = loadScene("fixtures/three-flows.json", { modelsDir: "fixtures", connectorsFile: "fixtures/connectors.json" }, [trial]);
   const c = scene.connections[0]!;
-  const node = (port: number) => scene.claims.find(claim => claim.ownerKind === "port" && claim.owner === port && claim.field === "attachment")!.reference!;
+  const node = (port: number) => scene.claims.find(claim => claim.ownerKind === "port" && claim.owner === port && claim.field === "attachment")!.attachmentNode!;
   const template = scene.claims.findIndex(claim => claim.ownerKind === "workload" && claim.field === "rate");
   const sources = scene.claimSources.filter(s => s.claim === template);
   const requests = amounts.map((value, owner) => {
@@ -137,10 +137,10 @@ test("T8 assess는 단독·동시의 양수 전달량과 음수 순충전량을 
 test("T8 배선마다 목표 판정이 같아도 단독·동시 파생 지표의 경계와 퀘스트를 합친다", () => {
   const { scene, client, run } = setup([100], 100, "direction", "W");
   const attachment = scene.claims.findIndex(c => c.ownerKind === "port" && c.owner === scene.connections[0]!.from && c.field === "attachment");
-  const knownNode = scene.claims[attachment]!.reference;
-  Object.assign(scene.claims[attachment]!, { reference: null, value: null });
+  const knownNode = scene.claims[attachment]!.attachmentNode;
+  Object.assign(scene.claims[attachment]!, { attachmentNode: null, value: null });
   client.assess = (s) => {
-    const net = s.claims[attachment]!.reference === knownNode ? 20 : 5;
+    const net = s.claims[attachment]!.attachmentNode === knownNode ? 20 : 5;
     return { possible: ["conditional"], metrics: [{ kind: "net", unit: "W", low: net, high: net }],
       rule: "배선별 순충전", inputs: [attachment], specs: [] };
   };
@@ -193,7 +193,7 @@ test("T10 경유점·운반 구간·예산 참조 오류는 해당 작업이나 
       ...o.pool!, ...(field === "pool.id" ? { id: "없는 예산" } : { perUnit: Infinity }) } }));
     const { r, row } = run();
     assert.equal(r.outcomes[row(0)]!.verdict, "unknown");
-    assert.ok(r.errors.some(e => e.field === field && (e.stage === "demand" ? e.row === 0 : r.linkResources[e.row]?.domain === carrier.id)));
+    assert.ok(r.errors.some(e => e.field === field && (e.entryPoint === "demand" ? e.row === 0 : r.linkResources[e.row]?.domain === carrier.id)));
   }
 });
 
@@ -207,7 +207,7 @@ test("T4 예산의 보장 하한은 서비스 자체의 미확인이나 물리 �
       carrier.negotiate = link => negotiate(link).map(o => ({ ...o, verdict: "unknown" }));
     } else {
       const c = scene.claims.find(c => c.ownerKind === "port" && c.owner === scene.connections[0]!.from && c.field === "connector")!;
-      Object.assign(c, { value: null, reference: null });
+      Object.assign(c, { value: null, connectorRow: null });
     }
     const { r, row } = run();
     assert.equal(r.outcomes[row(0)]!.verdict, "unknown");
@@ -221,7 +221,7 @@ test("T4 한 공용 예산의 탄력 수요가 서로 다른 단위면 숫자만
   client.demand = (s,w) => demand(s,w).map(d => w === 0 ? { ...d, unit: "Gbps", carriers: [{ domain: "trial", mode: "video" }] } : d);
   const { r, values } = run();
   assert.deepEqual(values("together"), [null,null]);
-  assert.ok(r.errors.some(e => e.field === "pool.elasticUnit"));
+  assert.ok(r.errors.some(e => e.field === "pool.elasticUnit" && e.entryPoint === null && e.targetKind === "workload"));
 });
 
 test("T7 한 영역·연결·방향의 12 W와 900 Mbps가 독립으로 성립하고 연결 판정도 각각 보인다", () => {
@@ -249,13 +249,13 @@ test("T7 한 영역·연결·방향의 12 W와 900 Mbps가 독립으로 성립�
 test("T3 배선 후보가 연결의 추가 단위를 열어도 같은 작업의 결과끼리 비교한다", () => {
   const { scene, carrier, run } = setup([100], 0.8);
   const attachment = scene.claims.findIndex(c => c.ownerKind === "port" && c.owner === scene.connections[0]!.from && c.field === "attachment");
-  const original = scene.claims[attachment]!.reference;
-  Object.assign(scene.claims[attachment]!, { reference: null, value: null });
+  const original = scene.claims[attachment]!.attachmentNode;
+  Object.assign(scene.claims[attachment]!, { attachmentNode: null, value: null });
   scene.edges.push({ ...scene.edges[0]!, from: scene.edges[0]!.to, to: scene.edges[0]!.from });
   const negotiate = carrier.negotiate;
   carrier.negotiate = link => {
     const options = negotiate(link).slice(0,1);
-    if (link.scene.claims[attachment]!.reference === original) options.push({ ...options[0]!, mode: "supply", unit: "W" });
+    if (link.scene.claims[attachment]!.attachmentNode === original) options.push({ ...options[0]!, mode: "supply", unit: "W" });
     return options;
   };
   const { r, row, values } = run();
@@ -294,7 +294,7 @@ test("T4 역환산을 유한하게 표현할 수 없는 운반 단위는 계약 
   client.demand = (scene,work) => demand(scene,work).map(d => ({...d,
     carriers:[{domain:"trial",mode:"bulk",conversion:{unit:"MB/s",perUnit:Number.MIN_VALUE}}]}));
   const {r,row} = run();
-  assert.ok(r.errors.some(e => e.stage === "demand" && e.field === "carriers"));
+  assert.ok(r.errors.some(e => e.entryPoint === "demand" && e.field === "carriers"));
   assert.equal(r.outcomes[row(0)]!.verdict,"unknown");
 });
 
@@ -353,7 +353,7 @@ test("T10 미확인 커넥터의 지역 ID 후보가 실제 물리 결합과 작
   const {scene,carrier,run} = setup([100]);
   const port = scene.connections[0]!.from;
   const pin = scene.claims.findIndex(c => c.ownerKind === "port" && c.owner === port && c.field === "connector");
-  Object.assign(scene.claims[pin]!, {reference:null,value:null,confidence:"unknown"});
+  Object.assign(scene.claims[pin]!, {connectorRow:null,value:null,confidence:"unknown"});
   carrier.profileValues = c => c === scene.claims[pin] ? scene.connectors.map(c => c.id) : [];
   const {r,row} = run();
   const m = r.metrics.find(m => m.outcome === row(0) && m.kind === "together")!;

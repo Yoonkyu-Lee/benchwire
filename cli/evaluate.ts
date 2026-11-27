@@ -2,16 +2,17 @@
 import { dirname, join } from "node:path";
 import { parseArgs } from "node:util";
 import { evaluate, evaluateVariants } from "../engine/evaluate.ts";
-import { plugins, trial } from "./domains.ts";
+import { plugins as productPlugins } from "../domains/registry.ts";
+import type { DomainPlugin } from "../engine/contract.ts";
 import { loadScene } from "./load.ts";
 import { printResults, printVariant } from "./print.ts";
 
-function main() {
+export function evaluateCommand(args: string[], plugins: readonly DomainPlugin[]) {
   let scene;
   let showVariants: boolean | undefined;
   try {
     const { positionals, values } = parseArgs({
-      allowPositionals: true,
+      args, allowPositionals: true,
       options: { models: { type: "string" }, connectors: { type: "string" }, variants: { type: "boolean" } },
     });
     const [file, extra] = positionals;
@@ -29,7 +30,6 @@ function main() {
     return;
   }
   const result = evaluate(scene, plugins);
-  if (result.outcomes.some(o => o.domain === trial.id)) console.log(`시험 전용 영역 ${trial.id}`);
   console.log(printResults(scene, result));
   if (showVariants) {
     let order = 0;
@@ -40,4 +40,4 @@ function main() {
   }
 }
 
-main();
+if (import.meta.main) evaluateCommand(process.argv.slice(2),productPlugins);

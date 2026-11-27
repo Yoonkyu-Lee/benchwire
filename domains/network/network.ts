@@ -32,7 +32,7 @@ export const network: DomainPlugin = {
     for (const iface of scene.interfaces) {
       if (iface.domain !== NETWORK || iface.protocol !== ETHERNET) continue;
       const attachment = effectiveClaim(scene, "port", iface.port, "", "attachment")!;
-      const node = scene.claims[attachment]!.reference;
+      const node = scene.claims[attachment]!.attachmentNode;
       if (node == null || scene.nodes[node]!.kind !== PCIE_NIC || w.from === node || w.to === node) continue;
       for (const carriers of [[PCIE_CARRIER, ethernet], [ethernet, PCIE_CARRIER]]) demands.push({ ...direct, via: [node], carriers,
         inputs: [...inputs, iface.evidence, attachment], rule: "PCIe NIC 경유 MAC 페이로드 · 8 Mbps당 터널 1 MB/s" });

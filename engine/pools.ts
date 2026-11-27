@@ -4,25 +4,25 @@ import { checkedQuantity, checkedTrace, type Results } from "./results.ts";
 
 export function registerPool(result: Results, origin: number, raw: Pool) {
   const { connection, domain, direction } = result.linkResources[origin]!;
-  const trace = checkedTrace(result, domain, "negotiate", origin, raw);
-  const limit = checkedQuantity(result, domain, "negotiate", origin, "pool.limit", trace.limit);
+  const trace = checkedTrace(result, domain, "pools", origin, raw);
+  const limit = checkedQuantity(result, domain, "pools", origin, "pool.limit", trace.limit);
   const pool = { ...trace, limit };
   if (pool.bounds) {
-    const low = checkedQuantity(result, domain, "negotiate", origin, "pool.bounds.low", pool.bounds.low);
-    const high = checkedQuantity(result, domain, "negotiate", origin, "pool.bounds.high", pool.bounds.high);
+    const low = checkedQuantity(result, domain, "pools", origin, "pool.bounds.low", pool.bounds.low);
+    const high = checkedQuantity(result, domain, "pools", origin, "pool.bounds.high", pool.bounds.high);
     if (limit !== null || low === null || high === null || low < 0 || low > high) delete pool.bounds;
   }
   const prior = result.linkResources.find(r => r.connection === connection && r.domain === domain &&
     r.pool?.id === pool.id && (r.direction === direction || r.pool.scope === "connection" || pool.scope === "connection"))?.pool;
   if (!prior) {
-    result.linkResources.push({ connection, domain, direction, absentDomain: [], pool });
+    result.linkResources.push({ connection, domain, direction, declarationClaimsOnPortsWithoutDomain: [], pool });
     return;
   }
   prior.inputs = [...new Set([...prior.inputs, ...pool.inputs])];
   prior.specs = [...new Set([...prior.specs, ...pool.specs])];
   if (prior.scope !== pool.scope || prior.unit !== pool.unit || prior.limit !== pool.limit ||
       prior.bounds?.low !== pool.bounds?.low || prior.bounds?.high !== pool.bounds?.high) {
-    result.errors.push({ domain, stage: "negotiate", row: origin, field: "pool.conflict", spec: "" });
+    result.errors.push({ domain, entryPoint: "pools", targetKind: "linkResource", row: origin, field: "pool.conflict", spec: "" });
     prior.limit = null;
     delete prior.bounds;
   }
@@ -43,7 +43,7 @@ export function bindPools(result: Results) {
         (r.pool.scope === "connection" || r.direction === o.direction));
       if (pool < 0 || !Number.isFinite(perUnit) || perUnit <= 0) {
         const field = pool < 0 ? "pool.id" : "pool.perUnit";
-        result.errors.push({ domain: o.domain, stage: "negotiate", row: o.linkResource, field, spec: "" });
+        result.errors.push({ domain: o.domain, entryPoint: "negotiate", targetKind: "linkResource", row: o.linkResource, field, spec: "" });
         if (o.verdict !== "impossible") o.verdict = "unknown";
         delete o.bounds;
         continue;
@@ -55,7 +55,7 @@ export function bindPools(result: Results) {
     const mode = o.pool ? o.mode : undefined;
     let service = result.linkResources.findIndex(r => r.connection === connection && r.direction === direction && r.domain === o.domain &&
       r.service?.unit === unit && r.service.mode === mode && r.service.poolResource === o.poolResource);
-    if (service < 0) service = result.linkResources.push({ connection, direction, domain: o.domain, absentDomain: [],
+    if (service < 0) service = result.linkResources.push({ connection, direction, domain: o.domain, declarationClaimsOnPortsWithoutDomain: [],
       service: { unit, ...(mode === undefined ? {} : { mode }), ...(o.poolResource === undefined ? {} : { poolResource: o.poolResource }) } }) - 1;
     o.serviceResource = service;
   }

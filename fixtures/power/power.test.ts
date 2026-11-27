@@ -346,7 +346,7 @@ for (const state of ["5 W","한도 미확인","부착점 미확인","커넥터 �
   const attachment = effectiveClaim(s,"port",s.connections[0]!.from,"","attachment")!;
   const connector = effectiveClaim(s,"port",s.connections[0]!.from,"","connector")!;
   const uncertain = state === "부착점 미확인" ? attachment : state === "커넥터 미확인" ? connector : a;
-  if (uncertain !== a) Object.assign(s.claims[uncertain]!,{value:null,reference:null,confidence:"unknown"});
+  if (uncertain !== a) Object.assign(s.claims[uncertain]!,{value:null,[uncertain === attachment ? "attachmentNode" : "connectorRow"]:null,confidence:"unknown"});
   const {result,work} = analyze(s), w = work("solo","primary"), m = w.metric("together");
   assert.deepEqual([m.value,m.low,m.high],state === "5 W" ? [40,40,40] : [null,35,45]);
   if (state !== "5 W") assert.ok(result.quests.some(q => q.outcome === w.outcome && q.claim === uncertain));

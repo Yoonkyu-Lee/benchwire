@@ -114,8 +114,8 @@ function fill(scene: Scene, result: Results, flows: readonly Flow[], fair: Reado
     else for (const i of weighted) {
       uncertain.add(i);
       const workload = flows[i]!.workload, field = "pool.elasticUnit";
-      if (!result.errors.some(e => e.stage === "demand" && e.row === workload && e.field === field))
-        result.errors.push({ domain: scene.workloads[workload]!.domain, stage: "demand", row: workload, spec: "", field });
+      if (!result.errors.some(e => e.entryPoint === null && e.targetKind === "workload" && e.row === workload && e.field === field))
+        result.errors.push({ domain: scene.workloads[workload]!.domain, entryPoint: null, targetKind: "workload", row: workload, spec: "", field });
     }
     p.reserved = [...p.fixed.values()].reduce((sum, x) => sum + x, 0);
     if (p.capacity !== null && p.reserved > p.capacity && !tied(p.reserved, p.capacity)) {

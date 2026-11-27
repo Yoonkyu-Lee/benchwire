@@ -41,7 +41,7 @@ function linkReason(scene: Scene, result: Results, outcome: number, option: numb
 }
 function noOptionReason(scene: Scene, result: Results, outcome: number, connection: number, direction: Direction, domain: string) {
   const link = result.linkResources.find(l => l.connection === connection && l.direction === direction && l.domain === domain);
-  const declarations = link?.absentDomain ?? [];
+  const declarations = link?.declarationClaimsOnPortsWithoutDomain ?? [];
   return addReason(result, { outcome, stage: "negotiate", rule: declarations.length ? "포트에 해당 영역 선언 없음" : "협상 근거 없음",
     targetKind: "connection", targetRow: connection }, [scene.connections[connection]!.evidence, ...declarations],
     physicalReasons(scene, result, outcome, connection, direction));
@@ -83,7 +83,7 @@ export function judgeConnections(scene: Scene, plugins: readonly DomainPlugin[],
         if (!eligible.length) {
           const steps = result.physical.filter(s => s.connection === connection && s.direction === direction);
           const link = result.linkResources.find(l => l.connection === connection && l.direction === direction && l.domain === domain);
-          const verdict = rows.length || link?.absentDomain.length || steps.some(s => s.verdict === "impossible") ? "impossible" : "unknown";
+          const verdict = rows.length || link?.declarationClaimsOnPortsWithoutDomain.length || steps.some(s => s.verdict === "impossible") ? "impossible" : "unknown";
           const outcome = result.outcomes.push({ subjectKind: "connection", subjectRow: connection, path: null, scenario, direction, domain, verdict, mode: "",
             ...(rows.length ? { unit: result.options[rows[0]!]!.unit } : {}),
             label: verdict === "impossible" ? "연결 불가" : "협상할 영역 미확인" }) - 1;

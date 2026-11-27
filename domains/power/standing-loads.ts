@@ -24,7 +24,7 @@ export function standingLoads(scene: Scene): StandingLoad[] {
       const inputs = [reserve, c.evidence, ...option.inputs];
       const sourceItem = scene.ports[from]!.item;
       const attachment = effectiveClaim(scene, "port", from, "", "attachment")!;
-      const start = scene.claims[attachment]!.reference;
+      const start = scene.claims[attachment]!.attachmentNode;
       inputs.push(attachment);
       // 부착점이 미확인이면 이 실물의 후보 노드마다 연결될 수 있는 자원을 보존한다.
       const upstream = new Set(start == null ? scene.nodes.flatMap((node, i) => node.item === sourceItem ? [i] : []) : [start]);

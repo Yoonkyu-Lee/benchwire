@@ -3,9 +3,9 @@ import { dirname, join } from "node:path";
 import { parseArgs } from "node:util";
 import { claimIdentity, compare, connectionOption, linkIdentity, ownerIdentity, type Difference, type Snapshot } from "../engine/compare.ts";
 import { evaluate } from "../engine/evaluate.ts";
-import type { Claim, Verdict } from "../engine/contract.ts";
+import type { Claim, DomainPlugin, Verdict } from "../engine/contract.ts";
 import type { Results, Run } from "../engine/results.ts";
-import { plugins, trial } from "./domains.ts";
+import { plugins as productPlugins } from "../domains/registry.ts";
 import { loadScene } from "./load.ts";
 
 const verdicts: Record<Verdict, string> = { ok: "✅", conditional: "⚠️", impossible: "❌", unknown: "❓" };
@@ -150,9 +150,9 @@ function causes(a: Snapshot, b: Snapshot, diff: Difference) {
   return lines;
 }
 
-function main() {
+export function compareCommand(args: string[], plugins: readonly DomainPlugin[]) {
   try {
-    const { positionals, values } = parseArgs({ allowPositionals: true,
+    const { positionals, values } = parseArgs({ args, allowPositionals: true,
       options: { models: { type: "string" }, connectors: { type: "string" } } });
     const [left, right, extra] = positionals;
     if (!left || !right || extra !== undefined)
@@ -164,7 +164,6 @@ function main() {
     }
     const a = open(left), b = open(right);
     const lines = [`로드아웃 비교 · ${a.scene.id} → ${b.scene.id}`];
-    if ([a, b].some(s => s.result.outcomes.some(o => o.domain === trial.id))) lines.push("시험 전용 영역 trial");
     const changes = compare(a, b);
     if (!changes.length) lines.push("달라진 판정 없음");
     for (const diff of changes) {
@@ -180,4 +179,4 @@ function main() {
   }
 }
 
-main();
+if (import.meta.main) compareCommand(process.argv.slice(2),productPlugins);

@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { join } from "node:path";
 import { test } from "node:test";
 import { printResults } from "../../cli/print.ts";
-import { plugins } from "../../cli/domains.ts";
+import { plugins } from "../../domains/registry.ts";
 import { loadScene } from "../../cli/load.ts";
 import type { Scene } from "../../engine/contract.ts";
 import { evaluate, evaluateVariants } from "../../engine/evaluate.ts";

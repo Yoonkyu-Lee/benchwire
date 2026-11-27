@@ -599,12 +599,30 @@ test("판정: 폴백 근거에서 거절된 고정 요청과 링크 한도를 �
   assert.ok(values.includes(100) && values.includes(60));
 });
 
-test("계약: 미등록 규격은 오류 행을 남기고 모든 출처 참조는 유효하다", t => {
-  const f = sample(t), plugin = trialDomain(), base = plugin.negotiate;
-  plugin.negotiate = link => base(link).map(o => ({ ...o, specs: [...o.specs, "missing-spec"] }));
-  const { result } = f.open([plugin]);
+test("계약: 같은 미등록 규격도 어느 진입점의 어느 행에서 나왔는지 구별한다", t => {
+  const f = sample(t), plugin = trialDomain();
+  const missing = {rule:"잘못된 인용", inputs:[], specs:["missing-spec"]};
+  const {negotiate,demand,consume} = plugin;
+  plugin.negotiate = link => negotiate(link).map(o => ({...o,...missing}));
+  plugin.pools = () => [{...missing,id:"shared",scope:"direction",limit:100,unit:"회/s"}];
+  plugin.demand = (s,w) => demand(s,w).map(d => ({...d,...missing}));
+  plugin.match = () => ({...missing,verdict:"ok"});
+  plugin.consume = (...args) => consume(...args).map(u => ({...u,...missing}));
+  plugin.assess = () => ({...missing,possible:["ok"],metrics:[]});
+  f.host.resources[0]!.policy.value = "port-table";
+  plugin.policy = ({activeWorkloads}) => activeWorkloads.map(workload => ({...missing,workload,limit:100}));
+  f.save();
+  const {scene,result} = f.open([plugin]);
   assert.ok(result.reasonSpecs.every(r => !!result.specSources[r.source]));
-  assert.ok(result.errors.some(e => e.domain === "trial" && e.spec === "missing-spec" && e.stage === "negotiate" && !!result.linkResources[e.row]));
+  for (const [entryPoint,targetKind] of [
+    ["negotiate","linkResource"],["pools","linkResource"],["demand","workload"],["match","workload"],
+    ["assess","workload"],["consume","path"],["policy","path"],
+  ] as const) {
+    const table = targetKind === "linkResource" ? result.linkResources : targetKind === "workload" ? scene.workloads : result.paths;
+    const faults = result.errors.filter(e => e.entryPoint === entryPoint);
+    assert.ok(faults.length,entryPoint);
+    assert.ok(faults.every(e => e.domain === plugin.id && e.spec === "missing-spec" && e.targetKind === targetKind && table[e.row]));
+  }
 });
 
 test("협상: 한도 0인 연결은 연결 자체에서도 불가다", t => {

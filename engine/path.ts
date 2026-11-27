@@ -31,14 +31,14 @@ function connectionArcs(scene: Scene, result: Results, plugin: DomainPlugin, dem
         let match = result.matches.find(m => m.demand === demandRow && m.option === row);
         if (!match) {
           const raw = plugin.match({ scene, connection, direction, ports }, option, demand, demand.workload);
-          match = { ...checkedTrace(result, plugin.id, "demand", demand.workload, raw), demand: demandRow, option: row };
+          match = { ...checkedTrace(result, plugin.id, "match", demand.workload, raw), demand: demandRow, option: row };
           result.matches.push(match);
         }
         matches.set(row, match);
       }
     }
     const best = rows.length ? bestOption(result, rows, service, matches) : {
-      row: null, verdict: all.length || link.absentDomain.length || physical.some(s => s.verdict === "impossible") ? "impossible" as const : "unknown" as const,
+      row: null, verdict: all.length || link.declarationClaimsOnPortsWithoutDomain.length || physical.some(s => s.verdict === "impossible") ? "impossible" as const : "unknown" as const,
     };
     const raw = best.row === null ? undefined : result.options[best.row];
     const o = best.row === null ? undefined : availableOption(result, best.row);
@@ -148,7 +148,7 @@ export function paths(scene: Scene, plugins: readonly DomainPlugin[], result: Re
           c.conversion && (!c.conversion.unit || !Number.isFinite(c.conversion.perUnit) || !Number.isFinite(1 / c.conversion.perUnit) || c.conversion.perUnit <= 0 ||
             requested !== null && !Number.isFinite(requested * c.conversion.perUnit))) ? "carriers" : null;
       if (invalid) {
-        result.errors.push({ domain: plugin.id, stage: "demand", row: workload, field: invalid, spec: "" });
+        result.errors.push({ domain: plugin.id, entryPoint: "demand", targetKind: "workload", row: workload, field: invalid, spec: "" });
         result.paths.push({ workload, demand, verdict: "unknown", key: "", truncated: false });
         continue;
       }

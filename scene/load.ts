@@ -186,9 +186,9 @@ export function loadSceneDocuments(document: unknown, library: { connectors: unk
       if (p.attachment.condition) fail(pos + ".attachment.condition", "기본 배선에는 조건을 붙일 수 없습니다");
       scene.ports.push({ item, id: p.id, label: p.label, location: p.location });
       const connector = claim("port", port, "model", "", "connector", p.connector, citations, pos + ".connector");
-      scene.claims[connector]!.reference = referenceRow(p.connector, connectors, pos + ".connector");
+      scene.claims[connector]!.connectorRow = referenceRow(p.connector, connectors, pos + ".connector");
       const attachment = claim("port", port, "model", "", "attachment", p.attachment, citations, pos + ".attachment");
-      scene.claims[attachment]!.reference = referenceRow(p.attachment, local.nodes, pos + ".attachment");
+      scene.claims[attachment]!.attachmentNode = referenceRow(p.attachment, local.nodes, pos + ".attachment");
       const signatures = new Map<string, number>();
       p.interfaces.forEach((iface, j) => {
         const where = pos + ".interfaces." + j;
@@ -260,7 +260,8 @@ export function loadSceneDocuments(document: unknown, library: { connectors: unk
       const r = scene.resources[owner]!;
       checkResource(field, p.claim, r.unit, at + ".claim");
     } else if (ownerKind === "port") {
-      scene.claims[row]!.reference = referenceRow(p.claim, field === "connector" ? connectors : local.nodes, at + ".claim");
+      if (field === "connector") measured.connectorRow = referenceRow(p.claim, connectors, at + ".claim");
+      else measured.attachmentNode = referenceRow(p.claim, local.nodes, at + ".claim");
     } else {
       const plugin = ref(domains, domain, at + ".domain");
       const group = scene.claims.filter(c => c.ownerKind === ownerKind && c.owner === owner && c.domain === domain &&

@@ -12,9 +12,14 @@ export const MAX_COMBINATIONS = 128;
 // 탄력 수요 달성률 합의 부동소수점 반올림은 같은 점수로 본다.
 const SCORE_EPSILON = 1e-12;
 export interface Candidate { flow: Flow; solo: Share; preference: number; length: number; key: string; truncated: boolean }
+export interface WorkloadSelection {
+  modes: { workload: number; mode: string; preference: number }[];
+  advances?: number[];
+}
 export interface Plan {
+  workloads: WorkloadSelection;
   choices: Choice[]; active: Flow[]; together: Share[]; picked: Candidate[]; candidates: Candidate[][];
-  modes: { mode: string; preference: number }[]; score: number[]; key: string; signature: string; confirmed: boolean; advances?: number[];
+  score: number[]; key: string; signature: string; confirmed: boolean;
 }
 
 export function* combinations<T>(groups: readonly T[][]): Generator<T[]> {
@@ -58,12 +63,12 @@ export function compareScores(a: number[], b: number[]) {
 }
 
 export function planModes(scene: Scene, plugins: readonly DomainPlugin[], r: Results, members: Scene["members"],
-  candidates: Candidate[][], choices: Choice[], confirmed: boolean, budget: { examined: number; truncated: boolean }, intent?: Plan) {
+  candidates: Candidate[][], choices: Choice[], confirmed: boolean, budget: { examined: number; truncated: boolean }, selectedWorkloads?: WorkloadSelection) {
   const ranks = [...new Set(members.flatMap(m => m.priority === undefined ? [] : [m.priority]))].sort((a,b) => a-b);
   const used = members.map(m => new Set(candidates[m.workload]!.flatMap(c => c.flow.uses.map(u => u.resource))));
   const menus = members.map((m,i) => {
     const list = candidates[m.workload]!, first = list[0]!;
-    const wanted = intent?.modes[i];
+    const wanted = selectedWorkloads?.modes.find(mode => mode.workload === m.workload);
     if (wanted) {
       const matching = list.find(c => c.flow.path !== null && c.preference === wanted.preference &&
         r.demands[r.paths[c.flow.path]!.demand]!.mode === wanted.mode);
@@ -85,9 +90,9 @@ export function planModes(scene: Scene, plugins: readonly DomainPlugin[], r: Res
     if (budget.examined >= MAX_COMBINATIONS) { budget.truncated = true; break; }
     budget.examined++;
     const active = picked.map((c,i) => ({ ...c.flow, ...(members[i]!.priority === undefined ? {} : { priority: members[i]!.priority }) }));
-    if (intent?.advances) {
+    if (selectedWorkloads?.advances) {
       const tiers = [...new Set(active.map(f => f.priority ?? Infinity))].sort((a,b) => a-b);
-      for (const flow of active) flow.priority = 2*tiers.indexOf(flow.priority ?? Infinity) + (intent.advances.includes(flow.workload) ? 0 : 1);
+      for (const flow of active) flow.priority = 2*tiers.indexOf(flow.priority ?? Infinity) + (selectedWorkloads.advances.includes(flow.workload) ? 0 : 1);
     }
     const together = policyAllocation(scene,plugins,r,active);
     const goals = together.map((share,i) => {
@@ -119,9 +124,10 @@ export function planModes(scene: Scene, plugins: readonly DomainPlugin[], r: Res
     if (best.some(p => p.signature === signature)) continue;
     const key = JSON.stringify([choices.map(c => [scene.connections[c.connection]!.id,c.profile]),
       picked.map((c,i) => [modes[i]!.slice(0,4),c.key])]);
-    best.push({ active, together, picked, candidates, choices, confirmed, score, key, signature,
-      modes: picked.map(c => ({ mode: c.flow.path === null ? "" : r.demands[r.paths[c.flow.path]!.demand]!.mode, preference: c.preference })),
-      ...(intent?.advances ? { advances: intent.advances } : {}) });
+    const workloads: WorkloadSelection = { modes: picked.map(c => ({ workload: c.flow.workload, preference: c.preference,
+      mode: c.flow.path === null ? "" : r.demands[r.paths[c.flow.path]!.demand]!.mode })) };
+    if (selectedWorkloads?.advances) workloads.advances = selectedWorkloads.advances;
+    best.push({ active, together, picked, candidates, choices, confirmed, score, key, signature, workloads });
   }
   return best;
 }
@@ -144,7 +150,7 @@ export function reservationAlternatives(scene: Scene, plugins: readonly DomainPl
     const signature = JSON.stringify(together.map(s => [s.verdict,s.value]));
     if (alternatives.some(p => p.signature === signature)) continue;
     const advances = first.map(i => flows[i]!.workload);
-    alternatives.push({ ...plan, active: flows, together, signature, advances });
+    alternatives.push({ ...plan, active: flows, together, signature, workloads: { ...plan.workloads, advances } });
   }
   return alternatives;
 }

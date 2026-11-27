@@ -47,7 +47,7 @@ test("CLI 출력에 미사용 성능, 연결 불가와 미확인, 필요한 결�
   const fromClaim = scene.claims[from]!;
   const toClaim = scene.claims[to]!;
   toClaim.value = fromClaim.value;
-  toClaim.reference = fromClaim.reference!;
+  toClaim.connectorRow = fromClaim.connectorRow!;
   const sink = scene.interfaces.findIndex(i => i.port === scene.connections[2]!.to);
   const rate = effectiveClaim(scene, "interface", sink, "trial", "rate")!;
   scene.claims[rate]!.value = null;
@@ -74,7 +74,10 @@ test("CLI 명령은 파일·필드가 있는 로드 오류를 한 줄로 쓰고 
 });
 
 test("CLI 명령은 경로 옵션으로 장면을 열고 시험 전용 영역을 표시한다", () => {
-  const args = ["cli/evaluate.ts", sceneFile, "--models", files.modelsDir, "--connectors", files.connectorsFile];
+  const product = spawnSync(process.execPath,["cli/evaluate.ts",sceneFile],{encoding:"utf8"});
+  assert.equal(product.status,1);
+  assert.match(product.stderr,/trial/);
+  const args = ["fixtures/demo.ts", "evaluate", sceneFile, "--models", files.modelsDir, "--connectors", files.connectorsFile];
   const processResult = spawnSync(process.execPath, args, { encoding: "utf8" });
   assert.equal(processResult.status, 0, processResult.stderr);
   assert.match(processResult.stdout, /시험 전용 영역 trial/u);
@@ -83,7 +86,9 @@ test("CLI 명령은 경로 옵션으로 장면을 열고 시험 전용 영역을
 
 test("T2 CLI는 선택한 연결 설정과 근거를 보이고 --variants에서 다른 설정의 판정과 성능을 보인다", () => {
   const setup = `
-    import { trial } from ${JSON.stringify(new URL("./domains.ts", import.meta.url).href)};
+    import { trialDomain } from ${JSON.stringify(new URL("../fixtures/trial.ts", import.meta.url).href)};
+    import { evaluateCommand } from ${JSON.stringify(new URL("./evaluate.ts", import.meta.url).href)};
+    const trial = trialDomain();
     const negotiate = trial.negotiate;
     trial.negotiate = link => {
       const options = negotiate(link);
@@ -93,7 +98,7 @@ test("T2 CLI는 선택한 연결 설정과 근거를 보이고 --variants에서 
         limit: profile === "C" ? 100 : 50, rule: "시험 핀 " + profile, inputs: [...o.inputs, wire.evidence] })));
     };
   `;
-  const args = ["--import", "data:text/javascript," + encodeURIComponent(setup), "cli/evaluate.ts", sceneFile];
+  const args = ["--input-type=module","-e",setup + "\nevaluateCommand(process.argv.slice(1),[trial]);","--",sceneFile];
   const base = spawnSync(process.execPath, args, { encoding: "utf8" });
   assert.equal(base.status, 0, base.stderr);
   const [summary, evidence] = base.stdout.split(/\r?\n근거\r?\n/u);

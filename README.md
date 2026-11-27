@@ -19,6 +19,15 @@ npm run test:ui # 설치된 Edge에서 실제 서버와 화면 검증
 npm run perf    # 조용한 상태에서 프레임·편집 지연 측정, 한도 초과 시 실패, work/에 JSON 저장
 ```
 
+CLI에서 제품 영역 장면을 평가하거나 비교할 수 있다. 합성 `trial` 영역을 쓰는 데모는 전용 진입점에서 선택한다.
+
+```sh
+node cli/evaluate.ts fixtures/t2/scene.json --variants
+node cli/compare.ts fixtures/t2/four-lanes.json fixtures/t2/two-lanes.json
+node fixtures/demo.ts evaluate fixtures/three-flows.json
+node fixtures/demo.ts compare fixtures/compare/before.json fixtures/compare/after.json
+```
+
 새 아이템의 **AI 조사**를 켜려면 저장소 루트의 `.env`에 `ANTHROPIC_API_KEY=발급받은_키`를 넣고 서버를 다시 시작한다. 조사 시작 버튼을 누르면 모델명 또는 공개 URL을 Claude API로 보낸다. 한 건의 상한은 US$5.00과 웹 검색 6회이며, 상한과 사용 비용을 생성기에 표시한다. 공개 자료와 사용량을 `userdata/research/`에 보관하고 30일 뒤 갱신 필요로 표시한다. 키 없이도 수동 생성기를 쓸 수 있다. [Claude 사용료](https://platform.claude.com/docs/en/about-claude/pricing) · [검색 도구 요금](https://platform.claude.com/docs/en/agents-and-tools/tool-use/web-search-tool)
 
 ## 의존성

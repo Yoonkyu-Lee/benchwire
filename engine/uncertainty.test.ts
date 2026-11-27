@@ -23,7 +23,7 @@ function wiring() {
   scene.members = scene.members.filter(m => m.workload < 2);
   scene.claims[effectiveClaim(scene, "workload", 0, trial.id, "rate")!]!.value = 800;
   const port = scene.connections[0]!.from, claim = portFacts(scene, port).attachment;
-  scene.claims[claim] = { ...scene.claims[claim]!, value: null, reference: null };
+  scene.claims[claim] = { ...scene.claims[claim]!, value: null, attachmentNode: null };
   return { scene, claim };
 }
 
@@ -49,7 +49,7 @@ test("T5 미확인 부착점을 하나의 배선으로 고정해 경쟁 작업�
   for (const [world, expected] of [[m.lowWorld, 450], [m.highWorld, 800]] as const) {
     const replay = structuredClone(scene);
     for (const witness of r.wirings.filter(w => w.world === world)) {
-      replay.claims[witness.claim]!.reference = witness.node;
+      replay.claims[witness.claim]!.attachmentNode = witness.node;
       replay.claims[witness.claim]!.value = replay.nodes[witness.node]!.id;
     }
     assert.equal(output(evaluate(replay, [trial]), 1).metric("together").value, expected);
@@ -72,7 +72,7 @@ test("미확인 부품 진입 부착점의 후보마다 다른 내부 통과 자
       const claim = scene.claims.push({ ...c, owner: c.ownerKind === "port" ? port : copy }) - 1;
       scene.claimSources.push(...scene.claimSources.filter(s => s.claim === row).map(s => ({...s, claim})));
       if (c.field === "declaration") scene.interfaces[copy]!.evidence = claim;
-      if (c.field === "attachment") Object.assign(scene.claims[claim]!, { value: i ? "exit" : null, reference: i ? node : null });
+      if (c.field === "attachment") Object.assign(scene.claims[claim]!, { value: i ? "exit" : null, attachmentNode: i ? node : null });
     }
     return port;
   });
@@ -152,7 +152,7 @@ test("알려진 매체 용량 0은 미확인 포트 한도보다 먼저 불가�
 
 test("비유한 플러그인 한도·수요·소비는 계약 오류를 남기고 미확인으로 계산한다", () => {
   const scene = sample();
-  for (const [stage, field, overrides] of [
+  for (const [entryPoint, field, overrides] of [
     ["negotiate", "limit", { negotiate: (link: Parameters<typeof trial.negotiate>[0]) =>
       trial.negotiate(link).map(o => ({ ...o, limit: Infinity })) }],
     ["demand", "requested", { demand: (...args: Parameters<typeof trial.demand>) =>
@@ -163,7 +163,7 @@ test("비유한 플러그인 한도·수요·소비는 계약 오류를 남기�
       trial.consume(...args).map(u => ({ ...u, fixed: Infinity })) }],
   ] as const) {
     const r = evaluate(scene, [{ ...trial, ...overrides }]);
-    assert.ok(r.errors.some(e => e.domain === trial.id && e.stage === stage && e.field === field), field);
+    assert.ok(r.errors.some(e => e.domain === trial.id && e.entryPoint === entryPoint && e.field === field), field);
     assert.deepEqual([output(r, 0).verdict, output(r, 0).metric("together").value], ["unknown", null], field);
     assert.ok(r.metrics.every(m => [m.low, m.high, m.value].every(v => v === null || Number.isFinite(v))));
   }
@@ -177,7 +177,7 @@ test("T8 켠 작업에 맞는 정책 한도가 비거나 비유한 값이면 성
       invalid ? power.policy!(context)!.map(p => ({ ...p, limit: Infinity })) : [] };
     const r = evaluate(scene, [plugin]);
     assert.deepEqual([output(r,0).verdict, output(r,0).metric("together").value], ["unknown", null]);
-    if (invalid) assert.ok(r.errors.some(e => e.stage === "consume" && e.resource === 0 && r.paths[e.row] && e.field === "limit"));
+    if (invalid) assert.ok(r.errors.some(e => e.entryPoint === "policy" && e.targetKind === "path" && e.resource === 0 && r.paths[e.row] && e.field === "limit"));
   }
 });
 
@@ -212,7 +212,7 @@ test("T5 경로 열거가 잘려도 다른 장비 묶음의 부착점 퀘스트�
   scene.members = scene.members.slice(0,1);
   for (let i = 0; i < 70; i++) scene.edges.push({ ...scene.edges[0]!, item: scene.nodes[source]!.item, id: "local-" + i, from: source, to: end });
   const port = scene.connections[2]!.to, claim = portFacts(scene, port).attachment;
-  Object.assign(scene.claims[claim]!, { value: null, reference: null });
+  Object.assign(scene.claims[claim]!, { value: null, attachmentNode: null });
   for (let i = 0; i < 70; i++) {
     const n = scene.nodes.push({ item: scene.ports[port]!.item, id: "remote-" + i, kind: "junction", label: "" }) - 1;
     scene.edges.push({ ...scene.edges[0]!, item: scene.ports[port]!.item, from: n, to: scene.workloads[2]!.to });

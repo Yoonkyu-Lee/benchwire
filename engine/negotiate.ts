@@ -49,7 +49,7 @@ export function negotiate(scene: Scene, plugins: readonly DomainPlugin[], result
         const options = plugin.negotiate(link);
         const position = { connection, domain: plugin.id, direction };
         const linkResource = result.linkResources.length;
-        const absentDomain = ports.flatMap(port => {
+        const declarationClaimsOnPortsWithoutDomain = ports.flatMap(port => {
           const declarations = scene.interfaces.filter(i => i.port === port);
           return declarations.some(i => i.domain === plugin.id) ? [] : declarations.map(i => i.evidence);
         });
@@ -67,9 +67,9 @@ export function negotiate(scene: Scene, plugins: readonly DomainPlugin[], result
           const verdict = physical.some(s => s.verdict === "impossible") ? "impossible"
             : o.verdict !== "impossible" && physical.some(s => s.verdict === "unknown") ? "unknown" : o.verdict;
           result.options.push({ ...o, ...position, linkResource, verdict,
-            inputs: verdict === "impossible" ? [...new Set([...o.inputs, ...absentDomain])] : o.inputs });
+            inputs: verdict === "impossible" ? [...new Set([...o.inputs, ...declarationClaimsOnPortsWithoutDomain])] : o.inputs });
         }
-        result.linkResources.push({ ...position, absentDomain });
+        result.linkResources.push({ ...position, declarationClaimsOnPortsWithoutDomain });
         for (const pool of plugin.pools?.(link) ?? []) registerPool(result, linkResource, pool);
       }
     }

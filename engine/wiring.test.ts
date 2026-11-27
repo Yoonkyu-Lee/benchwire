@@ -43,7 +43,7 @@ test("T3 다른 배선의 후보가 많아도 독립 시나리오의 판정과 �
 
 test("T3 끊긴 GPU 경로의 근거에 실제 출력 포트 부착점과 모델 출처가 남는다", () => {
   const scene = fixture(), wire = scene.connections.find(c => c.id === "unresolved")!, claim = portFacts(scene, wire.from).attachment;
-  scene.claims[claim]!.reference = scene.nodes.findIndex(n => n.id === "gpu-b");
+  scene.claims[claim]!.attachmentNode = scene.nodes.findIndex(n => n.id === "gpu-b");
   scene.claims[claim]!.value = "gpu-b";
   const r = evaluate(scene, [display]), row = r.outcomes.findIndex(o => o.subjectKind === "workload" && scene.workloads[o.subjectRow]!.id === "unresolved");
   assert.equal(r.outcomes[row]!.verdict, "impossible");
@@ -54,7 +54,7 @@ test("T3 끊긴 GPU 경로의 근거에 실제 출력 포트 부착점과 모델
 test("T3 작업 양 끝의 노드가 모두 고립되어도 그 장비의 포트 배선을 근거로 보인다", () => {
   const scene = fixture(), work = scene.workloads.findIndex(w => w.id === "native"), request = scene.workloads[work]!;
   const unattached = scene.connections.find(c => c.id === "unresolved")!.from;
-  Object.assign(scene.claims[portFacts(scene,unattached).attachment]!, { value: "gpu-b", reference: scene.nodes.findIndex(n => n.id === "gpu-b") });
+  Object.assign(scene.claims[portFacts(scene,unattached).attachment]!, { value: "gpu-b", attachmentNode: scene.nodes.findIndex(n => n.id === "gpu-b") });
   for (const side of ["from","to"] as const) {
     const node = scene.nodes[request[side]]!;
     request[side] = scene.nodes.push({ ...node, id: "isolated-" + side }) - 1;

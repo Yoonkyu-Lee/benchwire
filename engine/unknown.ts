@@ -13,7 +13,7 @@ type SourceCandidate = NonNullable<Scene["claimSources"][number]["candidate"]>;
 // 한 값을 여러 출처가 지지하면 세계의 대표 신뢰도는 가장 높은 것을 쓰고 인용은 모두 남긴다.
 const confidenceOrder: readonly SourceCandidate["confidence"][] = ["user_verified", "official", "review", "community", "inferred", "unknown"];
 type Metric = Results["metrics"][number];
-type Variable = { claim: number; samples: { value: string | number | boolean; node?: number; reference?: number }[] };
+type Variable = { claim: number; kind: "profile" | "wiring"; samples: { value: string | number | boolean; attachmentNode?: number; connectorRow?: number }[] };
 
 
 // 시나리오 안에서 가능한 경로가 자원을 직접 또는 다른 작업을 통해 함께 쓰는지 본다.
@@ -250,7 +250,7 @@ function merge(scene: Scene, plugins: readonly DomainPlugin[], r: Results, row: 
   const evidence = [...new Set([...samples.flatMap(s => s.inputs), ...changed])];
   const parent = r.reasons.findLastIndex(reason => reason.outcome === row);
   const rule = variables.some(v => scene.claims[v.claim]!.conflictGroup !== undefined) ? "출처 충돌 후보별 판정과 범위"
-    : variables.some(v => v.samples[0]?.node === undefined) ? "연결 설정 후보별 판정과 범위" : "일관된 배선 후보별 판정과 범위";
+    : variables.some(v => v.kind === "profile") ? "연결 설정 후보별 판정과 범위" : "일관된 배선 후보별 판정과 범위";
   const parents = parent < 0 ? [] : [parent];
   const limitRange = r.metrics.find(m => m.outcome === row && m.kind === "limit");
   if (limitRange && limitRange.low !== limitRange.high) {
@@ -290,14 +290,17 @@ export function resolveUnknowns(scene: Scene, plugins: readonly DomainPlugin[], 
     if (!values.size) return;
     const samples: Variable["samples"] = [];
     for (const value of values) {
-      if (c.ownerKind === "port" && c.reference !== undefined) {
-        const reference = c.field === "connector" ? scene.connectors.findIndex(row => row.id === value)
-          : scene.nodes.findIndex(n => n.item === scene.ports[c.owner]!.item && n.id === value);
-        if (reference < 0) return;
-        samples.push({value,reference});
+      if (c.connectorRow !== undefined) {
+        const connectorRow = scene.connectors.findIndex(row => row.id === value);
+        if (connectorRow < 0) return;
+        samples.push({value,connectorRow});
+      } else if (c.attachmentNode !== undefined) {
+        const attachmentNode = scene.nodes.findIndex(n => n.item === scene.ports[c.owner]!.item && n.id === value);
+        if (attachmentNode < 0) return;
+        samples.push({value,attachmentNode});
       } else samples.push({value});
     }
-    all.push({claim,samples});
+    all.push({claim,kind:"profile",samples});
     const links = new Set(result.options.filter(o => o.inputs.includes(claim)).map(o => o.connection));
     const port = c.ownerKind === "interface" ? scene.interfaces[c.owner]!.port : c.ownerKind === "port" ? c.owner : undefined;
     // 끝점 설정은 다른 영역의 서비스도 바꾼다. 중간 부품에서는 실제로 읽은 주장만 조합한다.
@@ -309,7 +312,7 @@ export function resolveUnknowns(scene: Scene, plugins: readonly DomainPlugin[], 
   });
   for (const [port,nodes] of attachmentCandidates(scene,result.demands.flatMap(d => d.via))) {
     const claim = portFacts(scene,port).attachment;
-    if (!profileLinks.has(claim)) all.push({claim,samples:nodes.map(node => ({node,value:scene.nodes[node]!.id}))});
+    if (!profileLinks.has(claim)) all.push({claim,kind:"wiring",samples:nodes.map(node => ({attachmentNode:node,value:scene.nodes[node]!.id}))});
   }
   if (!all.length) return;
   const groups: { variables: Variable[]; subjects: number[][] }[] = [];
@@ -434,11 +437,12 @@ export function resolveUnknowns(scene: Scene, plugins: readonly DomainPlugin[], 
       const claims = [...scene.claims];
       for (const v of assignments) {
         const stride = axes.get(claims[v.claim]!.conflictGroup ?? v.claim)!;
-        const {value,node,reference = node} = v.samples[Math.floor(i / stride) % v.samples.length]!;
+        const sample = v.samples[Math.floor(i / stride) % v.samples.length]!;
+        const { value } = sample;
         const candidate = conflicts.get(v.claim)?.get(value);
-        claims[v.claim] = { ...claims[v.claim]!, ...candidate, value, ...(reference === undefined ? {} : {reference}) };
-        if (node === undefined) result.profileWorlds.push({world,claim:v.claim,value});
-        else result.wirings.push({world,claim:v.claim,node});
+        claims[v.claim] = { ...claims[v.claim]!, ...candidate, ...sample };
+        if (v.kind === "profile") result.profileWorlds.push({world,claim:v.claim,value});
+        else result.wirings.push({world,claim:v.claim,node:sample.attachmentNode!});
       }
       const members = disputed ? scene.members.map(m => {
         if (m.evidence === undefined || !conflicts.has(m.evidence)) return m;

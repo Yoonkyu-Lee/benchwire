@@ -7,10 +7,13 @@ const path = "fixtures/compare";
 const before = path + "/before.json";
 const after = path + "/after.json";
 function run(...args: string[]) {
-  return spawnSync(process.execPath, ["cli/compare.ts", ...args], { encoding: "utf8" });
+  return spawnSync(process.execPath, ["fixtures/demo.ts","compare", ...args], { encoding: "utf8" });
 }
 
 test("T9 CLI는 바뀐 세 작업의 전후 값과 영향을 준 매체의 출처를 보여 준다", () => {
+  const product = spawnSync(process.execPath,["cli/compare.ts",before,after],{encoding:"utf8"});
+  assert.equal(product.status,1);
+  assert.match(product.stderr,/trial/);
   const result = run(before, after, "--models", path, "--connectors", path + "/connectors.json");
   assert.equal(result.status, 0, result.stderr);
   const text = result.stdout;

@@ -1,7 +1,7 @@
 // 합성 장면의 개인 실측과 연결 관측이 측정한 실물·조건·배선에서만 판정과 근거에 들어가는지 확인한다.
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { plugins } from "../cli/domains.ts";
+import { plugins } from "../domains/registry.ts";
 import { printResults } from "../cli/print.ts";
 import { evaluate, evaluateVariants } from "../engine/evaluate.ts";
 import { fixture } from "./document.ts";

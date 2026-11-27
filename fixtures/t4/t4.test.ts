@@ -2,7 +2,7 @@
 import assert from "node:assert/strict";
 import { join } from "node:path";
 import { test } from "node:test";
-import { plugins } from "../../cli/domains.ts";
+import { plugins } from "../../domains/registry.ts";
 import { loadScene } from "../../cli/load.ts";
 import { display } from "../../domains/display/display.ts";
 import { effectiveClaim, type Scene } from "../../engine/contract.ts";

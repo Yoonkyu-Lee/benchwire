@@ -1,8 +1,13 @@
 // 판정 결과와 중간 계산을 번호로 연결해 출력에서 입력 주장까지 되짚는다.
-import type { Carrier, Choice, Demand, Direction, KnownVerdict, Measure, Option, Pool, Step, Trace, Verdict } from "./contract.ts";
+import type { Carrier, Choice, Demand, Direction, DomainPlugin, KnownVerdict, Measure, Option, Pool, Step, Trace, Verdict } from "./contract.ts";
 
 export type Run = "solo" | "together";
 export type Target = "demand" | "workload" | "connection" | "edge" | "port" | "resource" | "linkResource";
+// 계약 오류의 행 번호가 가리키는 표. 탄력 배분의 단위 충돌은 단일 플러그인 호출에 귀속되지 않는다.
+const errorTarget = {
+  negotiate:"linkResource", pools:"linkResource", demand:"workload", match:"workload", assess:"workload", consume:"path", policy:"path",
+} as const satisfies Partial<Record<keyof DomainPlugin,"linkResource" | "workload" | "path">>;
+type EntryPoint = keyof typeof errorTarget;
 export interface PhysicalStep {
   connection: number; direction: Direction; order: number; entry: number; exit: number;
   kind: "mate" | "part"; verdict: Verdict; required: string; passages: number[][]; truncated: boolean; inputs: number[];
@@ -15,8 +20,8 @@ export interface Results {
   standingLoads: (Trace & { item: number; id: string; domain: string; amount: number | null; bounds?: { low: number; high: number }; unit: string;
     kind: "scene" | "link"; resource: number })[];
   physical: PhysicalStep[];
-  linkResources: { connection: number; domain: string; direction: Direction; absentDomain: number[]; pool?: Pool; service?: { mode?: string; unit: string; poolResource?: number } }[];
-  errors: { domain: string; spec: string; field?: string; resource?: number; stage: "negotiate" | "demand" | "consume"; row: number }[];
+  linkResources: { connection: number; domain: string; direction: Direction; declarationClaimsOnPortsWithoutDomain: number[]; pool?: Pool; service?: { mode?: string; unit: string; poolResource?: number } }[];
+  errors: { domain: string; spec: string; field?: string; resource?: number; entryPoint: EntryPoint | null; targetKind: typeof errorTarget[EntryPoint]; row: number }[];
   possibleVerdicts: { outcome: number; verdict: Verdict }[];
   quests: { outcome: number; claim: number; instruction: string; impact?: "range" | "verdict" }[];
   rangeInputs: { outcome: number; claim: number }[];
@@ -56,21 +61,21 @@ export function addReason(result: Results, reason: Results["reasons"][number], i
 }
 
 // 계약 위반은 호출한 링크 자원·워크로드·경로를 가리킨다. 유효한 규격은 그대로 추적한다.
-export function checkedTrace<T extends Trace>(result: Results, domain: string, stage: Results["errors"][number]["stage"], row: number, trace: T, resource?: number): T {
+export function checkedTrace<T extends Trace>(result: Results, domain: string, entryPoint: EntryPoint, row: number, trace: T, resource?: number): T {
   const specs = trace.specs.filter(id => result.specSources.some(s => s.domain === domain && s.id === id));
   if (specs.length === trace.specs.length) return trace;
   for (const spec of new Set(trace.specs.filter(id => !specs.includes(id)))) {
-    if (!result.errors.some(e => e.domain === domain && e.spec === spec && e.stage === stage && e.row === row && e.resource === resource))
-      result.errors.push({ domain, spec, stage, row, ...(resource === undefined ? {} : { resource }) });
+    if (!result.errors.some(e => e.domain === domain && e.spec === spec && e.entryPoint === entryPoint && e.row === row && e.resource === resource))
+      result.errors.push({ domain, spec, entryPoint, targetKind: errorTarget[entryPoint], row, ...(resource === undefined ? {} : { resource }) });
   }
   return { ...trace, specs };
 }
 
 // 영역 경계에서 유한한 수량만 받는다. 오류 행의 field는 플러그인이 반환한 필드를 가리킨다.
-export function checkedQuantity(result: Results, domain: string, stage: Results["errors"][number]["stage"],
+export function checkedQuantity(result: Results, domain: string, entryPoint: EntryPoint,
   row: number, field: string, value: number | null, resource?: number) {
   if (value === null || Number.isFinite(value)) return value;
-  if (!result.errors.some(e => e.domain === domain && e.stage === stage && e.row === row && e.field === field && e.resource === resource))
-    result.errors.push({ domain, stage, row, field, spec: "", ...(resource === undefined ? {} : { resource }) });
+  if (!result.errors.some(e => e.domain === domain && e.entryPoint === entryPoint && e.row === row && e.field === field && e.resource === resource))
+    result.errors.push({ domain, entryPoint, targetKind: errorTarget[entryPoint], row, field, spec: "", ...(resource === undefined ? {} : { resource }) });
   return null;
 }

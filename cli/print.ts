@@ -208,13 +208,11 @@ export function printResults(scene: Scene, result: Results): string {
 
   if (result.errors.length) {
     lines.push("", "영역 플러그인 계약 오류");
-    const steps = { negotiate: "링크 협상", demand: "수요 계산", consume: "자원 소비" };
     for (const e of result.errors) {
-      const name = e.stage === "negotiate" ? targetName("linkResource", e.row)
-        : targetName("workload", e.stage === "demand" ? e.row : result.paths[e.row]!.workload);
+      const name = e.targetKind === "path" ? targetName("workload", result.paths[e.row]!.workload) : targetName(e.targetKind, e.row);
       const what = e.spec ? `미등록 규격 ${e.spec}` : `유한하지 않은 ${e.field}`;
       const resource = e.resource === undefined ? "" : ` · 자원 ${targetName("resource", e.resource)}`;
-      lines.push(`  ${e.domain} · ${steps[e.stage]} · ${name}${resource} · ${what}`);
+      lines.push(`  ${e.domain} · ${e.entryPoint ?? "탄력 배분"} · ${name}${resource} · ${what}`);
     }
   }
   const history = scene.claims.flatMap((claim,row) => claim.inactive ? [{row,why:claim.inactive}] : []);

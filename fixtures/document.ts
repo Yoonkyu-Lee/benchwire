@@ -2,7 +2,7 @@
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { loadSceneDocuments } from "../scene/load.ts";
-import { plugins } from "../cli/domains.ts";
+import { plugins } from "../domains/registry.ts";
 
 export function fixture(folder: string, name: string) {
   const read = (key: string) => JSON.parse(readFileSync(join(import.meta.dirname, folder, key + ".json"), "utf8"));
