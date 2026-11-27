@@ -231,9 +231,79 @@ test("T8 패스스루 입력의 60 W에서 중간 장치의 10 W를 한 번 빼�
   assert.equal(shared.verdict, "ok");
   assert.deepEqual(result.measures.find(m => m.outcome === shared.outcome && m.run === "together"),
     { outcome: shared.outcome, run: "together", kind: "netCharge", unit: "W", low: 25, high: 25 });
-  assert.ok(one.reasons.some(r => r.stage === "negotiate" && /자체 소비 10 W/.test(r.rule)));
+  assert.ok(one.reasons.some(r => r.stage === "negotiate" && /공통 고정 PDO .*60 W/.test(r.rule)));
+  assert.ok(one.reasons.some(r => r.stage === "allocate" && /자체 소비 10 W/.test(r.rule)));
   assert.ok(one.citations.includes("relay"));
   assert.ok(one.specs.includes("pd-fixed"));
+});
+
+test("T8 패스스루의 자체 소비를 소스 총예산과 실제 입력 방향에 한 번씩 반영한다", () => {
+  const scene = read("passthrough");
+  const total = effectiveClaim(scene, "resource", 0, "power", "capacity")!;
+  const reserve = effectiveClaim(scene, "interface", scene.interfaces.findIndex(i => i.id === "in-power"), "power", "reserveW")!;
+  scene.claims[total]!.value = 45;
+  const input = scene.connections.find(c => c.id === "up")!;
+  [input.from, input.to] = [input.to, input.from];
+  for (const part of scene.parts.filter(p => p.connection === scene.connections.indexOf(input)))
+    [part.entry, part.exit] = [part.exit, part.entry];
+
+  const { result, work } = analyze(scene);
+  const one = work("solo", "primary");
+  assert.equal(one.metric("together").value, 35);
+  assert.ok(one.claims.includes(reserve));
+  assert.ok(one.citations.includes("relay"));
+  for (const id of ["primary", "secondary"]) {
+    const shared = work("shared", id);
+    assert.equal(shared.metric("solo").value, 35);
+    assert.equal(shared.metric("together").value, 17.5);
+    assert.ok(shared.claims.includes(reserve));
+  }
+  assert.deepEqual(result.standingErrors, []);
+  assert.deepEqual(result.standingLoads.map(l => [l.kind, l.amount]).sort(), [["link", 10], ["scene", 10]]);
+  const link = result.standingLoads.find(l => l.kind === "link")!;
+  assert.equal(result.linkResources[link.resource]!.direction, "reverse");
+  scene.claims[total]!.value = 90;
+  assert.equal(analyze(scene).work("solo", "primary").metric("together").value, 50);
+});
+
+test("T8 패스스루 자체 소비가 미확인이면 소스 총예산까지의 범위와 확인 퀘스트를 남긴다", () => {
+  const scene = read("passthrough");
+  const total = effectiveClaim(scene, "resource", 0, "power", "capacity")!;
+  const reserve = effectiveClaim(scene, "interface", scene.interfaces.findIndex(i => i.id === "in-power"), "power", "reserveW")!;
+  scene.claims[total]!.value = 45;
+  Object.assign(scene.claims[reserve]!, { value: null, confidence: "unknown" });
+
+  const { result, work } = analyze(scene);
+  const one = work("solo", "primary");
+  for (const run of ["solo", "together"] as const) {
+    const { low, high } = one.metric(run);
+    assert.deepEqual([low, high], [0, 45]);
+  }
+  assert.deepEqual(result.standingLoads.map(l => [l.kind, l.amount]).sort(), [["link", null], ["scene", null]]);
+  assert.ok(one.claims.includes(reserve));
+  assert.ok(one.citations.includes("relay"));
+  assert.ok(result.quests.some(q => q.outcome === one.outcome && q.claim === reserve && /패스스루 입력/.test(q.instruction)));
+});
+
+test("T8 작업이 패스스루를 지나지 않아도 전력을 받는 패스스루는 다른 포트와 총예산을 나눈다", () => {
+  const scene = read("passthrough");
+  const total = effectiveClaim(scene, "resource", 0, "power", "capacity")!;
+  scene.claims[total]!.value = 45;
+  const direct = scene.connections.find(c => c.id === "down")!;
+  direct.from = scene.ports.findIndex(p => p.item === scene.resources[0]!.item && p.id === "b");
+  const budget = scene.claims[effectiveClaim(scene, "item", scene.resources[0]!.item, "power", "budget:a:a")!]!;
+  for (const port of ["a", "b"]) scene.claims.push({ ...budget, field: "budget:a+b:" + port });
+
+  const { work } = analyze(scene);
+  const one = work("solo", "primary");
+  assert.equal(one.metric("together").value, 35);
+  assert.ok(one.citations.includes("relay"));
+
+  const sink = scene.interfaces.findIndex(i => i.id === "in-power");
+  scene.claims[effectiveClaim(scene, "interface", sink, "power", "accepts20")!]!.value = false;
+  const unavailable = analyze(scene);
+  assert.deepEqual(unavailable.result.standingLoads, []);
+  assert.equal(unavailable.work("solo", "primary").metric("together").value, 45);
 });
 
 test("T8 명시적인 미확인 소비와 목표는 가능한 순충전 판정과 확인 퀘스트로 남는다", () => {

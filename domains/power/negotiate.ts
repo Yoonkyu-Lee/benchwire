@@ -1,5 +1,4 @@
-// 고정 PDO와 케이블 등급을 교차해 전달 가능한 전력 경계와 그 근거를 낸다.
-// 전용 패스스루 입력의 상시 소비는 그 입력 링크 예산에서 한 번 차감한다.
+// 고정 PDO와 케이블 등급을 교차해 링크의 총 전력 한도와 그 근거를 낸다.
 import { effectiveClaim, type Link, type Option, type Scene } from "../../engine/contract.ts";
 import {
   USB_C_EPR_CABLE_REPORTED_VOLTAGE_V, USB_C_UNMARKED_CABLE_MAX_CURRENT_A, USB_PD_FIXED_SOURCE_LIMITS,
@@ -37,7 +36,7 @@ function cableCurrent(scene: Scene, cables: (number | undefined)[], epr: boolean
   return [low, high] as const;
 }
 
-export function negotiatePower({ scene, ports }: Link): Option[] {
+export function negotiatePower({ scene, ports }: Link): [Option] {
   const inputs: number[] = [];
   const option = { mode: PD, unit: POWER_UNIT, condition: "", inputs, specs: [PD_FIXED] };
   function find(port: number, protocol: string, role: string) {
@@ -85,12 +84,6 @@ export function negotiatePower({ scene, ports }: Link): Option[] {
     low = Math.min(low, budget.value ?? 0);
     high = Math.min(high, budget.value ?? high);
     rules.push(budget.value === null ? "접속 포트 조합표의 한도 미확인" : `접속 포트 조합표 한도 ${budget.value} W`);
-  }
-  const reserve = field(scene, sink, "reserveW", inputs) as number | null | undefined;
-  if (reserve !== undefined) {
-    low = reserve === null ? 0 : Math.max(0, low - reserve);
-    high = Math.max(0, high - (reserve ?? 0));
-    rules.push(reserve === null ? "패스스루 자체 소비 미확인" : `패스스루 자체 소비 ${reserve} W 우선 사용`);
   }
   const rule = rules.join(", ");
   return low === high ? [{ ...option, verdict: high > 0 ? "ok" : "impossible", limit: high, rule }] :

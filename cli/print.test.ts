@@ -81,6 +81,52 @@ test("CLI 명령은 경로 옵션으로 장면을 열고 시험 전용 영역을
   assert.match(processResult.stdout, /시나리오 all/u);
 });
 
+test("T2 CLI는 선택한 연결 설정과 근거를 보이고 --variants에서 다른 설정의 판정과 성능을 보인다", () => {
+  const setup = `
+    import { trial } from ${JSON.stringify(new URL("./domains.ts", import.meta.url).href)};
+    const negotiate = trial.negotiate;
+    trial.negotiate = link => {
+      const options = negotiate(link);
+      const wire = link.scene.connections[link.connection];
+      if (wire.id !== "wire-a") return options;
+      return options.flatMap(o => ["C", "D"].map(profile => ({ ...o, profile,
+        limit: profile === "C" ? 100 : 50, rule: "시험 핀 " + profile, inputs: [...o.inputs, wire.evidence] })));
+    };
+  `;
+  const args = ["--import", "data:text/javascript," + encodeURIComponent(setup), "cli/evaluate.ts", sceneFile];
+  const base = spawnSync(process.execPath, args, { encoding: "utf8" });
+  assert.equal(base.status, 0, base.stderr);
+  const [summary, evidence] = base.stdout.split(/\r?\n근거\r?\n/u);
+  assert.match(summary!, /시나리오 all\s+연결 설정 wire-a · C/u);
+  const choice = evidence!.split(/연결 설정 wire-a · C/u)[1]!.split(/(?:✅|⚠️|❌|❓)/u)[0]!;
+  assert.match(choice, /시험 핀 C/u);
+  assert.match(choice, /주장 wire-a · connection = true/u);
+  assert.match(choice, /출처 scene 합성 시험 정의 \(fixture:scene\)/u);
+  assert.match(choice, /규격 합성 펄스 규격 \(fixture:pulse-spec\)/u);
+  assert.doesNotMatch(base.stdout, /대안 1/u);
+
+  const expanded = spawnSync(process.execPath, [...args, "--variants"], { encoding: "utf8" });
+  assert.equal(expanded.status, 0, expanded.stderr);
+  const [primary, alternative] = expanded.stdout.split("대안 1 · 시나리오 all");
+  assert.match(primary!, /시나리오 all\s+연결 설정 wire-a · C/u);
+  assert.match(primary!, /\n근거\n/u);
+  assert.match(alternative!, /연결 설정 wire-a · C → D/u);
+  const workload = alternative!.split(/⚠️ 워크로드 a\b/u)[1]!.split(/(?:✅|⚠️|❌|❓) 워크로드/u)[0]!;
+  assert.match(workload, /동시 성능 50 회\/s/u);
+});
+
+test("T2 CLI는 시나리오별로 조합 탐색이 잘린 사실과 확인한 조합 수를 보인다", () => {
+  const plugin = trialDomain();
+  const scene = loadScene(sceneFile, files, [plugin]);
+  const negotiate = plugin.negotiate;
+  plugin.negotiate = link => negotiate(link).flatMap(o => link.connection === 0
+    ? Array.from({ length: 140 }, (_, index) => ({ ...o, profile: `시험-${index}` })) : [o]);
+  const result = evaluate(scene, [plugin]);
+  const output = printResults(scene, result);
+  assert.equal(result.searches[0]?.truncated, true);
+  assert.match(output.split("시나리오 all\n")[1]!, new RegExp(`조합 탐색이 잘림 · 확인한 조합 ${result.searches[0]!.examined}개`, "u"));
+});
+
 test("CLI 출력에 모르는 정책의 범위와 가정값, 가능한 판정, 확인할 것이 보인다", () => {
   const plugins = [trialDomain()];
   const scene = loadScene(sceneFile, files, plugins);
@@ -93,7 +139,19 @@ test("CLI 출력에 모르는 정책의 범위와 가정값, 가능한 판정, �
   assert.match(b, /동시 성능 범위 0 회\/s ~ 800 회\/s/u);
   assert.match(b, /동시 성능 400 회\/s \(가정\)/u);
   assert.match(b, /가능한 판정 .*✅.*/u);
-  assert.match(b, /확인할 것 · .+ \(host\/trunk · policy\)/u);
+  assert.match(b, /확인할 것 · .+ \(host\/trunk · policy\) · 판정을 가름/u);
+});
+
+test("T8 CLI는 판정이 같고 전달량만 달라지는 퀘스트의 영향을 보인다", () => {
+  const dir = "fixtures/power";
+  const scene = loadScene(dir + "/single-port.json", { modelsDir: dir, connectorsFile: dir + "/connectors.json" }, [power]);
+  scene.interfaces.forEach((port, row) => {
+    if (port.role !== "cable") return;
+    scene.claims[effectiveClaim(scene, "interface", row, "power", "eMarked")!]!.value = true;
+    Object.assign(scene.claims[effectiveClaim(scene, "interface", row, "power", "currentA")!]!, { value: null, confidence: "unknown" });
+  });
+  const output = printResults(scene, evaluate(scene, [power]));
+  assert.match(output, /✅ 워크로드 idle[^]*?확인할 것 · [^\n]*currentA\) · 범위만 좁힘/u);
 });
 
 test("T8 CLI 출력에 단독·동시 전달량과 순충전 전력 및 가능한 판정이 보인다", () => {

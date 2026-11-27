@@ -4,12 +4,13 @@ import { assessCharge, DEFAULT_TARGET_W } from "./charge.ts";
 import { attributes, params, paramsFor, PD, POWER, POWER_UNIT, request } from "./input.ts";
 import { negotiatePower } from "./negotiate.ts";
 import { sources } from "./sources.ts";
+import { standingLoads } from "./standing-loads.ts";
 
 const labels: Record<Verdict, string> = { ok: "성립", conditional: "조건부", impossible: "불가", unknown: "미확인" };
 
 export const power: DomainPlugin = {
   id: POWER, sources, params, paramsFor, attributes, request, resourceUnits: [POWER_UNIT],
-  negotiate: negotiatePower,
+  negotiate: negotiatePower, standingLoads,
   demand(scene, workload) {
     const claim = effectiveClaim(scene, "workload", workload, POWER, "requestedW")!;
     const requested = scene.claims[claim]!.value as number | null;
