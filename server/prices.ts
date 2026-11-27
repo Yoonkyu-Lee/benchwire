@@ -6,6 +6,7 @@ import { productRef, revisionRef } from "../scene/files.ts";
 import { LibraryError, writeAtomic, type openLibrary } from "./library.ts";
 import { confirmedLine, inspectLine, MAX_INVENTORY_ITEMS, type openReceipt } from "./receipt.ts";
 import type { openBestBuy } from "./bestbuy.ts";
+import { openSettings, preferredSellers } from "./settings.ts";
 
 const money = z.int().nonnegative();
 const quoteFile = productRef.extend({
@@ -15,8 +16,6 @@ const quoteFile = productRef.extend({
   coupon: z.string().trim().min(1).optional(), discountCents: money.optional(), purchasedAt: z.iso.date().optional(),
   importId:z.string().optional(), name:z.string().optional(), quantity:z.int().positive().optional(), lineTotalCents:money.optional(),
 }).refine(q => (q.discountCents ?? 0) <= q.unitPriceCents, {path:["discountCents"], message:"적용 할인은 판매가 이하여야 합니다"});
-const sellers = z.array(productRef.shape.seller).refine(values => new Set(values).size === values.length, "판매처가 중복됩니다");
-const settingsFile = z.looseObject({ preferredSellers: sellers.default([]) });
 export type Quote = z.infer<typeof quoteFile> & {expiresAt?:string};
 export type ProductRef = z.infer<typeof productRef>;
 export interface PriceProvider {
@@ -47,7 +46,8 @@ export function manualProvider(rows: Quote[]) {
 }
 
 export function openPrices(dir: string, bestBuy?: ReturnType<typeof openBestBuy>, receipt?: ReturnType<typeof openReceipt>) {
-  const pricePath = join(dir, "prices.json"), settingsPath = join(dir, "settings.json");
+  const pricePath = join(dir, "prices.json");
+  const settings = openSettings(dir);
   function read<T>(file: string, schema: z.ZodType<T>, fallback: T): T {
     let text: string;
     try { text = readFileSync(file,"utf8"); }
@@ -58,11 +58,11 @@ export function openPrices(dir: string, bestBuy?: ReturnType<typeof openBestBuy>
     return schema.parse(JSON.parse(text));
   }
   const rows = () => read(pricePath, z.array(quoteFile), []);
-  const settings = () => read(settingsPath, settingsFile, { preferredSellers: [] });
+
   return {
     book(): PriceBook {
       const all = rows();
-      return {quotes:[...manualProvider(all).search(""),...bestBuy?.quotes() ?? []],preferredSellers:settings().preferredSellers,
+      return {quotes:[...manualProvider(all).search(""),...bestBuy?.quotes() ?? []],preferredSellers:settings.read().preferredSellers,
         observations:all.filter(q => q.importId),...(receipt && {providers:{receipt:receipt.config,bestbuy:!!bestBuy?.enabled}})};
     },
     async bestBuy(body: unknown, library: ReturnType<typeof openLibrary>) {
@@ -113,8 +113,7 @@ export function openPrices(dir: string, bestBuy?: ReturnType<typeof openBestBuy>
       writeAtomic(pricePath, JSON.stringify(updated, null, 2) + "\n");
     },
     prefer(body: unknown) {
-      const preferredSellers = validate(sellers, body);
-      writeAtomic(settingsPath, JSON.stringify({...settings(), preferredSellers}, null, 2) + "\n");
+      settings.prefer(validate(preferredSellers, body));
     },
   };
 }

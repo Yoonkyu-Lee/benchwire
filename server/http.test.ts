@@ -81,6 +81,30 @@ test("T9 수동 견적·우선순위는 재시작 뒤 유지되고 품절·묶�
   assert.equal(JSON.parse(readFileSync(join(files.dataDir,"settings.json"),"utf8")).language,"ko");
 });
 
+test("처음 도움말만 기억하고 판매처 우선순위와 기존 설정을 함께 보존한다", async t => {
+  const files = workspace(t);
+  const app = await files.open();
+  const path = "/api/settings/help";
+  assert.deepEqual(await (await app.get(path)).json(), { helpDismissed: false });
+  assert.equal((await app.put("/api/prices/preferences", ["판매처 A"])).status, 200);
+  const file = join(files.dataDir, "settings.json");
+  const read = () => JSON.parse(readFileSync(file, "utf8"));
+  writeFileSync(file, JSON.stringify({ ...read(), language: "ko" }));
+
+  for (const body of [{ helpDismissed: false }, { helpDismissed: true, preferredSellers: [] }])
+    assert.equal((await app.put(path, body)).status, 422);
+  assert.equal((await fetch(app.origin + path, { method: "PUT", body: '{"helpDismissed":true}' })).status, 403);
+  assert.deepEqual(await (await app.get(path)).json(), { helpDismissed: false });
+  for (let i = 0; i < 2; i++) assert.equal((await app.put(path, { helpDismissed: true })).status, 204);
+  assert.deepEqual(read(), { language: "ko", preferredSellers: ["판매처 A"], helpDismissed: true });
+
+  await app.close();
+  const reopened = await files.open();
+  assert.deepEqual(await (await reopened.get(path)).json(), { helpDismissed: true });
+  assert.equal((await reopened.put("/api/prices/preferences", ["판매처 B"])).status, 200);
+  assert.deepEqual(read(), { language: "ko", preferredSellers: ["판매처 B"], helpDismissed: true });
+});
+
 test("T9 장면 저장은 없는 실물·연결, 음수 상한, 분수 구매 수량을 필드 위치에서 거절한다", async t => {
   const app = await workspace(t).open();
   const doc = await (await app.get("/api/scenes/network")).json() as SceneDocument;

@@ -1,6 +1,6 @@
 // 화면 시험과 성능 측정에 독립적인 임시 서버와 Edge 세션을 제공한다.
 import assert from "node:assert/strict";
-import { mkdir, mkdtemp, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import type { Server } from "node:http";
 import { basename, dirname, join, resolve } from "node:path";
 import { after, before } from "node:test";
@@ -12,7 +12,7 @@ import { openBestBuy } from "../server/bestbuy.ts";
 
 export const viewport = { width: 1440, height: 900 };
 
-export function edgeSession() {
+export function edgeSession({ firstRun = false } = {}) {
   const root = resolve("app");
   const work = resolve("work");
   const prefix = "edge-session-";
@@ -37,6 +37,11 @@ export function edgeSession() {
   before(async () => {
     await mkdir(work, { recursive: true });
     scratch = await mkdtemp(join(work, prefix));
+    if (!firstRun) {
+      const data = join(scratch, "data");
+      await mkdir(data);
+      await writeFile(join(data, "settings.json"), JSON.stringify({ helpDismissed: true }));
+    }
     await build({ root, logLevel: "error", build: { outDir: join(scratch, "app"),
       rolldownOptions: { input: [join(root, "index.html"), join(root, "testbed.html")] } } });
     await openServer();

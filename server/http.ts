@@ -13,6 +13,7 @@ import { openPrices } from "./prices.ts";
 import { openBestBuy } from "./bestbuy.ts";
 import { openReceipt } from "./receipt.ts";
 import { serverKey } from "./claude.ts";
+import { openSettings } from "./settings.ts";
 
 const HOST = "127.0.0.1";
 const PORT = 3210;
@@ -75,6 +76,7 @@ function staticFile(buildDir: string, path: string, response: ServerResponse): b
 export async function startServer({ port = PORT, dataDir = join(ROOT, "userdata"), buildDir = join(ROOT, "dist", "app"),
   researchClient = configuredResearchClient(ROOT), bestBuy = openBestBuy(serverKey(ROOT,"BESTBUY_API_KEY")) } = {}) {
   const library = openLibrary(ROOT, dataDir);
+  const settings = openSettings(dataDir);
   const receipt = openReceipt(dataDir,researchClient);
   const prices = openPrices(dataDir,bestBuy,receipt);
   const { connectors } = library.describe();
@@ -88,6 +90,16 @@ export async function startServer({ port = PORT, dataDir = join(ROOT, "userdata"
     const origin = "http://" + host;
     const [path = "/", search] = (request.url ?? "/").split("?", 2);
     const method = request.method;
+    if (path === "/api/settings/help" && (method === "GET" || method === "PUT")) {
+      if (method === "GET") {
+        const { helpDismissed } = settings.read();
+        response.writeHead(200, {"Content-Type":JSON_TYPE}).end(JSON.stringify({ helpDismissed }));
+      } else {
+        settings.dismissHelp(await readJson(request, origin));
+        response.writeHead(204).end();
+      }
+      return;
+    }
     if (method === "POST" && ["/api/prices/receipt","/api/prices/confirm","/api/prices/bestbuy"].includes(path)) {
       const body = await readJson(request,origin,path.endsWith("/receipt") ? Math.ceil(receipt.config.imageBytes/3)*4 + 1024 : JSON_LIMIT);
       const result = path.endsWith("/receipt") ? await receipt.parse(body) : path.endsWith("/confirm")

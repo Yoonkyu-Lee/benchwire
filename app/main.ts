@@ -4,6 +4,7 @@ import { loadAssessment } from "./assessment.ts";
 import { moveConnectionEnd, requiredMateCapabilities } from "./connection.ts";
 import { addConnection, modelKey, place, type Library, type SceneDocument, type SceneIntent } from "./document.ts";
 import { mountWorkbench } from "./workbench.ts";
+import { mountHelp } from "./help.ts";
 import { scenarioName } from "../scene/files.ts";
 
 const root = document.querySelector<HTMLElement>("#app")!;
@@ -200,6 +201,7 @@ async function start() {
     defaultSceneId: string; scenes: { id: string; title: string }[];
   };
   for (const { id, title } of library.scenes) picker.add(new Option(title, id));
+  const help = mountHelp(fetchLocal);
 
   let saved: SceneDocument;
   let draft: SceneDocument;
@@ -229,6 +231,7 @@ async function start() {
       picker.value = id;
       root.querySelector(".scene-title h1")!.replaceWith(picker);
       root.querySelector(".stage")!.append(notice);
+      root.querySelector(".view-controls")!.append(help.trigger);
       status();
     } finally {
       root.inert = false;
@@ -358,6 +361,7 @@ async function start() {
   picker.addEventListener("change", () => { void open(picker.value); });
   reopen.addEventListener("click", () => { void open(saved.sceneId); });
   await open(library.defaultSceneId);
+  if (root.contains(help.trigger)) void help.showOnFirstRun();
 }
 
 void start();
