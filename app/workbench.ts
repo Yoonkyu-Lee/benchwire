@@ -11,17 +11,19 @@ import { moveConnectionEnd, occupiedPorts, requiredMateCapabilities } from "./co
 import { addConnection, modelKey, place, portKey, type InventoryItem, type Library, type SceneDocument, type SceneIntent } from "./document.ts";
 import { mountEvidence } from "./evidence.ts";
 import { showFieldError } from "./field.ts";
-import { INVENTORY_DRAG, mountInventory } from "./inventory.ts";
+import { INVENTORY_DRAG, MODEL_DRAG, mountInventory } from "./inventory.ts";
 import { mountLayers } from "./layers.ts";
 import { CARD_WIDTH } from "./layout.ts";
 import { mountQuests } from "./quests.ts";
 import { resultView, type ResultView } from "./results.ts";
 import { mountScenario } from "./scenario.ts";
+import { mountSwap } from "./swap-view.ts";
 
 export function mountWorkbench(root: HTMLElement, initial: SceneDocument, library: Library, options: {
   title?: string;
   scenarioId?: string;
   onChange?: (document: SceneDocument, intent: SceneIntent) => void | Promise<boolean>;
+  onSaveCopy?: (document: SceneDocument) => Promise<void>;
   onSelectConnection?: (id: string) => void;
   onSelectScenario?: (id: string) => void;
 } = {}) {
@@ -212,16 +214,29 @@ export function mountWorkbench(root: HTMLElement, initial: SceneDocument, librar
     display.toggleAttribute("data-reduced-motion", reducedMotion);
     canvas.setReduced(reducedMotion);
   };
+  const compareSlot = options.onSaveCopy && mountSwap(root, documents, options.onSaveCopy);
+  function dropTarget(target: EventTarget | null) {
+    return target instanceof Element ? target.closest<SVGGElement>("[data-instance]")?.dataset.instance : undefined;
+  }
   stage.addEventListener("dragover", event => {
-    if (!event.dataTransfer?.types.includes(INVENTORY_DRAG)) return;
+    const transfer = event.dataTransfer;
+    if (!transfer || !(transfer.types.includes(INVENTORY_DRAG) ||
+      compareSlot && dropTarget(event.target) && transfer.types.includes(MODEL_DRAG))) return;
     event.preventDefault();
-    event.dataTransfer.dropEffect = "copy";
+    transfer.dropEffect = "copy";
   });
   stage.addEventListener("drop", event => {
-    const item = stock.get(event.dataTransfer?.getData(INVENTORY_DRAG) ?? "");
-    if (!item) return;
-    event.preventDefault();
-    edit({ kind: "add-item", item, position: canvas.fromClient({ x: event.clientX, y: event.clientY }) });
+    const transfer = event.dataTransfer;
+    const item = stock.get(transfer?.getData(INVENTORY_DRAG) ?? "");
+    const target = dropTarget(event.target);
+    const replacement = models.get(item ? modelKey(item) : transfer?.getData(MODEL_DRAG) ?? "");
+    if (target && replacement && compareSlot) {
+      event.preventDefault();
+      if (item?.instanceId !== target) compareSlot(scene, target, replacement, readScenario());
+    } else if (item) {
+      event.preventDefault();
+      edit({ kind: "add-item", item, position: canvas.fromClient({ x: event.clientX, y: event.clientY }) });
+    }
   });
 
   function render(flash?: ReadonlySet<string>) {

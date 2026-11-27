@@ -43,7 +43,7 @@ h1 { margin: 0; font-size: 17px; font-weight: 700; white-space: nowrap; }
 .workspace { display: grid; grid-template-columns: 262px minmax(0, 1fr); height: calc(100dvh - 72px); min-height: 380px; }
 .inventory { z-index: 1; overflow: auto; padding: 21px 16px; border-right: 1px solid var(--line); background: #fff; }
 .inventory h2 { margin: 0 0 17px; font-size: 16px; }
-.inventory-tabs { display: grid; grid-template-columns: repeat(3, 1fr); gap: 4px; padding: 3px; border-radius: 7px; background: #ecf2f2; }
+.inventory-tabs { display: grid; grid-template-columns: repeat(4, 1fr); gap: 4px; padding: 3px; border-radius: 7px; background: #ecf2f2; }
 .inventory-tabs button { border: 1px solid transparent; border-radius: 5px; background: none; padding: 7px 2px; color: var(--muted); }
 .inventory-tabs button[aria-pressed="true"] { color: #133d3d; font-weight: 700; background: #fff; border-color: #d5e1e3; }
 .inventory-list { display: grid; gap: 8px; margin-top: 14px; }
@@ -297,3 +297,19 @@ h1 { margin: 0; font-size: 17px; font-weight: 700; white-space: nowrap; }
 .port.rewire-port .port-hit { cursor: grab; }
 .view-controls { flex-wrap: wrap; max-width: calc(100% - 28px); }
 .view-controls button[aria-pressed="true"] { background: #e1f2ee; color: #164c46; }
+
+/* 슬롯 교체 사본의 위치 선택과 기술·비용 비교 */
+.swap-dialog { width: min(840px, 94vw); }
+.swap-dialog .creator-body > section { margin-bottom: 12px; }
+.swap-dialog .creator-body > section:empty { display: none; }
+.swap-dialog .creator-body > p > small { display: block; margin-top: 4px; color: var(--muted); }
+.swap-dialog label { display: grid; gap: 4px; margin: 6px 0; }
+.swap-dialog select { width: 100%; padding: 6px; border: 1px solid var(--line); border-radius: 4px; background: #fff; }
+.swap-comparison { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
+.swap-comparison section { padding: 12px; border: 1px solid var(--line); border-radius: 7px; }
+.swap-comparison h3 { margin: 0 0 8px; }
+.swap-dialog footer { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 0 14px; }
+.swap-dialog footer p { min-height: 1em; }
+.swap-dialog button { border: 1px solid var(--line); border-radius: 5px; padding: 5px 10px; background: #fff; }
+.swap-dialog footer button:not(:disabled) { background: var(--accent); color: #fff; border-color: var(--accent); }
+@media (max-width: 600px) { .swap-comparison { grid-template-columns: 1fr; } }

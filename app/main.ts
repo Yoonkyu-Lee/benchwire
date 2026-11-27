@@ -231,7 +231,7 @@ async function start() {
       }
       const scene = await result.json() as SceneDocument;
       workbench?.dispose();
-      workbench = mountWorkbench(root, scene, library, { onChange: edited });
+      workbench = mountWorkbench(root, scene, library, { onChange: edited, onSaveCopy: saveCopy });
       draft = saved = scene;
       etag = tag;
       mustReopen = false;
@@ -243,6 +243,26 @@ async function start() {
       root.inert = false;
       reopen.disabled = false;
     }
+  }
+
+  async function saveCopy(document: SceneDocument) {
+    const path = "/api/scenes/" + encodeURIComponent(document.sceneId);
+    const result = await fetchLocal(path, {
+      method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify(document),
+    });
+    if (!result || result.status === 428) {
+      const existing = await fetchLocal(path);
+      if (!existing?.ok || !same(await existing.json(), document))
+        throw new Error("사본 저장 결과를 확인하지 못했습니다.");
+    } else if (result.status === 201) {
+      const created = await result.json() as SceneDocument;
+      if (created.sceneId !== document.sceneId) throw new Error("저장된 사본 ID가 요청과 다릅니다.");
+    } else {
+      const problem = await result.json() as { path?: string; message?: string };
+      throw new Error([problem.path, problem.message].filter(Boolean).join(" · ") || "사본을 저장할 수 없습니다.");
+    }
+    if (!Array.from(picker.options).some(row => row.value === document.sceneId))
+      picker.add(new Option(document.sceneId, document.sceneId));
   }
 
   function edited(after: SceneDocument, intent: SceneIntent) {

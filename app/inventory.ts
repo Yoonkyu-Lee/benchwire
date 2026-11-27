@@ -1,9 +1,10 @@
-// 보유·후보 실물을 고르고 캔버스에 놓거나 다음 연결의 케이블로 선택한다.
+// 인벤토리 실물과 라이브러리 모델 카드를 배치·슬롯 교체·연결에 내보낸다.
 import { modelKey, type InventoryItem, type Library, type SceneDocument } from "./document.ts";
 import { inventoryStats, type CardMeasurements } from "./cards.ts";
 
 export const INVENTORY_DRAG = "application/x-benchwire-item";
-const tabs = { owned: "보유", candidate: "후보", recommended: "추천" } as const;
+export const MODEL_DRAG = "application/x-benchwire-model";
+const tabs = { owned: "보유", candidate: "후보", models: "모델", recommended: "추천" } as const;
 type Tab = keyof typeof tabs;
 
 export function mountInventory(root: HTMLElement, library: Pick<Library, "inventory" | "models">, actions: {
@@ -34,6 +35,15 @@ export function mountInventory(root: HTMLElement, library: Pick<Library, "invent
     bar.append(button);
   }
 
+  function draggable(row: HTMLElement, type: string, value: string) {
+    row.draggable = true;
+    row.addEventListener("dragstart", event => {
+      if (!event.dataTransfer) { event.preventDefault(); return; }
+      event.dataTransfer.effectAllowed = "copy";
+      event.dataTransfer.setData(type, value);
+    });
+  }
+
   function show() {
     for (const [key, button] of buttons) button.setAttribute("aria-pressed", String(tab === key));
     const focus = list.contains(document.activeElement) ? document.activeElement as HTMLButtonElement : null;
@@ -43,6 +53,20 @@ export function mountInventory(root: HTMLElement, library: Pick<Library, "invent
       message.className = "inventory-empty";
       message.textContent = "표시할 추천 장비가 없습니다.";
       rows.append(message);
+    } else if (tab === "models") for (const [key, model] of models) {
+      const row = document.createElement("article");
+      row.className = "inventory-item";
+      row.dataset.modelCard = key;
+      draggable(row, MODEL_DRAG, key);
+      const name = document.createElement("strong");
+      name.textContent = model.name;
+      const detail = document.createElement("span");
+      detail.className = "inventory-detail";
+      detail.textContent = [model.brand, model.category, "판본 " + model.revision].filter(Boolean).join(" · ");
+      row.append(name, detail);
+      const stats = inventoryStats(model);
+      if (stats.childElementCount) row.append(stats);
+      rows.append(row);
     } else for (const item of library.inventory) {
       if (item.state !== tab) continue;
       const model = models.get(modelKey(item));
@@ -52,12 +76,7 @@ export function mountInventory(root: HTMLElement, library: Pick<Library, "invent
       row.className = "inventory-item";
       const isPlaced = placed.has(item.instanceId);
       const isUsed = used.has(item.instanceId);
-      row.draggable = !isPlaced;
-      row.addEventListener("dragstart", event => {
-        if (!event.dataTransfer || isPlaced) { event.preventDefault(); return; }
-        event.dataTransfer.effectAllowed = "copy";
-        event.dataTransfer.setData(INVENTORY_DRAG, item.instanceId);
-      });
+      draggable(row, INVENTORY_DRAG, item.instanceId);
       const name = document.createElement("strong");
       name.textContent = item.alias || model.name;
       const detail = document.createElement("span");
