@@ -59,12 +59,12 @@ export const HDMI_21_FRL_LINK_RATES = [
 // 출처: VESA USB DevDays (2019) pp. 21–23, VESA SF Workshop (2025) “DP Alt Mode Capability VDO” (신뢰도: official)
 // 출처: USB Type-C and Power Delivery DisplayPort Alternate Mode, 표 1 및 DisplayPortAltModePinAssignment.aidl (A·B·F 기존 배치, 신뢰도: review)
 export const DP_ALT_MODE_PIN_ASSIGNMENTS = [
-  { pin: "A", maxDpLanes: 4, usb3xDifferentialPairs: 0, deprecated: true },
-  { pin: "B", maxDpLanes: 2, usb3xDifferentialPairs: 2, deprecated: true },
-  { pin: "C", maxDpLanes: 4, usb3xDifferentialPairs: 0, deprecated: false },
-  { pin: "D", maxDpLanes: 2, usb3xDifferentialPairs: 2, deprecated: false },
-  { pin: "E", maxDpLanes: 4, usb3xDifferentialPairs: 0, deprecated: false },
-  { pin: "F", maxDpLanes: 2, usb3xDifferentialPairs: 2, deprecated: true },
+  { pin: "A", maxDpLanes: 4 },
+  { pin: "B", maxDpLanes: 2 },
+  { pin: "C", maxDpLanes: 4 },
+  { pin: "D", maxDpLanes: 2 },
+  { pin: "E", maxDpLanes: 4 },
+  { pin: "F", maxDpLanes: 2 },
 ] as const;
 
 // 순차주사의 줄 주기(μs)는 (명목 프레임 주기 − 최소 수직 블랭킹 시간) ÷ 활성 줄 수로 추정한다.
@@ -81,23 +81,6 @@ export const CVT_RB_V2_MIN_VERTICAL_BLANK_LINES = 1 + 8 + 6; // 앞 여백 + 동
 
 // 출처: VESA Coordinated Video Timings 1.2 §5.4 표 5-4 (신뢰도: official)
 export const CVT_RB_V2_PIXEL_CLOCK_STEP_HZ = 1000;
-
-// 영상 최적화 타이밍의 목표 Hz에만 곱한다. 블랭킹 줄 수에는 명목 Hz를 쓴다.
-// 출처: VESA Coordinated Video Timings 1.2 §3.4.3, §5.4 및 표 5-4 (신뢰도: official)
-export const CVT_RB_V2_VIDEO_REFRESH_MULTIPLIER = 1000 / 1001;
-
-// 같은 압축 스트림의 송신 끝은 인코딩, 수신 끝은 디코딩을 지원해야 한다.
-// 4:4:4 목표 범위는 공개 예시다. 사용할 bpp는 전송 규격과 양쪽 끝의 공통 지원으로 정한다.
-// 출처: VESA Tokyo Workshop (2024) “Interoperable End-to-End Visual Ecosystem”, VESA DSC FAQ 및 Display Compression Codecs 비교표 (신뢰도: official)
-export const DSC_444_EXAMPLE_TARGET_RANGE_BPP = [8, 12] as const;
-
-// 보통 조건에서 시각적 무손실 품질을 위한 권고 하한이다.
-// 출처: VESA DSC Source Device Guidelines 1.0 “Bit Rate vs. Mean Squared Error” (신뢰도: official)
-export const DSC_VISUALLY_LOSSLESS_RECOMMENDED_MIN_BPP = [
-  { chroma: "4:4:4", bpp: 8 },
-  { chroma: "4:2:2", bpp: 7 },
-  { chroma: "4:2:0", bpp: 6 },
-] as const;
 
 // 휘도 1표본과 가로·세로 서브샘플링을 반영한 색차 2성분의 표본 수를 합한다.
 // 출처: ITU-T H.266 표 2 “SubWidthC and SubHeightC” (신뢰도: official)

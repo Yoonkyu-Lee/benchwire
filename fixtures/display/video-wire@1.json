@@ -1,0 +1,24 @@
+{
+  "modelId": "video-wire",
+  "revision": "1",
+  "kind": "cable",
+  "name": "합성 영상 통과 케이블",
+  "brand": "합성",
+  "category": "영상 시험",
+  "sources": [
+    {"id":"video-wire","title":"합성 영상 통과 케이블","locator":"fixture:display/video-wire","retrievedAt":"2026-11-26"}
+  ],
+  "nodes": [
+    {"id":"end-a","label":"end-a","kind":"junction"},
+    {"id":"end-b","label":"end-b","kind":"junction"}
+  ],
+  "ports": [
+    {"id":"a","label":"a","connector":{"value":"dp-plug","confidence":"inferred","sources":["video-wire"]},"attachment":{"value":"end-a","confidence":"inferred","sources":["video-wire"]},"interfaces":[{"id":"video-1","domain":"display","protocol":"DP","role":"bidirectional","evidence":{"value":true,"confidence":"inferred","sources":["video-wire"]},"params":{"maxRate":{"value":"HBR3","confidence":"inferred","sources":["video-wire"]},"lanes":{"value":4,"confidence":"inferred","sources":["video-wire"]}}}]},
+    {"id":"b","label":"b","connector":{"value":"dp-plug","confidence":"inferred","sources":["video-wire"]},"attachment":{"value":"end-b","confidence":"inferred","sources":["video-wire"]},"interfaces":[{"id":"video-2","domain":"display","protocol":"DP","role":"bidirectional","evidence":{"value":true,"confidence":"inferred","sources":["video-wire"]},"params":{"maxRate":{"value":"HBR3","confidence":"inferred","sources":["video-wire"]},"lanes":{"value":4,"confidence":"inferred","sources":["video-wire"]}}}]}
+  ],
+  "edges": [
+    {"id":"a-b","from":"end-a","to":"end-b","evidence":{"value":true,"confidence":"inferred","sources":["video-wire"]},"uses":[]},
+    {"id":"b-a","from":"end-b","to":"end-a","evidence":{"value":true,"confidence":"inferred","sources":["video-wire"]},"uses":[]}
+  ],
+  "resources": []
+}

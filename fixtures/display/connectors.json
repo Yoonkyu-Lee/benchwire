@@ -1,0 +1,18 @@
+{
+  "sources": [
+    {"id":"video-fit","title":"합성 영상 커넥터 결합표","locator":"fixture:display/video-fit","retrievedAt":"2026-11-26"}
+  ],
+  "connectors": [
+    {"id":"dp-plug","endForm":{"value":"plug","confidence":"inferred","sources":["video-fit"]}},
+    {"id":"dp-receptacle","endForm":{"value":"receptacle","confidence":"inferred","sources":["video-fit"]}},
+    {"id":"usb-c-plug","endForm":{"value":"plug","confidence":"inferred","sources":["video-fit"]}},
+    {"id":"usb-c-receptacle","endForm":{"value":"receptacle","confidence":"inferred","sources":["video-fit"]}},
+    {"id":"hdmi-plug","endForm":{"value":"plug","confidence":"inferred","sources":["video-fit"]}},
+    {"id":"hdmi-receptacle","endForm":{"value":"receptacle","confidence":"inferred","sources":["video-fit"]}}
+  ],
+  "mates": [
+    {"a":"dp-plug","b":"dp-receptacle","evidence":{"value":true,"confidence":"inferred","sources":["video-fit"]}},
+    {"a":"usb-c-plug","b":"usb-c-receptacle","evidence":{"value":true,"confidence":"inferred","sources":["video-fit"]}},
+    {"a":"hdmi-plug","b":"hdmi-receptacle","evidence":{"value":true,"confidence":"inferred","sources":["video-fit"]}}
+  ]
+}

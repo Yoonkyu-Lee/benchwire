@@ -1,0 +1,22 @@
+{
+  "modelId": "video-sink",
+  "revision": "1",
+  "kind": "device",
+  "name": "합성 영상 수신기",
+  "brand": "합성",
+  "category": "영상 시험",
+  "sources": [
+    {"id":"video-sink","title":"합성 영상 수신기","locator":"fixture:display/video-sink","retrievedAt":"2026-11-26"}
+  ],
+  "nodes": [
+    {"id":"panel","label":"패널","kind":"junction"}
+  ],
+  "ports": [
+    {"id":"dp","label":"dp","connector":{"value":"dp-receptacle","confidence":"inferred","sources":["video-sink"]},"attachment":{"value":"panel","confidence":"inferred","sources":["video-sink"]},"interfaces":[{"id":"video-1","domain":"display","protocol":"DP","role":"sink","evidence":{"value":true,"confidence":"inferred","sources":["video-sink"]},"params":{"version":{"value":"2.1","confidence":"inferred","sources":["video-sink"]},"maxRate":{"value":"UHBR20","confidence":"inferred","sources":["video-sink"]},"lanes":{"value":4,"confidence":"inferred","sources":["video-sink"]},"dscBpp":{"value":12,"unit":"bpp","confidence":"inferred","sources":["video-sink"]}}}]},
+    {"id":"alt-c","label":"alt-c","connector":{"value":"usb-c-plug","confidence":"inferred","sources":["video-sink"]},"attachment":{"value":"panel","confidence":"inferred","sources":["video-sink"]},"interfaces":[{"id":"video-2","domain":"display","protocol":"DP Alt Mode","role":"sink","evidence":{"value":true,"confidence":"inferred","sources":["video-sink"]},"params":{"version":{"value":"1.4","confidence":"inferred","sources":["video-sink"]},"maxRate":{"value":"HBR3","confidence":"inferred","sources":["video-sink"]},"lanes":{"value":4,"confidence":"inferred","sources":["video-sink"]},"pin":{"value":"C","confidence":"inferred","sources":["video-sink"]},"dscBpp":{"value":0,"unit":"bpp","confidence":"inferred","sources":["video-sink"]}}}]},
+    {"id":"alt-d","label":"alt-d","connector":{"value":"usb-c-plug","confidence":"inferred","sources":["video-sink"]},"attachment":{"value":"panel","confidence":"inferred","sources":["video-sink"]},"interfaces":[{"id":"video-3","domain":"display","protocol":"DP Alt Mode","role":"sink","evidence":{"value":true,"confidence":"inferred","sources":["video-sink"]},"params":{"version":{"value":"1.4","confidence":"inferred","sources":["video-sink"]},"maxRate":{"value":"HBR3","confidence":"inferred","sources":["video-sink"]},"lanes":{"value":4,"confidence":"inferred","sources":["video-sink"]},"pin":{"value":"D","confidence":"inferred","sources":["video-sink"]},"dscBpp":{"value":0,"unit":"bpp","confidence":"inferred","sources":["video-sink"]}}}]},
+    {"id":"hdmi","label":"hdmi","connector":{"value":"hdmi-plug","confidence":"inferred","sources":["video-sink"]},"attachment":{"value":"panel","confidence":"inferred","sources":["video-sink"]},"interfaces":[{"id":"video-4","domain":"display","protocol":"HDMI","role":"sink","evidence":{"value":true,"confidence":"inferred","sources":["video-sink"]},"params":{"frlCode":{"value":2,"confidence":"inferred","sources":["video-sink"]},"tmdsVersion":{"value":"2.0","confidence":"inferred","sources":["video-sink"]},"dscBpp":{"value":0,"unit":"bpp","confidence":"inferred","sources":["video-sink"]}}}]}
+  ],
+  "edges": [],
+  "resources": []
+}

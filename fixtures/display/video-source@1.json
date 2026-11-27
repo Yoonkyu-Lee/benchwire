@@ -1,0 +1,24 @@
+{
+  "modelId": "video-source",
+  "revision": "1",
+  "kind": "device",
+  "name": "합성 이중 출력 노트북",
+  "brand": "합성",
+  "category": "영상 시험",
+  "sources": [
+    {"id":"video-source","title":"합성 이중 출력 노트북","locator":"fixture:display/video-source","retrievedAt":"2026-11-26"}
+  ],
+  "nodes": [
+    {"id":"gpu-a","label":"출력 GPU 가","kind":"gpu"},
+    {"id":"gpu-b","label":"출력 GPU 나","kind":"gpu"}
+  ],
+  "ports": [
+    {"id":"dp","label":"dp","connector":{"value":"dp-receptacle","confidence":"inferred","sources":["video-source"]},"attachment":{"value":"gpu-a","confidence":"inferred","sources":["video-source"]},"interfaces":[{"id":"video-1","domain":"display","protocol":"DP","role":"source","evidence":{"value":true,"confidence":"inferred","sources":["video-source"]},"params":{"version":{"value":"1.4","confidence":"inferred","sources":["video-source"]},"maxRate":{"value":"HBR3","confidence":"inferred","sources":["video-source"]},"lanes":{"value":4,"confidence":"inferred","sources":["video-source"]},"dscBpp":{"value":12,"unit":"bpp","confidence":"inferred","sources":["video-source"]}}}]},
+    {"id":"unresolved","label":"unresolved","connector":{"value":"dp-receptacle","confidence":"inferred","sources":["video-source"]},"attachment":{"value":null,"confidence":"unknown","sources":["video-source"]},"interfaces":[{"id":"video-2","domain":"display","protocol":"DP","role":"source","evidence":{"value":true,"confidence":"inferred","sources":["video-source"]},"params":{"version":{"value":"1.4","confidence":"inferred","sources":["video-source"]},"maxRate":{"value":"HBR3","confidence":"inferred","sources":["video-source"]},"lanes":{"value":4,"confidence":"inferred","sources":["video-source"]},"dscBpp":{"value":12,"unit":"bpp","confidence":"inferred","sources":["video-source"]}}}]},
+    {"id":"alt-c","label":"alt-c","connector":{"value":"usb-c-receptacle","confidence":"inferred","sources":["video-source"]},"attachment":{"value":"gpu-a","confidence":"inferred","sources":["video-source"]},"interfaces":[{"id":"video-3","domain":"display","protocol":"DP Alt Mode","role":"source","evidence":{"value":true,"confidence":"inferred","sources":["video-source"]},"params":{"version":{"value":"1.4","confidence":"inferred","sources":["video-source"]},"maxRate":{"value":"HBR3","confidence":"inferred","sources":["video-source"]},"lanes":{"value":4,"confidence":"inferred","sources":["video-source"]},"pin":{"value":"C","confidence":"inferred","sources":["video-source"]},"dscBpp":{"value":0,"unit":"bpp","confidence":"inferred","sources":["video-source"]}}}]},
+    {"id":"alt-d","label":"alt-d","connector":{"value":"usb-c-receptacle","confidence":"inferred","sources":["video-source"]},"attachment":{"value":"gpu-b","confidence":"inferred","sources":["video-source"]},"interfaces":[{"id":"video-4","domain":"display","protocol":"DP Alt Mode","role":"source","evidence":{"value":true,"confidence":"inferred","sources":["video-source"]},"params":{"version":{"value":"1.4","confidence":"inferred","sources":["video-source"]},"maxRate":{"value":"HBR3","confidence":"inferred","sources":["video-source"]},"lanes":{"value":4,"confidence":"inferred","sources":["video-source"]},"pin":{"value":"D","confidence":"inferred","sources":["video-source"]},"dscBpp":{"value":0,"unit":"bpp","confidence":"inferred","sources":["video-source"]}}}]},
+    {"id":"hdmi","label":"hdmi","connector":{"value":"hdmi-receptacle","confidence":"inferred","sources":["video-source"]},"attachment":{"value":"gpu-a","confidence":"inferred","sources":["video-source"]},"interfaces":[{"id":"video-5","domain":"display","protocol":"HDMI","role":"source","evidence":{"value":true,"confidence":"inferred","sources":["video-source"]},"params":{"frlCode":{"value":4,"confidence":"inferred","sources":["video-source"]},"tmdsVersion":{"value":"2.0","confidence":"inferred","sources":["video-source"]},"dscBpp":{"value":0,"unit":"bpp","confidence":"inferred","sources":["video-source"]}}}]}
+  ],
+  "edges": [],
+  "resources": []
+}

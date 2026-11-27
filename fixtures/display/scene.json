@@ -1,0 +1,43 @@
+{
+  "sceneId": "display",
+  "sources": [
+    {"id":"scene","title":"합성 영상 장면과 요청","locator":"fixture:display/scene","retrievedAt":"2026-11-26"}
+  ],
+  "items": [
+    {"instanceId":"host","modelId":"video-source","revision":"1"},
+    {"instanceId":"native","modelId":"video-sink","revision":"1"},
+    {"instanceId":"unresolved","modelId":"video-sink","revision":"1"},
+    {"instanceId":"alt-c","modelId":"video-sink","revision":"1"},
+    {"instanceId":"alt-d","modelId":"video-sink","revision":"1"},
+    {"instanceId":"hdmi","modelId":"video-sink","revision":"1"},
+    {"instanceId":"wire-native","modelId":"video-wire","revision":"1"},
+    {"instanceId":"wire-unresolved","modelId":"video-wire","revision":"1"}
+  ],
+  "connections": [
+    {"id":"native","from":{"instanceId":"host","id":"dp"},"to":{"instanceId":"native","id":"dp"},"parts":[{"instanceId":"wire-native","entry":"a","exit":"b"}],"evidence":{"value":true,"confidence":"inferred","sources":["scene"]}},
+    {"id":"unresolved","from":{"instanceId":"host","id":"unresolved"},"to":{"instanceId":"unresolved","id":"dp"},"parts":[{"instanceId":"wire-unresolved","entry":"a","exit":"b"}],"evidence":{"value":true,"confidence":"inferred","sources":["scene"]}},
+    {"id":"alt-c","from":{"instanceId":"host","id":"alt-c"},"to":{"instanceId":"alt-c","id":"alt-c"},"parts":[],"evidence":{"value":true,"confidence":"inferred","sources":["scene"]}},
+    {"id":"alt-d","from":{"instanceId":"host","id":"alt-d"},"to":{"instanceId":"alt-d","id":"alt-d"},"parts":[],"evidence":{"value":true,"confidence":"inferred","sources":["scene"]}},
+    {"id":"hdmi","from":{"instanceId":"host","id":"hdmi"},"to":{"instanceId":"hdmi","id":"hdmi"},"parts":[],"evidence":{"value":true,"confidence":"inferred","sources":["scene"]}}
+  ],
+  "workloads": [
+    {"id":"native","domain":"display","kind":"video","from":{"instanceId":"host","id":"gpu-a"},"to":{"instanceId":"native","id":"panel"},"request":{"width":{"value":3840,"unit":"px","confidence":"inferred","sources":["scene"]},"height":{"value":2160,"unit":"px","confidence":"inferred","sources":["scene"]},"refresh":{"value":60,"unit":"Hz","confidence":"inferred","sources":["scene"]},"bitsPerComponent":{"value":10,"unit":"bpc","confidence":"inferred","sources":["scene"]},"chroma":{"value":"4:4:4","confidence":"inferred","sources":["scene"]}}},
+    {"id":"dsc","domain":"display","kind":"video","from":{"instanceId":"host","id":"gpu-a"},"to":{"instanceId":"native","id":"panel"},"request":{"width":{"value":3840,"unit":"px","confidence":"inferred","sources":["scene"]},"height":{"value":2160,"unit":"px","confidence":"inferred","sources":["scene"]},"refresh":{"value":144,"unit":"Hz","confidence":"inferred","sources":["scene"]},"bitsPerComponent":{"value":10,"unit":"bpc","confidence":"inferred","sources":["scene"]},"chroma":{"value":"4:4:4","confidence":"inferred","sources":["scene"]},"dscBpp":{"value":12,"unit":"bpp","confidence":"inferred","sources":["scene"]}}},
+    {"id":"with-fallback","domain":"display","kind":"video","from":{"instanceId":"host","id":"gpu-a"},"to":{"instanceId":"native","id":"panel"},"request":{"width":{"value":3840,"unit":"px","confidence":"inferred","sources":["scene"]},"height":{"value":2160,"unit":"px","confidence":"inferred","sources":["scene"]},"refresh":{"value":144,"unit":"Hz","confidence":"inferred","sources":["scene"]},"bitsPerComponent":{"value":10,"unit":"bpc","confidence":"inferred","sources":["scene"]},"chroma":{"value":"4:4:4","confidence":"inferred","sources":["scene"]},"dscBpp":{"value":12,"unit":"bpp","confidence":"inferred","sources":["scene"]},"fallbackRefresh":{"value":60,"unit":"Hz","confidence":"inferred","sources":["scene"]}}},
+    {"id":"too-large","domain":"display","kind":"video","from":{"instanceId":"host","id":"gpu-a"},"to":{"instanceId":"native","id":"panel"},"request":{"width":{"value":7680,"unit":"px","confidence":"inferred","sources":["scene"]},"height":{"value":4320,"unit":"px","confidence":"inferred","sources":["scene"]},"refresh":{"value":144,"unit":"Hz","confidence":"inferred","sources":["scene"]},"bitsPerComponent":{"value":10,"unit":"bpc","confidence":"inferred","sources":["scene"]},"chroma":{"value":"4:4:4","confidence":"inferred","sources":["scene"]}}},
+    {"id":"unresolved","domain":"display","kind":"video","from":{"instanceId":"host","id":"gpu-a"},"to":{"instanceId":"unresolved","id":"panel"},"request":{"width":{"value":3840,"unit":"px","confidence":"inferred","sources":["scene"]},"height":{"value":2160,"unit":"px","confidence":"inferred","sources":["scene"]},"refresh":{"value":60,"unit":"Hz","confidence":"inferred","sources":["scene"]},"bitsPerComponent":{"value":10,"unit":"bpc","confidence":"inferred","sources":["scene"]},"chroma":{"value":"4:4:4","confidence":"inferred","sources":["scene"]}}},
+    {"id":"alt-c","domain":"display","kind":"video","from":{"instanceId":"host","id":"gpu-a"},"to":{"instanceId":"alt-c","id":"panel"},"request":{"width":{"value":3840,"unit":"px","confidence":"inferred","sources":["scene"]},"height":{"value":2160,"unit":"px","confidence":"inferred","sources":["scene"]},"refresh":{"value":60,"unit":"Hz","confidence":"inferred","sources":["scene"]},"bitsPerComponent":{"value":10,"unit":"bpc","confidence":"inferred","sources":["scene"]},"chroma":{"value":"4:4:4","confidence":"inferred","sources":["scene"]}}},
+    {"id":"alt-d","domain":"display","kind":"video","from":{"instanceId":"host","id":"gpu-b"},"to":{"instanceId":"alt-d","id":"panel"},"request":{"width":{"value":3840,"unit":"px","confidence":"inferred","sources":["scene"]},"height":{"value":2160,"unit":"px","confidence":"inferred","sources":["scene"]},"refresh":{"value":60,"unit":"Hz","confidence":"inferred","sources":["scene"]},"bitsPerComponent":{"value":10,"unit":"bpc","confidence":"inferred","sources":["scene"]},"chroma":{"value":"4:4:4","confidence":"inferred","sources":["scene"]}}},
+    {"id":"hdmi","domain":"display","kind":"video","from":{"instanceId":"host","id":"gpu-a"},"to":{"instanceId":"hdmi","id":"panel"},"request":{"width":{"value":2560,"unit":"px","confidence":"inferred","sources":["scene"]},"height":{"value":1440,"unit":"px","confidence":"inferred","sources":["scene"]},"refresh":{"value":60,"unit":"Hz","confidence":"inferred","sources":["scene"]},"bitsPerComponent":{"value":10,"unit":"bpc","confidence":"inferred","sources":["scene"]},"chroma":{"value":"4:4:4","confidence":"inferred","sources":["scene"]}}}
+  ],
+  "scenarios": [
+    {"id":"native","members":["native"]},
+    {"id":"dsc","members":["dsc"]},
+    {"id":"with-fallback","members":["with-fallback"]},
+    {"id":"too-large","members":["too-large"]},
+    {"id":"unresolved","members":["unresolved"]},
+    {"id":"alt-c","members":["alt-c"]},
+    {"id":"alt-d","members":["alt-d"]},
+    {"id":"hdmi","members":["hdmi"]}
+  ]
+}
