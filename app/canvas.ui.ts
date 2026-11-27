@@ -505,3 +505,147 @@ test("다른 설정을 고르면 이미 평가한 시나리오의 핀 배정과 
     assert.deepEqual(errors, []);
   } finally { await page.close(); }
 });
+
+async function checkExample(id: string, edit: (page: Page) => Promise<void>, verify: (page: Page) => Promise<void>) {
+  const { page, errors } = await newPage("/");
+  const picker = page.getByRole("combobox", { name: "장면" });
+  let copyId: string;
+  try {
+    if (await picker.inputValue() !== id) {
+      await picker.selectOption(id);
+      await page.locator("#app:not([inert])").waitFor();
+      await waitForAssessment(page);
+    }
+    const creation = page.waitForResponse(response => response.request().method() === "PUT" &&
+      response.url().endsWith("/api/scenes/" + id) && response.status() === 201);
+    await edit(page);
+    copyId = (await (await creation).json()).sceneId;
+    assert.notEqual(copyId, id);
+    await page.getByText("저장됨", { exact: true }).waitFor();
+    assert.equal(await picker.inputValue(), copyId);
+    await waitForAssessment(page);
+    await verify(page);
+
+    await page.reload();
+    await picker.waitFor();
+    assert.equal(await picker.inputValue(), copyId);
+    await waitForAssessment(page);
+    await verify(page);
+    assert.deepEqual(errors, []);
+  } finally { await page.close(); }
+
+  await closeServer();
+  await openServer();
+  const restarted = await newPage("/");
+  try {
+    assert.equal(await restarted.page.getByRole("combobox", { name: "장면" }).inputValue(), copyId);
+    await verify(restarted.page);
+    assert.deepEqual(restarted.errors, []);
+  } finally { await restarted.page.close(); }
+}
+
+function exampleFlow(page: Page, connection: string, workload: string) {
+  return page.locator(`[data-connection="${connection}"] .wire-result[data-workload="${workload}"]`);
+}
+
+test("네트워크 예제에서 PoE와 공유 업링크를 보고 LAN 작업 하나를 끈 상태를 다시 연다", async () => {
+  await checkExample("network", async page => {
+    assert.match(await exampleFlow(page, "poe", "poe-12").textContent() ?? "", /12 W/);
+    assert.match(await exampleFlow(page, "poe", "poe-ethernet").textContent() ?? "", /900 Mbps/);
+    for (const workload of ["lan-a", "lan-b"]) {
+      const flow = exampleFlow(page, "uplink", workload);
+      assert.match(await flow.textContent() ?? "", /600 Mbps/);
+      assert.equal(await flow.getAttribute("data-verdict"), "conditional");
+    }
+    await page.screenshot({ path: "work/m3-example-network.png" });
+    const editor = page.locator(".scenario-panel");
+    await editor.locator("summary").click();
+    await editor.getByRole("checkbox", { name: "이더넷 전송 · lan-b" }).uncheck();
+    await editor.getByRole("button", { name: "시나리오 적용" }).click();
+  }, async page => {
+    assert.equal(await exampleFlow(page, "uplink", "lan-b").count(), 0);
+    const flow = exampleFlow(page, "uplink", "lan-a");
+    assert.match(await flow.textContent() ?? "", /900 Mbps/);
+    assert.equal(await flow.getAttribute("data-verdict"), "ok");
+    assert.equal(await exampleFlow(page, "poe", "poe-12").count(), 1);
+    assert.equal(await exampleFlow(page, "poe", "poe-ethernet").count(), 1);
+  });
+});
+
+test("영상 예제에서 DSC와 핀 배정 대안을 확인하고 60 Hz 요청을 다시 연다", async () => {
+  await checkExample("t2-alt-mode", async page => {
+    const video = exampleFlow(page, "display-hub", "4K 영상");
+    const hub = exampleFlow(page, "display-hub", "모니터 허브");
+    assert.equal(await video.getAttribute("data-verdict"), "conditional");
+    assert.match(await hub.textContent() ?? "", /53\.248 MB\/s/);
+    await page.getByRole("button", { name: "결과 · 근거" }).click();
+    const results = page.getByRole("complementary", { name: "결과와 근거" });
+    await results.getByText("다른 설정", { exact: true }).click();
+    await results.getByRole("button", { name: /기본.*dp-4lane.*DSC 영상 조건부/ }).waitFor();
+    const twoLanes = results.getByRole("button", { name: /대안.*dp-2lane/ });
+    await twoLanes.click();
+    assert.equal(await twoLanes.getAttribute("aria-pressed"), "true");
+    assert.match(await hub.textContent() ?? "", /400 MB\/s/);
+    assert.equal(await video.getAttribute("data-verdict"), "conditional");
+    await results.getByRole("button", { name: /^영상 출력 · / }).click();
+    const proof = results.getByRole("region", { name: "선택한 항목 근거" });
+    assert.match(await proof.textContent() ?? "", /60 Hz 폴백/);
+    await results.evaluate(el => { el.scrollTop = 0; });
+    await page.mouse.move(740, 680);
+    await page.mouse.down();
+    await page.mouse.move(550, 680);
+    await page.mouse.up();
+    await twoLanes.focus();
+    await page.screenshot({ path: "work/m3-example-display.png" });
+
+    const editor = page.locator(".scenario-panel");
+    await editor.locator("summary").click();
+    await editor.getByLabel("작업", { exact: true }).selectOption("4K 영상");
+    const refresh = editor.getByLabel("주사율 (Hz)", { exact: true });
+    assert.equal(await refresh.inputValue(), "144");
+    assert.equal(await editor.getByLabel("대안 주사율 (Hz)", { exact: true }).inputValue(), "60");
+    await refresh.fill("60");
+    await editor.getByRole("button", { name: "작업 적용" }).click();
+  }, async page => {
+    assert.equal(await exampleFlow(page, "display-hub", "4K 영상").getAttribute("data-verdict"), "ok");
+    assert.match(await exampleFlow(page, "display-hub", "모니터 허브").textContent() ?? "", /400 MB\/s/);
+    const editor = page.locator(".scenario-panel");
+    if (await editor.getAttribute("open") === null) await editor.locator("summary").click();
+    await editor.getByLabel("작업", { exact: true }).selectOption("4K 영상");
+    assert.equal(await editor.getByLabel("주사율 (Hz)", { exact: true }).inputValue(), "60");
+  });
+});
+
+test("충전 예제에서 세 포트와 소비 상태별 판정을 확인하고 높인 순충전 목표를 다시 연다", async () => {
+  await checkExample("three-ports", async page => {
+    for (const [port, workload, watts] of [["a", "대기", "50 W"], ["b", "기기 B", "30 W"], ["c", "기기 C", "20 W"]] as const) {
+      const flow = exampleFlow(page, port, workload);
+      assert((await flow.textContent())?.includes(watts));
+      assert.equal(await flow.getAttribute("data-verdict"), "ok");
+    }
+    const editor = page.locator(".scenario-panel");
+    await editor.locator("summary").click();
+    const scenario = editor.getByLabel("현재 시나리오", { exact: true });
+    await scenario.selectOption("노트북 일반");
+    assert.equal(await exampleFlow(page, "a", "일반").getAttribute("data-verdict"), "conditional");
+    await scenario.selectOption("노트북 최대");
+    assert.equal(await exampleFlow(page, "a", "최대").getAttribute("data-verdict"), "impossible");
+    await scenario.selectOption("노트북 대기");
+    await editor.locator("summary").click();
+    await page.screenshot({ path: "work/m3-example-power.png" });
+    await editor.locator("summary").click();
+    await editor.getByLabel("작업", { exact: true }).selectOption("대기");
+    const target = editor.getByLabel("목표 순충전 (W)", { exact: true });
+    assert.equal(await target.inputValue(), "30");
+    await target.fill("35");
+    await editor.getByRole("button", { name: "작업 적용" }).click();
+  }, async page => {
+    const laptop = exampleFlow(page, "a", "대기");
+    assert.match(await laptop.textContent() ?? "", /50 W/);
+    assert.equal(await laptop.getAttribute("data-verdict"), "conditional");
+    const editor = page.locator(".scenario-panel");
+    if (await editor.getAttribute("open") === null) await editor.locator("summary").click();
+    await editor.getByLabel("작업", { exact: true }).selectOption("대기");
+    assert.equal(await editor.getByLabel("목표 순충전 (W)", { exact: true }).inputValue(), "35");
+  });
+});

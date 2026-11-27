@@ -1,0 +1,10 @@
+{
+  "examples": [
+    {"title":"한 케이블의 PoE와 이더넷 · 공유 업링크","scene":"scene","fixture":"network"},
+    {"title":"USB-C 영상 폴백과 모니터 허브","scene":"display","fixture":"t2"},
+    {"title":"세 포트 충전기와 노트북 순충전 목표","scene":"power","fixture":"power"}
+  ],
+  "inventory": [
+    {"instanceId":"spare-wire","modelId":"network-copper","revision":"1","alias":"예비 이더넷 케이블","state":"owned"}
+  ]
+}

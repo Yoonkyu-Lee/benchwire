@@ -1,5 +1,6 @@
 // Edge에서 실제 엔진과 편집 동작을 재현할 작은 장면과 50기기 장면을 연다.
 import "./style.css";
+import networkConnectors from "../fixtures/network/connectors.json" with { type: "json" };
 import copper from "../fixtures/network/network-copper@1.json" with { type: "json" };
 import host from "../fixtures/network/network-host@1.json" with { type: "json" };
 import altConnectors from "../fixtures/t2/connectors.json" with { type: "json" };
@@ -8,12 +9,11 @@ import altCable from "../fixtures/t2/t2-cable@1.json" with { type: "json" };
 import altHost from "../fixtures/t2/t2-host@1.json" with { type: "json" };
 import altMonitor from "../fixtures/t2/t2-monitor@1.json" with { type: "json" };
 import { connectorsFile, modelFile, sceneFile } from "../scene/files.ts";
-import type { InventoryItem, Library, Model, Port, SceneDocument } from "./document.ts";
-import exampleRegistry from "../fixtures/example/connectors.json" with { type: "json" };
 import { benchmark } from "./assessment-fixture.ts";
 import { percentiles, phaseInputs } from "./assessment.profile.ts";
 import { evaluateInWorker, loadAssessment } from "./assessment.ts";
 import { mountCanvas } from "./canvas.ts";
+import type { InventoryItem, Library, Model, Port, SceneDocument } from "./document.ts";
 import { resultView } from "./results.ts";
 import { mountWorkbench } from "./workbench.ts";
 
@@ -22,7 +22,7 @@ const evidence = { value: true, confidence: "inferred" as const, sources: [sourc
 const hostModel = modelFile.parse(host);
 const hostPort = hostModel.ports[0]!;
 const makeCopper = () => modelFile.parse(copper);
-const networkRegistry = connectorsFile.parse(exampleRegistry);
+const networkRegistry = connectorsFile.parse(networkConnectors);
 const connectors: Library["connectors"] = {
   ...networkRegistry, sources: [...networkRegistry.sources, source],
   connectors: [...networkRegistry.connectors, { id: "test-connector", endForm: { ...evidence, value: "receptacle" } }],
@@ -60,7 +60,16 @@ async function serverExample(unknownLoss: boolean) {
   const library = await response.json() as Library & { scenes: { id: string; example: boolean }[] };
   const example = library.scenes.find(scene => scene.example)!;
   const saved = await fetch("/api/scenes/" + example.id);
-  const initial = sceneFile.parse(await saved.json());
+  const scene = sceneFile.parse(await saved.json());
+  // PoE 화면 시험에서는 다른 배선을 빼고 같은 케이블의 두 흐름을 유지한다.
+  const poe = scene.connections.find(connection => connection.id === "poe")!;
+  const ends = new Set([poe.from.instanceId, poe.to.instanceId]);
+  const work = scene.workloads.filter(workload => ends.has(workload.from.instanceId) && ends.has(workload.to.instanceId));
+  const initial: SceneDocument = {
+    ...scene, connections: [poe], workloads: work, scenarios: [{ id: "poe-and-ethernet", members: work.map(workload => workload.id) }],
+    items: scene.items.filter(item => ends.has(item.instanceId) || poe.parts.some(part => part.instanceId === item.instanceId)),
+    layout: { placements: scene.layout!.placements!.filter(placement => ends.has(placement.instanceId)) },
+  };
   const models = unknownLoss ? library.models.map(model => model.modelId === copper.modelId ? modelFile.parse({
     ...model, attributes: { network: { ...model.attributes?.network, poeLoss: {
       ...model.attributes?.network?.poeLoss, value: null, confidence: "unknown",

@@ -2,6 +2,7 @@
 import { createHash, randomUUID } from "node:crypto";
 import { closeSync, mkdirSync, openSync, readFileSync, readdirSync, renameSync, statSync, unlinkSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
+import { isDeepStrictEqual } from "node:util";
 import { z } from "zod";
 import { plugins } from "../domains/registry.ts";
 import { connectorsFile, modelFile, parseDocument, sceneFile } from "../scene/files.ts";
@@ -10,6 +11,12 @@ import { loadSceneDocuments } from "../scene/load.ts";
 export const sceneIdPattern = /^[a-z0-9_-]{1,80}$/;
 const inventoryFile = z.array(sceneFile.shape.items.element.pick({ instanceId: true, modelId: true, revision: true, alias: true })
   .extend({ state: z.enum(["owned", "candidate"]) }));
+const fileStem = z.string().regex(sceneIdPattern);
+const examplesFile = z.strictObject({
+  examples: z.array(z.strictObject({ title: z.string().min(1), scene: fileStem, fixture: fileStem })).nonempty(),
+  inventory: inventoryFile.default([]),
+});
+type ConnectorRegistry = z.infer<typeof connectorsFile>;
 
 export class LibraryError extends Error {
   readonly status: number;
@@ -69,44 +76,91 @@ function snapshot(text: string) {
   return { text, etag: '"' + createHash("sha256").update(text).digest("hex") + '"' };
 }
 
+function mergeRow<T>(rows: Map<string, T>, key: string, row: T, file: string, label: string) {
+  const previous = rows.get(key);
+  if (previous === undefined) rows.set(key, row);
+  else if (!isDeepStrictEqual(previous, row)) throw new Error(`${file} — ${label} 정의가 충돌합니다: ${key}`);
+}
+
+function readConnectors(files: readonly { file: string; text: string }[]): ConnectorRegistry {
+  const sources = new Map<string, ConnectorRegistry["sources"][number]>();
+  const connectors = new Map<string, ConnectorRegistry["connectors"][number]>();
+  const mates = new Map<string, ConnectorRegistry["mates"][number]>();
+  for (const { file, text } of files) {
+    const registry = parseDocument(connectorsFile, JSON.parse(text), file);
+    const localIds = new Map<string, string>();
+    // 출처 ID는 파일마다 지역 이름이다. 같은 출처만 합친 표에서 한 행을 공유한다.
+    for (const { id: localId, ...source } of registry.sources) {
+      if (localIds.has(localId)) throw new Error(`${file} — 중복 출처 ID: ${localId}`);
+      const key = JSON.stringify(source);
+      const id = sources.get(key)?.id ?? String(sources.size + 1);
+      sources.set(key, { ...source, id });
+      localIds.set(localId, id);
+    }
+    function cite(id: string) {
+      const row = localIds.get(id);
+      if (row === undefined) throw new Error(`${file} — 찾을 수 없는 출처: ${id}`);
+      return row;
+    }
+    for (const row of registry.connectors) {
+      const connector = { ...row, endForm: { ...row.endForm, sources: row.endForm.sources.map(cite) } };
+      mergeRow(connectors, row.id, connector, file, "커넥터");
+    }
+    for (const row of registry.mates) {
+      const [a, b] = row.a <= row.b ? [row.a, row.b] : [row.b, row.a];
+      const mate = { a, b, evidence: { ...row.evidence, sources: row.evidence.sources.map(cite) } };
+      mergeRow(mates, JSON.stringify([a, b]), mate, file, "결합쌍");
+    }
+  }
+  return { sources: [...sources.values()], connectors: [...connectors.values()], mates: [...mates.values()] };
+}
+
 export function openLibrary(root: string, dataDir: string) {
-  const fixtureDir = join(root, "fixtures", "network");
-  const exampleDir = join(root, "fixtures", "example");
+  const fixtureDir = join(root, "fixtures");
+  const exampleDir = join(fixtureDir, "example");
   const catalogDir = join(root, "catalog");
-  const exampleFile = join(exampleDir, "scene.json");
-  const exampleSnapshot = snapshot(readFileSync(exampleFile, "utf8"));
-  const example = parseDocument(sceneFile, JSON.parse(exampleSnapshot.text), exampleFile);
-  const exampleInventoryFile = join(exampleDir, "inventory.json");
-  const exampleInventory = parseDocument(inventoryFile, JSON.parse(readFileSync(exampleInventoryFile, "utf8")), exampleInventoryFile);
-  const exampleSummary = { id: example.sceneId, title: "한 케이블의 PoE와 이더넷", example: true };
+  const indexFile = join(exampleDir, "index.json");
+  const index = parseDocument(examplesFile, JSON.parse(readFileSync(indexFile, "utf8")), indexFile);
   const scenesDir = join(dataDir, "scenes");
   const inventoryPath = join(dataDir, "inventory.json");
+  const fixtureDirs = [...new Set(index.examples.map(example => join(fixtureDir, example.fixture)))];
   const models = new Map<string, z.infer<typeof modelFile>>();
-  for (const dir of [fixtureDir, catalogDir]) for (const name of filesIn(dir)) {
+  for (const dir of [...fixtureDirs, catalogDir]) for (const name of filesIn(dir)) {
     if (!name.includes("@") || !name.endsWith(".json")) continue;
     const file = join(dir, name);
     const model = parseDocument(modelFile, JSON.parse(readFileSync(file, "utf8")), file);
     const key = model.modelId + "@" + model.revision;
-    if (name !== key + ".json" || models.has(key)) throw new Error(file + " — 모델 판본 이름이 다르거나 중복됩니다");
-    models.set(key, model);
+    if (name !== key + ".json") throw new Error(`${file} — 모델 판본 이름이 ${key}와 다릅니다`);
+    mergeRow(models, key, model, file, "모델 판본");
   }
-  const exampleConnectors = join(exampleDir, "connectors.json");
-  const connectors = parseDocument(connectorsFile, JSON.parse(readFileSync(exampleConnectors, "utf8")), exampleConnectors);
+  const connectorFiles = fixtureDirs.map(dir => join(dir, "connectors.json")).map(file => ({ file, text: readFileSync(file, "utf8") }));
   const catalogConnectors = join(catalogDir, "connectors.json");
   const catalogText = readOptional(catalogConnectors);
-  if (catalogText !== undefined) {
-    const catalog = parseDocument(connectorsFile, JSON.parse(catalogText), catalogConnectors);
-    connectors.sources.push(...catalog.sources);
-    connectors.connectors.push(...catalog.connectors);
-    connectors.mates.push(...catalog.mates);
-  }
+  if (catalogText !== undefined) connectorFiles.push({ file: catalogConnectors, text: catalogText });
+  const connectors = readConnectors(connectorFiles);
   const documents = { models, connectors };
-  loadSceneDocuments(example, documents, plugins);
+  const examples = new Map<string, { title: string; saved: ReturnType<typeof snapshot> }>();
+  const exampleInventory = new Map<string, z.infer<typeof inventoryFile>[number]>();
+  for (const { scene, title } of index.examples) {
+    const file = join(exampleDir, scene + ".json");
+    const saved = snapshot(readFileSync(file, "utf8"));
+    const example = parseDocument(sceneFile, JSON.parse(saved.text), file);
+    const id = parseDocument(fileStem, example.sceneId, file + "#sceneId");
+    if (examples.has(id)) throw new Error(`${file} — 중복 예제 장면 ID: ${id}`);
+    loadSceneDocuments(example, documents, plugins, { scene: file, connectors: "connectors.json", model: key => key + ".json" });
+    examples.set(id, { title, saved });
+    for (const item of example.items) mergeRow(exampleInventory, item.instanceId, { ...item, state: "owned" }, file, "실물");
+  }
+  for (const item of index.inventory) {
+    if (!models.has(item.modelId + "@" + item.revision)) throw new Error(`${indexFile} — 실물의 모델 판본을 찾을 수 없습니다: ${item.instanceId}`);
+    mergeRow(exampleInventory, item.instanceId, item, indexFile, "실물");
+  }
 
   // 접두어를 붙여 Windows 장치 이름과 장면 ID가 겹쳐도 일반 파일로 저장한다.
   const scenePath = (id: string) => join(scenesDir, "scene-" + id + ".json");
   function readScene(id: string) {
-    if (id === example.sceneId) return exampleSnapshot;
+    const example = examples.get(id);
+    if (example) return example.saved;
     const text = readOptional(scenePath(id));
     return text === undefined ? undefined : snapshot(text);
   }
@@ -115,9 +169,10 @@ export function openLibrary(root: string, dataDir: string) {
     describe() {
       const users = filesIn(scenesDir).flatMap(file => {
         const id = /^scene-([a-z0-9_-]{1,80})\.json$/.exec(file)?.[1];
-        return id === undefined || id === example.sceneId ? [] : [{ id, title: id, example: false }];
+        return id === undefined || examples.has(id) ? [] : [{ id, title: id, example: false }];
       });
-      let defaultSceneId = example.sceneId;
+      const exampleSummaries = [...examples].map(([id, { title }]) => ({ id, title, example: true }));
+      let defaultSceneId = exampleSummaries[0]!.id;
       let latest: bigint | undefined;
       for (const { id } of users) {
         const savedAt = statSync(scenePath(id), { bigint: true }).mtimeNs;
@@ -127,8 +182,8 @@ export function openLibrary(root: string, dataDir: string) {
         }
       }
       const inventoryText = readOptional(inventoryPath);
-      const inventory = inventoryText === undefined ? exampleInventory : parseDocument(inventoryFile, JSON.parse(inventoryText), "inventory.json");
-      return { defaultSceneId, scenes: [exampleSummary, ...users], inventory, models: [...models.values()], connectors };
+      const inventory = inventoryText === undefined ? [...exampleInventory.values()] : parseDocument(inventoryFile, JSON.parse(inventoryText), "inventory.json");
+      return { defaultSceneId, scenes: [...exampleSummaries, ...users], inventory, models: [...models.values()], connectors };
     },
     readScene,
     saveScene(id: string, body: unknown, ifMatch: string | undefined) {
@@ -140,7 +195,7 @@ export function openLibrary(root: string, dataDir: string) {
       const scene = validate(() => loadSceneDocuments(body, documents, plugins));
       if (scene.id !== id) throw new LibraryError(422, "sceneId", "URL과 장면 ID가 다릅니다");
       const saved = body as z.input<typeof sceneFile>;
-      const exampleCopy = id === example.sceneId;
+      const exampleCopy = examples.has(id);
       let target = id;
       if (exampleCopy) {
         target = id + "-copy";

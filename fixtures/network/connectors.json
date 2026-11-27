@@ -3,8 +3,8 @@
     {"id":"network-connectors","title":"합성 구리 커넥터 결합표","locator":"fixture:network/network-connectors","retrievedAt":"2026-11-26"}
   ],
   "connectors": [
-    {"id":"network-socket","endForm":{"value":"receptacle","confidence":"inferred","sources":["network-connectors"]}},
-    {"id":"network-plug","endForm":{"value":"plug","confidence":"inferred","sources":["network-connectors"]}}
+    {"id":"network-socket","glyph":"rj45","endForm":{"value":"receptacle","confidence":"inferred","sources":["network-connectors"]}},
+    {"id":"network-plug","glyph":"rj45","endForm":{"value":"plug","confidence":"inferred","sources":["network-connectors"]}}
   ],
   "mates": [
     {"a":"network-socket","b":"network-plug","evidence":{"value":true,"confidence":"inferred","sources":["network-connectors"]}}

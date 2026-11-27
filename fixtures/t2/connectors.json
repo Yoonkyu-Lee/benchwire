@@ -3,8 +3,8 @@
     {"id":"connectors","title":"합성 커넥터 결합","locator":"fixture:t2/connectors","retrievedAt":"2026-11-27"}
   ],
   "connectors": [
-    {"id":"usb-c-plug","endForm":{"value":"plug","confidence":"inferred","sources":["connectors"]}},
-    {"id":"usb-c-receptacle","endForm":{"value":"receptacle","confidence":"inferred","sources":["connectors"]}}
+    {"id":"usb-c-plug","glyph":"usb-c","endForm":{"value":"plug","confidence":"inferred","sources":["connectors"]}},
+    {"id":"usb-c-receptacle","glyph":"usb-c","endForm":{"value":"receptacle","confidence":"inferred","sources":["connectors"]}}
   ],
   "mates": [
     {"a":"usb-c-plug","b":"usb-c-receptacle","evidence":{"value":true,"confidence":"inferred","sources":["connectors"]}}

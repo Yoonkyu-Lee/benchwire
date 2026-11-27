@@ -1,0 +1,40 @@
+{
+  "sceneId": "three-ports",
+  "sources": [
+    {"id":"scene","title":"합성 장면과 전력 요청","locator":"fixture:power/scene","retrievedAt":"2026-11-26"}
+  ],
+  "items": [
+    {"instanceId":"supply","modelId":"supply","revision":"1","alias":"100 W 충전기","state":"owned"},
+    {"instanceId":"a","modelId":"receiver","revision":"1","alias":"노트북","state":"owned"},
+    {"instanceId":"wire-a","modelId":"cable-3a","revision":"1","alias":"전력 케이블 A","state":"owned"},
+    {"instanceId":"b","modelId":"receiver","revision":"1","alias":"충전 기기 B","state":"owned"},
+    {"instanceId":"wire-b","modelId":"cable-3a","revision":"1","alias":"전력 케이블 B","state":"owned"},
+    {"instanceId":"c","modelId":"receiver","revision":"1","alias":"충전 기기 C","state":"owned"},
+    {"instanceId":"wire-c","modelId":"cable-3a","revision":"1","alias":"전력 케이블 C","state":"owned"}
+  ],
+  "connections": [
+    {"id":"a","from":{"instanceId":"supply","id":"a"},"to":{"instanceId":"a","id":"in"},"evidence":{"value":true,"confidence":"inferred","sources":["scene"]},"parts":[{"instanceId":"wire-a","entry":"first","exit":"second"}]},
+    {"id":"b","from":{"instanceId":"supply","id":"b"},"to":{"instanceId":"b","id":"in"},"evidence":{"value":true,"confidence":"inferred","sources":["scene"]},"parts":[{"instanceId":"wire-b","entry":"first","exit":"second"}]},
+    {"id":"c","from":{"instanceId":"supply","id":"c"},"to":{"instanceId":"c","id":"in"},"evidence":{"value":true,"confidence":"inferred","sources":["scene"]},"parts":[{"instanceId":"wire-c","entry":"first","exit":"second"}]}
+  ],
+  "workloads": [
+    {"id":"대기","domain":"power","kind":"charge","from":{"instanceId":"supply","id":"root"},"to":{"instanceId":"a","id":"end"},"request":{"requestedW":{"value":80,"unit":"W","confidence":"inferred","sources":["scene"]},"loadW":{"value":20,"unit":"W","confidence":"inferred","sources":["scene"]},"targetW":{"value":30,"unit":"W","confidence":"inferred","sources":["scene"]}}},
+    {"id":"일반","domain":"power","kind":"charge","from":{"instanceId":"supply","id":"root"},"to":{"instanceId":"a","id":"end"},"request":{"requestedW":{"value":80,"unit":"W","confidence":"inferred","sources":["scene"]},"loadW":{"value":45,"unit":"W","confidence":"inferred","sources":["scene"]},"targetW":{"value":30,"unit":"W","confidence":"inferred","sources":["scene"]}}},
+    {"id":"최대","domain":"power","kind":"charge","from":{"instanceId":"supply","id":"root"},"to":{"instanceId":"a","id":"end"},"request":{"requestedW":{"value":80,"unit":"W","confidence":"inferred","sources":["scene"]},"loadW":{"value":70,"unit":"W","confidence":"inferred","sources":["scene"]},"targetW":{"value":30,"unit":"W","confidence":"inferred","sources":["scene"]}}},
+    {"id":"기기 B","domain":"power","kind":"charge","from":{"instanceId":"supply","id":"root"},"to":{"instanceId":"b","id":"end"},"request":{"requestedW":{"value":30,"unit":"W","confidence":"inferred","sources":["scene"]},"loadW":{"value":0,"unit":"W","confidence":"inferred","sources":["scene"]}}},
+    {"id":"기기 C","domain":"power","kind":"charge","from":{"instanceId":"supply","id":"root"},"to":{"instanceId":"c","id":"end"},"request":{"requestedW":{"value":20,"unit":"W","confidence":"inferred","sources":["scene"]},"loadW":{"value":0,"unit":"W","confidence":"inferred","sources":["scene"]}}}
+  ],
+  "scenarios": [
+    {"id":"노트북 대기","members":["대기","기기 B","기기 C"]},
+    {"id":"노트북 일반","members":["일반","기기 B","기기 C"]},
+    {"id":"노트북 최대","members":["최대","기기 B","기기 C"]}
+  ],
+  "layout": {
+    "placements": [
+      {"instanceId":"supply","x":0,"y":200},
+      {"instanceId":"a","x":585,"y":0},
+      {"instanceId":"b","x":585,"y":200},
+      {"instanceId":"c","x":585,"y":400}
+    ]
+  }
+}

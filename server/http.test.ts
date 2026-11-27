@@ -57,9 +57,15 @@ test("T7 새 라이브러리의 읽기 전용 예제에서 같은 케이블에 9
   const libraryResponse = await first.get("/api/library");
   assert.equal(libraryResponse.status, 200);
   const library = await libraryResponse.json() as LibraryDocument;
-  assert.deepEqual(library.scenes.map(({ id, example }) => [id, example]), [[library.defaultSceneId, true]]);
-  assert.deepEqual(library.inventory, JSON.parse(readFileSync("fixtures/example/inventory.json", "utf8")));
-  assert.ok(library.connectors.connectors.every(connector => connector.glyph === "rj45"));
+  assert.equal(library.defaultSceneId, "network");
+  assert.deepEqual(library.scenes.map(({ id, example }) => [id, example]),
+    [["network", true], ["t2-alt-mode", true], ["three-ports", true]]);
+  const examples = await Promise.all(library.scenes.map(async ({ id }) => (await first.get("/api/scenes/" + id)).json() as Promise<SceneDocument>));
+  for (const item of examples.flatMap(scene => scene.items)) {
+    assert.match(item.alias!, /[가-힣]/);
+    assert.deepEqual(library.inventory.find(row => row.instanceId === item.instanceId), { ...item, state: "owned" });
+  }
+  assert.equal(library.connectors.connectors.find(connector => connector.id === "network-socket")?.glyph, "rj45");
   const path = "/api/scenes/" + library.defaultSceneId;
   const exampleResponse = await first.get(path);
   assert.equal(exampleResponse.status, 200);
@@ -70,10 +76,11 @@ test("T7 새 라이브러리의 읽기 전용 예제에서 같은 케이블에 9
   const models = new Map(library.models.map(model => [model.modelId + "@" + model.revision, model]));
   const scene = loadSceneDocuments(example, { models, connectors: library.connectors }, plugins);
   const result = evaluate(scene, plugins);
-  assert.equal(scene.connections.length, 1);
-  const rows = result.resourceUsage.filter(row => row.resourceKind === "link" && row.used && row.scenario === 0);
+  const poe = scene.connections.findIndex(row => row.id === "poe");
+  const rows = result.resourceUsage.filter(row => row.resourceKind === "link" && row.used && row.scenario === 0 &&
+    result.linkResources[row.resource]?.connection === poe);
   assert.deepEqual(rows.map(row => [row.unit, row.used]).sort(), [["Mbps", 900], ["W", 12]]);
-  assert.ok(rows.every(row => row.reasonRows.length > 0 && result.linkResources[row.resource]?.connection === 0));
+  assert.ok(rows.every(row => row.reasonRows.length > 0));
 
   const edited = { ...example, layout: { viewport: { cx: 10, cy: 20, zoom: 2 } } };
   assert.equal((await first.put(path, edited)).status, 428);
@@ -94,7 +101,7 @@ test("T7 새 라이브러리의 읽기 전용 예제에서 같은 케이블에 9
   const choices = await (await reopened.get("/api/library")).json() as LibraryDocument;
   assert.equal(choices.defaultSceneId, copy.sceneId);
   assert.deepEqual(choices.scenes.map(({ id, example }) => [id, example]),
-    [[library.defaultSceneId, true], [copy.sceneId, false]]);
+    [...library.scenes.map(({ id, example }) => [id, example]), [copy.sceneId, false]]);
   const saved = await reopened.get(copyPath);
   assert.deepEqual(await saved.json(), copy);
   assert.equal(saved.headers.get("etag"), copyTag);

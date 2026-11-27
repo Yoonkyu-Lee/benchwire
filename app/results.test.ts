@@ -18,7 +18,7 @@ test("평가 전 PoE 배선의 레이어는 양쪽 인터페이스의 공통 영
 
 test("등록되지 않은 영역 ID의 W 협상과 흐름도 전력 레이어에 둔다", () => {
   const scene = loadScene("fixtures/example/scene.json", {
-    modelsDir: "fixtures/network", connectorsFile: "fixtures/example/connectors.json",
+    modelsDir: "fixtures/network", connectorsFile: "fixtures/network/connectors.json",
   }, plugins);
   const result = evaluate(scene, plugins);
   const domain = "test-energy";

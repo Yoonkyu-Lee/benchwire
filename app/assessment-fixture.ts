@@ -1,7 +1,7 @@
 // Node와 Edge에서 똑같은 50기기·400포트·100선 평가 입력을 만든다.
 import copper from "../fixtures/network/network-copper@1.json" with { type: "json" };
 import host from "../fixtures/network/network-host@1.json" with { type: "json" };
-import registry from "../fixtures/example/connectors.json" with { type: "json" };
+import registry from "../fixtures/network/connectors.json" with { type: "json" };
 import { connectorsFile, modelFile } from "../scene/files.ts";
 import type { Connection, Library, Model, Port, SceneDocument } from "./document.ts";
 
