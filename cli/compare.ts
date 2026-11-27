@@ -1,15 +1,11 @@
 // 두 장면을 평가해 달라진 판정의 전후 값과 원인 주장을 터미널에 출력한다.
 import { dirname, join } from "node:path";
 import { parseArgs } from "node:util";
-import { display } from "../domains/display/display.ts";
-import { network } from "../domains/network/network.ts";
-import { power } from "../domains/power/power.ts";
-import { storageDomain } from "../domains/storage/copy.ts";
 import { claimIdentity, compare, connectionOption, linkIdentity, ownerIdentity, type Difference, type Snapshot } from "../engine/compare.ts";
 import { evaluate } from "../engine/evaluate.ts";
 import type { Claim, Verdict } from "../engine/contract.ts";
 import type { Results, Run } from "../engine/results.ts";
-import { trialDomain } from "../fixtures/trial.ts";
+import { plugins, trial } from "./domains.ts";
 import { loadScene } from "./load.ts";
 
 const verdicts: Record<Verdict, string> = { ok: "✅", conditional: "⚠️", impossible: "❌", unknown: "❓" };
@@ -155,8 +151,6 @@ function causes(a: Snapshot, b: Snapshot, diff: Difference) {
 }
 
 function main() {
-  const trial = trialDomain();
-  const plugins = [display, storageDomain, network, power, trial];
   try {
     const { positionals, values } = parseArgs({ allowPositionals: true,
       options: { models: { type: "string" }, connectors: { type: "string" } } });
