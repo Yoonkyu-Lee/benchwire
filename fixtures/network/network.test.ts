@@ -108,6 +108,14 @@ test("Cat5e의 2.5G·5G와 55 m 초과 Cat6의 10G에는 채널 확인 조건이
   assert.ok(r.reasons.some(reason => reason.rule.includes("도달 거리 조건")));
 });
 
+test("T7 이더넷 100 m 도달 문턱에서 표현 오차와 실제 초과를 구분한다", () => {
+  const scene = load();
+  for (const [length,verdict] of [[100.00000000000001,"ok"],[100.0001,"impossible"]] as const) {
+    setClaim(scene,"item","lan-a-wire","","length",length);
+    assert.equal(inspect(scene,"first-hop").outcome.verdict,verdict);
+  }
+});
+
 test("길이 미확인은 공통 모드의 상한과 케이블 길이 퀘스트를 남긴다", () => {
   const scene = load();
   const length = setClaim(scene, "item", "lan-a-wire", "", "length", null);

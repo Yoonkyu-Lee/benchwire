@@ -1,20 +1,21 @@
 // 단독 후보를 검산하고 시나리오의 연결 설정·동시 모드를 선택해 판정과 대안을 낸다.
 import type { Choice, Demand, DomainPlugin, Scene } from "./contract.ts";
-import { allocationGroup, type Flow, type Use } from "./allocate.ts";
+import { allocationGroup, allocationInputs, type Flow, type Use } from "./allocate.ts";
 import { assessWork } from "./assess.ts";
-import { negotiate, verdictOrder } from "./negotiate.ts";
+import { negotiate } from "./negotiate.ts";
 import { paths, type RouteInputs } from "./path.ts";
 import { judgeConnections, judgeWork } from "./judge.ts";
 import { addReason, checkedQuantity, checkedTrace, type Results } from "./results.ts";
 
 import { policyAllocation } from "./policy.ts";
 import { uncertainPolicies } from "./policy-range.ts";
-import { uncertainPreferences } from "./preference.ts";
+import { compareCandidates, pendingChoices, uncertainPreferences } from "./preference.ts";
 import { recordUsage, type GrossLimits } from "./resource-usage.ts";
 import { reserveStanding } from "./standing.ts";
 import { combinations, compareScores, MAX_COMBINATIONS, planModes, profileGroups, reservationAlternatives, type Candidate, type Plan, type WorkloadSelection } from "./selection.ts";
-import { evaluationScene } from "./scene.ts";
-import { resolveUnknowns } from "./unknown.ts";
+import { claimRows, evaluationScene, readClaim } from "./scene.ts";
+import { callHook } from "./hook-reads.ts";
+import { competingWorks, resolveUnknowns } from "./unknown.ts";
 
 // 내부 자원이 쓰이는 간선의 운반 단위로 공정 몫을 비교한다. 실제 점유 비용은 consume의 계수를 따른다.
 function internalConversion(scene: Scene, steps: Results["steps"], demand: Demand, resource: number) {
@@ -44,18 +45,23 @@ function candidatesFor(scene: Scene, plugins: readonly DomainPlugin[], result: R
       if (path < start || p.workload !== workload) return [];
       const d = result.demands[p.demand]!, steps = result.steps.filter(s => s.path === path);
       let unknownConsumption = false;
-      const uses: Use[] = p.verdict === "impossible" ? [] : plugin.consume(scene, workload, steps, d, result.options)
-        .map(raw => {
+      const consumption = p.verdict==="impossible" ? [] : callHook(scene,result,"consume",path,
+        view=>plugin.consume(view,workload,steps,d,result.options)).value;
+      const uses: Use[] = consumption.map(raw => {
           const trace = checkedTrace(result, w.domain, "consume", path, raw);
           const fixed = checkedQuantity(result, w.domain, "consume", path, "fixed", trace.fixed);
           const coefficient = checkedQuantity(result, w.domain, "consume", path, "coefficient", trace.coefficient);
-          const unknown = fixed === null || coefficient === null;
+          const {fixedHigh:rawHigh,...reservation}=trace;
+          const high=rawHigh===undefined ? undefined : checkedQuantity(result,w.domain,"consume",path,"fixedHigh",rawHigh);
+          const unknown = fixed === null || coefficient === null || high===null;
           unknownConsumption ||= unknown;
-          const u = { ...trace, fixed: fixed ?? 0, coefficient: coefficient ?? 0, unknown,
+          const reserveRequest = !d.elastic && d.requested !== null;
+          const carried = reserveRequest ? (coefficient ?? 0) * d.requested! : 0;
+          return { ...reservation, fixed: (fixed ?? 0) + carried, coefficient: reserveRequest ? 0 : coefficient ?? 0, unknown,
+            ...(typeof high==="number" && high!==fixed && {fixedHigh:high+carried}),
             conversion: internalConversion(scene, steps, d, raw.resource) };
-          return !d.elastic && d.requested !== null ? { ...u, fixed: u.fixed + u.coefficient * d.requested, coefficient: 0 } : u;
         })
-        .filter(u => u.coefficient > 0 || u.fixed > 0 || u.unknown);
+        .filter(u => u.coefficient > 0 || u.fixed > 0 || u.fixedHigh || u.unknown);
       for (const s of steps) if (s.option !== null && p.verdict !== "impossible") {
         const o = result.options[s.option]!;
         const rate = s.carrier?.conversion?.perUnit ?? 1;
@@ -75,7 +81,7 @@ function candidatesFor(scene: Scene, plugins: readonly DomainPlugin[], result: R
       if (p.verdict === "impossible") {
         for (const step of steps) if (step.option !== null) {
           const o = result.options[step.option]!;
-          if (o.verdict === "impossible" || o.unit !== (step.carrier?.conversion?.unit ?? d.unit) || o.mode !== (step.carrier?.mode ?? d.mode)) continue;
+          if (o.unit !== (step.carrier?.conversion?.unit ?? d.unit) || o.mode !== (step.carrier?.mode ?? d.mode)) continue;
           if (o.limit === 0) solo.bindings.push(scene.resources.length + (o.serviceResource ?? o.linkResource));
           if (o.poolResource !== undefined) {
             const pool = result.linkResources[o.poolResource]!.pool!;
@@ -93,9 +99,7 @@ function candidatesFor(scene: Scene, plugins: readonly DomainPlugin[], result: R
       }
       return [{ flow, solo, preference: d.preference, length: steps.length, key: p.key, truncated: p.truncated }];
     });
-    candidates.sort((a, b) => verdictOrder.indexOf(a.solo.verdict) - verdictOrder.indexOf(b.solo.verdict) ||
-      a.preference - b.preference || (b.solo.value ?? 0) - (a.solo.value ?? 0) || a.length - b.length ||
-      (a.key < b.key ? -1 : a.key > b.key ? 1 : 0));
+    candidates.sort(compareCandidates);
     const best = candidates[0];
     if (!best) {
       const flow: Flow = { workload, path: null, cap: 0, elastic: false, verdict: "impossible", uses: [] };
@@ -110,6 +114,20 @@ function candidatesFor(scene: Scene, plugins: readonly DomainPlugin[], result: R
   });
 }
 
+// 단독 후보의 순위가 갈릴 때 그 배분에 읽힌 예산과 경쟁 작업의 예산도 선택 근거다.
+function recordRankInputs(scene: Scene, result: Results, routes: RouteInputs[], members: Scene["members"], candidates: Candidate[][]) {
+  if (!result.readClaims) return;
+  const jobs = members.map(m => m.workload);
+  const compared = new Set<number>();
+  for (const w of jobs) {
+    const viable = candidates[w]!.filter(c => c.flow.path !== null && result.paths[c.flow.path]!.verdict !== "impossible");
+    if (viable.length > 1) for (const peer of competingWorks(w,jobs,routes)) compared.add(peer);
+  }
+  if (!compared.size) return;
+  for (const w of compared) for (const c of candidates[w]!)
+    for (const id of allocationInputs(scene,result,[c.flow],c.solo,"score")) result.readClaims[id] = "selection";
+}
+
 type LockedSelection = { choices: Choice[]; confirmed: boolean; workloads?: WorkloadSelection };
 function profileKey(choices: Choice[]) {
   return JSON.stringify(choices.map(c => [c.connection,c.profile]));
@@ -118,8 +136,12 @@ function profileKey(choices: Choice[]) {
 function prepare(scene: Scene, plugins: readonly DomainPlugin[], locked?: (LockedSelection | undefined)[]) {
   const result: Results = { physical: [], options: [], demands: [], paths: [], steps: [], resourceUsage: [], allocations: [], bindings: [], outcomes: [],
     reservations: [], choices: [], searches: [], standingErrors: [], standingLoads: [], matches: [], assessments: [], measures: [], possibleVerdicts: [], quests: [], rangeInputs: [], wirings: [], profileWorlds: [],
-    metrics: [], reasons: [], reasonInputs: [], reasonParents: [], reasonSpecs: [], needs: [], errors: [], linkResources: [],
+    metrics: [], reasons: [], reasonInputs: [], reasonParents: [], reasonSpecs: [], needs: [], errors: [], linkResources: [], goals: [], goalEvidence: [], goalWitnesses: [],
     specSources: plugins.flatMap(p => p.sources.map(s => ({ ...s, domain: p.id }))) };
+  if (claimRows(scene).some(row=>{
+    const c=readClaim(scene,row);
+    return c.value===null && !c.inactive;
+  })) scene={...scene,claimUses:result.readClaims=[]};
   negotiate(scene, plugins, result);
   const gross = { options: result.options.map(o => o.limit), pools: result.linkResources.map(l => l.pool?.limit ?? null) };
   reserveStanding(scene,plugins,result);
@@ -138,9 +160,14 @@ function prepare(scene: Scene, plugins: readonly DomainPlugin[], locked?: (Locke
   }
   const routes: RouteInputs[] = [], cache = new Map<string,Candidate[][]>();
   const scenarios = scene.scenarios.map((_,scenario) => {
-    const members = scene.members.filter(m => m.scenario === scenario).sort((a,b) =>
+    const members = scene.members.filter(m => m.scenario === scenario).map(m=>{
+      if (m.evidence===undefined) return m;
+      const value=readClaim(scene,m.evidence).value;
+      return typeof value==="number" ? {...m,priority:value} : {scenario:m.scenario,workload:m.workload,evidence:m.evidence};
+    }).sort((a,b) =>
       scene.workloads[a.workload]!.id.localeCompare(scene.workloads[b.workload]!.id));
     const plans: Plan[] = [], budget = { examined: 0, truncated: false };
+    const scoreInputs = result.readClaims && new Set<number>();
     const connections = new Set(members.flatMap(m => [...possibleLinks[m.workload]!]));
     const fixed = locked?.[scenario];
     const settingsList = fixed ? [fixed.choices.map(choice => ({ choice, confirmed: fixed.confirmed }))] : combinations(profileGroups(scene,result,connections));
@@ -153,8 +180,11 @@ function prepare(scene: Scene, plugins: readonly DomainPlugin[], locked?: (Locke
         candidates = candidatesFor(scene,plugins,result,routes,choices);
         cache.set(key,candidates);
       }
-      plans.push(...planModes(scene,plugins,result,members,candidates,choices,settings.every(s => s.confirmed),budget,fixed?.workloads));
+      recordRankInputs(scene,result,routes,members,candidates);
+      plans.push(...planModes(scene,plugins,result,members,candidates,choices,settings.every(s => s.confirmed),budget,fixed?.workloads,scoreInputs));
     }
+    // 탈락한 모드와 다른 연결 설정까지 순위를 비교했을 때만 점수 입력이 선택을 바꿀 수 있다.
+    if (scoreInputs && budget.examined > 1) for (const claim of scoreInputs) result.readClaims![claim] = "selection";
     plans.sort((a,b) => compareScores(b.score,a.score) || Number(b.confirmed)-Number(a.confirmed) || a.key.localeCompare(b.key));
     const alternatives = locked ? [] : plans.flatMap(p => reservationAlternatives(scene,plugins,result,p,budget));
     result.searches.push({ scenario, ...budget });
@@ -165,6 +195,9 @@ function prepare(scene: Scene, plugins: readonly DomainPlugin[], locked?: (Locke
 }
 
 function render(scene: Scene, plugins: readonly DomainPlugin[], result: Results, routes: RouteInputs[], selected: Plan[], gross: GrossLimits) {
+  // 사용량 표는 모든 자원의 용량을 표시한다. 실제 판정·정책 계산의 조회만 목표 세계에 보탠다.
+  const inventory=scene;
+  if (result.readClaims) scene={...scene,claimUses:result.readClaims};
   const configured = new Set(selected.flatMap(p => p.choices.map(c => c.connection)));
   judgeConnections(scene,plugins,result, c => !configured.has(c));
   selected.forEach((plan, scenario) => {
@@ -172,21 +205,24 @@ function render(scene: Scene, plugins: readonly DomainPlugin[], result: Results,
     for (const workload of plan.workloads.advances ?? []) result.reservations.push({ scenario, workload });
     result.choices.push(...choices.map(c => ({ ...c, scenario })));
     if (configured.size) judgeConnections(scene,plugins,result,c => configured.has(c),choices,scenario);
-    const chosen = candidates.map(list => {
-      const best = list[0]!;
-      return { ...best, refused: list.filter(c => c.preference < best.preference) };
-    });
+    const chosen: (Candidate & {pending: ReturnType<typeof pendingChoices>})[] = [];
     const outcomes = active.map((f,i) => {
       const w = f.workload, plugin = plugins.find(p => p.id === scene.workloads[w]!.domain)!;
       const base = candidates[w]![0]!, pick = picked[i]!;
-      const refused = candidates[w]!.filter(c => c.preference < pick.preference);
-      chosen[w] = { ...pick, solo: base.solo, refused };
+      const shared = candidates[w]!.length > 1 && competingWorks(w,active.map(f=>f.workload),routes).size > 1;
+      const pending = pendingChoices(result,candidates[w]!,pick,shared);
+      const refused = candidates[w]!.flatMap(c => {
+        const unresolved = pending.some(p => p.flow === c.flow);
+        return unresolved || c.preference < pick.preference && c.solo.verdict !== "unknown"
+          ? [{flow:c.flow,solo:c.solo,pending:unresolved}] : [];
+      });
+      chosen[w] = { ...pick, solo: base.solo, pending };
       for (const policy of together[i]!.policies ?? []) for (const claim of policy.inputs) routes[w]!.claims.add(claim);
       const peers = f.verdict === "impossible" ? [f] : allocationGroup(active, f);
-      const row = judgeWork(scene,result,plugin,scenario,f,base.solo,f.verdict === "impossible" ? pick.solo : together[i]!,peers,refused,base.flow.path);
+      const row = judgeWork(scene,result,plugin,scenario,f,base.solo,f.verdict === "impossible" ? pick.solo : together[i]!,peers,refused,base.flow);
       const prior = result.reasons.length - 1;
       const peerIds = new Set(peers.map(p => p.workload));
-      const ranks = scene.members.filter(m => m.scenario === scenario && m.priority !== undefined && peerIds.has(m.workload));
+      const ranks = scene.members.filter(m => m.scenario === scenario && m.evidence !== undefined && peerIds.has(m.workload));
       if (ranks.length) addReason(result,{outcome: row,stage:"allocate",rule:"시나리오의 고정 예약 우선순위",targetKind:"workload",targetRow:w},
         ranks.flatMap(m => m.evidence === undefined ? [] : [m.evidence]),[prior]);
       if (plan.workloads.advances?.some(w => peerIds.has(w))) addReason(result,{outcome:row,stage:"allocate",
@@ -205,7 +241,7 @@ function render(scene: Scene, plugins: readonly DomainPlugin[], result: Results,
     });
     uncertainPolicies(scene,plugins,result,active,together,active.map(f => chosen[f.workload]!.solo),outcomes);
     uncertainPreferences(plugins,result,active.map(f => f.workload),outcomes,routes,chosen);
-    recordUsage(scene, result, scenario, active, outcomes, gross, chosen);
+    recordUsage(inventory, result, scenario, active, outcomes, gross, chosen);
     for (const row of outcomes) assessWork(scene,plugins.find(p => p.id === result.outcomes[row]!.domain)!,result,row);
   });
   return result;
@@ -234,9 +270,11 @@ function evaluatePlans(input: Scene, plugins: readonly DomainPlugin[], scenario?
       const plans = next.scenarios.map(list => list[0]!);
       const answer = render(world,domains,next.result,next.routes,plans,next.gross);
       if (resolveWiring) resolveUnknowns(world,domains,answer,(s,p,changed,again) => evaluateWorld(s,p,changed,again,plans),next.routes,false);
-      return answer;
+      return {result:answer,routes:next.routes};
     }
     resolveUnknowns(scene,plugins,result,evaluateWorld,routes);
+    delete result.readClaims;
+    delete result.hookReads;
     return { choices: scenario === undefined ? [] : result.choices.filter(c => c.scenario === scenario).map(({scenario: _scenario,...choice}) => choice), result };
   }
   if (scenario === undefined) return [solve(primary,false,prepared.result)];

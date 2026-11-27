@@ -1,5 +1,5 @@
 // 공통 BASE-T 모드, 설치 채널의 도달 거리와 태그 없는 MAC 페이로드 한도를 협상한다.
-import { effectiveClaim, type Link, type Option } from "../../engine/contract.ts";
+import { readClaim, compareQuantity, effectiveClaim, type Link, type Option } from "../../engine/contract.ts";
 import { COPPER_CATEGORIES, ETHERNET_BASE_T_RATES, ETHERNET_COPPER_CHANNEL_REACH, MAC_PAYLOAD_FRACTION } from "./constants.ts";
 import { channelPortsMatch, networkInterface, readNetworkClaim } from "./evidence.ts";
 import { ETHERNET, MAC, MBPS, NETWORK, parseBaseTModes } from "./input.ts";
@@ -13,7 +13,7 @@ function reach(mode: Mode, { category, screening, length }: Channel) {
   const relevant = ETHERNET_COPPER_CHANNEL_REACH.filter(row =>
     row.mode === mode && COPPER_CATEGORIES.indexOf(row.category) <= category &&
     (row.screening === "any" || row.screening === screening) &&
-    (length <= row.reachM || "mitigatedReachM" in row && length <= row.mitigatedReachM));
+    (compareQuantity(length,row.reachM) <= 0 || "mitigatedReachM" in row && compareQuantity(length,row.mitigatedReachM) <= 0));
   if (relevant.some(row => !row.requiresExtraQualification)) return "ok";
   return relevant.length ? "conditional" : "impossible";
 }
@@ -60,7 +60,7 @@ export function negotiateEthernet({ scene, connection, ports }: Link): Option {
   };
 
   const observation = effectiveClaim(scene, "connection", connection, NETWORK, "linkSpeed");
-  const observed = observation === undefined ? null : scene.claims[observation]!.value;
+  const observed = observation === undefined ? null : readClaim(scene,observation).value;
   if (observation !== undefined) inputs.push(observation);
   const observedOption = typeof observed === "number" && observation !== undefined ? { observation } : {};
   const candidates = ETHERNET_BASE_T_RATES.flatMap(rate => {

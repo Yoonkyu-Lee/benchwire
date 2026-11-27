@@ -106,6 +106,14 @@ test("4K 144 Hz 10 bpc가 양 끝의 공통 DSC 12 bpp에서 조건부로 성립
   assert.ok(r.claims.some(row => scene.claims[row]!.ownerKind === "workload" && scene.claims[row]!.field === "dscBpp"));
 });
 
+test("T2 DSC 목표 bpp의 표현 오차는 인코더와 디코더의 지원 판정을 바꾸지 않는다", () => {
+  const scene = load();
+  setPortValue(scene,"native","dp","dscBpp",12.000000000000002);
+  const r = inspect(scene,"dsc");
+  assert.equal(r.outcome.mode,"dsc");
+  assert.equal(r.outcome.verdict,"conditional");
+});
+
 test("DSC 목표를 수신기가 거절하면 양 끝과 요청의 출처가 남고 60 Hz 폴백이 성립한다", () => {
   const scene = load();
   for (const capability of [0, 8]) {

@@ -1,5 +1,5 @@
 // USB-C DP Alt Mode의 양 끝 핀 주장을 설정별로 맞추고 USB 벌크에 남는 레인과 그 근거를 낸다.
-import { effectiveClaim, type Claim, type LaneProfile, type Link, type Scene } from "../../engine/contract.ts";
+import { readClaim, effectiveClaim, type Claim, type LaneProfile, type Link, type Scene } from "../../engine/contract.ts";
 import { DP_ALT_MODE_PIN_ASSIGNMENTS, DP_FOUR_LANE_PROFILE, DP_TWO_LANE_PROFILE } from "./constants.ts";
 import type { DpAltModePin } from "./link-capacity.ts";
 
@@ -19,7 +19,7 @@ export function altModeProfiles(scene: Scene, pairs: readonly Pair[]) {
   return [DP_FOUR_LANE_PROFILE,DP_TWO_LANE_PROFILE].flatMap(({id,pins:allowed,usbLanes}) => {
     const matches = pairs.flatMap(pair => {
       const claims = pair.map(row => effectiveClaim(scene,"interface",row,"display","pin",id));
-      const pinAt = (row: number | undefined) => row === undefined ? null : scene.claims[row]!.value as DpAltModePin | null;
+      const pinAt = (row: number | undefined) => row === undefined ? null : readClaim(scene,row).value as DpAltModePin | null;
       const pins = [pinAt(claims[0]),pinAt(claims[1])] as const;
       const [a,b] = pins, pin = a ?? b;
       if (pin !== null && !allowed.some(value => value === pin) || a !== null && b !== null && a !== b) return [];

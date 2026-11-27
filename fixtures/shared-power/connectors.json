@@ -1,0 +1,50 @@
+{
+  "sources": [
+    {
+      "id": "network-connectors",
+      "title": "합성 구리 커넥터 결합표",
+      "locator": "fixture:network/network-connectors",
+      "retrievedAt": "2026-11-26"
+    },
+    {
+      "id": "connectors",
+      "title": "합성 커넥터 결합표",
+      "locator": "fixture:power/connectors",
+      "retrievedAt": "2026-11-26"
+    }
+  ],
+  "connectors": [
+    {
+      "id": "network-socket",
+      "glyph": "rj45",
+      "endForm": {"value":"receptacle","confidence":"inferred","sources":["network-connectors"]}
+    },
+    {
+      "id": "network-plug",
+      "glyph": "rj45",
+      "endForm": {"value":"plug","confidence":"inferred","sources":["network-connectors"]}
+    },
+    {
+      "id": "c-plug",
+      "glyph": "usb-c",
+      "endForm": {"value":"C 플러그","confidence":"inferred","sources":["connectors"]}
+    },
+    {
+      "id": "c-receptacle",
+      "glyph": "usb-c",
+      "endForm": {"value":"C 리셉터클","confidence":"inferred","sources":["connectors"]}
+    }
+  ],
+  "mates": [
+    {
+      "a": "network-socket",
+      "b": "network-plug",
+      "evidence": {"value":true,"confidence":"inferred","sources":["network-connectors"]}
+    },
+    {
+      "a": "c-plug",
+      "b": "c-receptacle",
+      "evidence": {"value":true,"confidence":"inferred","sources":["connectors"]}
+    }
+  ]
+}

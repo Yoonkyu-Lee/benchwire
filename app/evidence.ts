@@ -170,7 +170,8 @@ function outcomeNotes(root: HTMLElement, result: Results, rows: readonly number[
   if (showVerdicts) list(root, "가능한 판정", possible.filter(row => selected.has(row.outcome)).map(row => verdictText[row.verdict]));
   list(root, "검증 퀘스트", result.quests.filter(row => selected.has(row.outcome)).map(row =>
     row.instruction + (row.impact === "verdict" ? " · 판정에 영향" : row.impact === "range" ? " · 범위에 영향" : "")), "quests");
-  list(root, "필요한 결합 형태", result.needs.filter(row => selected.has(row.outcome)).map(row => row.requiredCapability));
+  list(root, "필요한 결합 형태", result.needs.filter(row => selected.has(row.outcome)).map(row =>
+    row.requiredCapability + (row.conditional ? " · 일부 후보에서만 필요" : "")));
 }
 
 function limitWitnesses(view: ResultView, outcome: number) {

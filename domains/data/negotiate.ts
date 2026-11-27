@@ -1,6 +1,6 @@
 // 양 끝의 USB 모드와 중간 부품의 등급을 맞추고 벌크 서비스와 공용 예산을 낸다.
 // USB4의 방향별 터널 예산은 대칭 모드의 확인된 가용량을 쓰며, 미확인 값의 상한은 부호 블록으로 제한한다.
-import { effectiveClaim, type Claim, type Link, type Option, type Pool } from "../../engine/contract.ts";
+import { readClaim, compareQuantity, effectiveClaim, type Claim, type Link, type Option, type Pool } from "../../engine/contract.ts";
 import {
   GIGABITS_PER_MEGABYTE, USB_2_HIGH_SPEED_BULK_LIMIT_MB_PER_SECOND, USB_2_HIGH_SPEED_MODE,
   USB_2_HIGH_SPEED_SIGNAL_GBPS, USB_3_2_PROTOCOL_ESTIMATES, USB4_LINK_MODES,
@@ -18,8 +18,8 @@ const usbModes = [highSpeed, ...USB_3_2_PROTOCOL_ESTIMATES];
 function modeRange<T extends { mode: string; rawGbps: number }>(rows: readonly T[],
   endModes: (string[] | null)[], ratings: (number | null)[]) {
   const cap = Math.min(Infinity, ...ratings.map(rating => rating ?? Infinity));
-  const possible = rows.findLast(row => row.rawGbps <= cap && endModes.every(modes => modes === null || modes.includes(row.mode)));
-  const confirmed = rows.findLast(row => row.rawGbps <= cap && !ratings.includes(null) &&
+  const possible = rows.findLast(row => compareQuantity(row.rawGbps,cap) <= 0 && endModes.every(modes => modes === null || modes.includes(row.mode)));
+  const confirmed = rows.findLast(row => compareQuantity(row.rawGbps,cap) <= 0 && !ratings.includes(null) &&
     endModes.every(modes => modes?.includes(row.mode)));
   return { confirmed, possible };
 }
@@ -30,7 +30,7 @@ export function usbServices({ scene, connection, ports, laneProfiles }: Link): {
     const row = effectiveClaim(scene, kind, owner, DATA, field);
     if (row === undefined) return null;
     inputs.add(row);
-    return scene.claims[row]!.value;
+    return readClaim(scene,row).value;
   }
   function endRows(protocol: string) {
     return [ports[0], ports.at(-1)].map(port => {
@@ -48,7 +48,7 @@ export function usbServices({ scene, connection, ports, laneProfiles }: Link): {
   }
 
   const observation = effectiveClaim(scene,"connection",connection,DATA,"usbMode");
-  const observed = observation === undefined ? undefined : scene.claims[observation]!.value;
+  const observed = observation === undefined ? undefined : readClaim(scene,observation).value;
   // USB 2·3 벌크 모드 관측은 USB4 패브릭이나 PCIe 서비스의 한도를 정하지 않는다.
   const nativeEnds = endRows(USB);
   function bulkRange(rows: readonly (typeof usbModes[number])[], ends: (string[] | null)[], rates: (number | null)[], endpoints = nativeEnds) {

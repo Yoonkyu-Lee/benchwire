@@ -28,7 +28,7 @@ export type EvaluationReply =
   | { kind: "variants"; results: Variants; elapsed: number }
   | { kind: "error"; message: string };
 
-interface Job { request: EvaluationRequest; complete: (reply: EvaluationReply | undefined) => void }
+interface Job { owner: object; request: EvaluationRequest; complete: (reply: EvaluationReply | undefined) => void }
 const pending = new Map<object, Job>();
 let active: Job | undefined;
 let worker: Worker | undefined;
@@ -36,8 +36,17 @@ let worker: Worker | undefined;
 export function evaluateInWorker(owner: object, request: EvaluationRequest) {
   return new Promise<EvaluationReply | undefined>(complete => {
     pending.get(owner)?.complete(undefined);
-    pending.set(owner, { request, complete });
-    send();
+    const job = { owner, request, complete };
+    if (active?.owner === owner && request.kind === "primary") {
+      active.complete(undefined);
+      worker?.terminate();
+      worker = undefined;
+      pending.delete(owner);
+      start(job);
+    } else {
+      pending.set(owner, job);
+      send();
+    }
   });
 }
 
@@ -45,16 +54,20 @@ function send() {
   if (active || !pending.size) return;
   const [owner, job] = pending.entries().next().value!;
   pending.delete(owner);
+  start(job);
+}
+
+function start(job: Job) {
   active = job;
   try {
     if (!worker) {
       const instance = new Worker(new URL("./assessment.worker.ts", import.meta.url), { type: "module" });
-      instance.onmessage = (event: MessageEvent<EvaluationReply>) => finish(event.data);
+      instance.onmessage = (event: MessageEvent<EvaluationReply>) => { if (worker === instance) finish(event.data); };
       instance.onerror = event => {
         event.preventDefault();
-        stop("판정 워커 오류: " + event.message);
+        if (worker === instance) stop("판정 워커 오류: " + event.message);
       };
-      instance.onmessageerror = () => stop("판정 결과를 읽을 수 없습니다.");
+      instance.onmessageerror = () => { if (worker === instance) stop("판정 결과를 읽을 수 없습니다."); };
       worker = instance;
     }
     worker.postMessage(job.request);

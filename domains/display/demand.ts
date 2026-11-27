@@ -1,5 +1,5 @@
 // 요청 해상도·색과 허용한 DSC·주사율 폴백을 고정 영상 대역폭 행으로 바꾼다.
-import { effectiveClaim, type Scene } from "../../engine/contract.ts";
+import { readClaim, compareQuantity, effectiveClaim, type Scene } from "../../engine/contract.ts";
 import { DSC_MODE, type DisplayDemand } from "./dsc.ts";
 import { CHROMA, CVT_RB_V2, DSC } from "./sources.ts";
 import { cvtRbV2PixelClockHz, uncompressedVideoBandwidthGbps, videoBandwidthGbps, type VideoChroma } from "./video-demand.ts";
@@ -14,7 +14,7 @@ export function displayDemand(scene: Scene, workload: number): DisplayDemand[] {
     const row = effectiveClaim(scene, "workload", workload, "display", field);
     if (row === undefined) return null;
     inputs.push(row);
-    return scene.claims[row]!.value;
+    return readClaim(scene,row).value;
   }
 
   const width = read("width") as number | null;
@@ -45,7 +45,7 @@ export function displayDemand(scene: Scene, workload: number): DisplayDemand[] {
   }];
   const dscClaim = effectiveClaim(scene, "workload", workload, "display", "dscBpp");
   if (dscClaim !== undefined) {
-    const dscBpp = scene.claims[dscClaim]!.value as number | null;
+    const dscBpp = readClaim(scene,dscClaim).value as number | null;
     demands.push({
       ...common, mode: DSC_MODE, preference: 1, dscBpp, dscClaim,
       requested: requestedClock === null || bpc === null || chroma === null || dscBpp === null ? null : videoBandwidthGbps(requestedClock, dscBpp),
@@ -55,8 +55,8 @@ export function displayDemand(scene: Scene, workload: number): DisplayDemand[] {
   }
   const fallbackClaim = effectiveClaim(scene, "workload", workload, "display", "fallbackRefresh");
   if (fallbackClaim !== undefined) {
-    const fallback = scene.claims[fallbackClaim]!.value as number | null;
-    if (fallback === null || refresh === null || fallback < refresh) {
+    const fallback = readClaim(scene,fallbackClaim).value as number | null;
+    if (fallback === null || refresh === null || compareQuantity(fallback,refresh) < 0) {
       demands.push({
         ...common, mode, preference: 2, requested: uncompressed(clock(fallback)),
         rule: fallback === null ? "허용한 폴백 주사율 미확인" : `허용한 ${fallback} Hz 폴백의 비압축 영상 대역폭`,

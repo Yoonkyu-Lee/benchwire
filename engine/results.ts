@@ -1,7 +1,10 @@
 // 판정 결과와 중간 계산을 번호로 연결해 출력에서 입력 주장까지 되짚는다.
 import type { Carrier, Choice, Demand, Direction, DomainPlugin, KnownVerdict, Measure, Option, Pool, Step, Trace, Verdict } from "./contract.ts";
+import type { ClaimUse } from "./scene.ts";
+import type { HookRead } from "./hook-reads.ts";
 
 export type Run = "solo" | "together";
+export type GoalVerdict = "ok" | "impossible" | "unknown";
 export type Target = "demand" | "workload" | "connection" | "edge" | "port" | "resource" | "linkResource";
 // 계약 오류의 행 번호가 가리키는 표. 탄력 배분의 단위 충돌은 단일 플러그인 호출에 귀속되지 않는다.
 const errorTarget = {
@@ -13,6 +16,16 @@ export interface PhysicalStep {
   kind: "mate" | "part"; verdict: Verdict; required: string; passages: number[][]; truncated: boolean; inputs: number[];
 }
 export interface Results {
+  // 미확인 세계를 찾는 동안 훅의 실제 조회와 선택·배분에서의 용도를 기록한다.
+  readClaims?: ClaimUse[];
+  hookReads?: HookRead[];
+  goals: { id: string; scenario: number; verdict: GoalVerdict; combined: boolean; truncated: boolean;
+    // 빈 limitClaims는 특정 미확인 주장 없이 계획·경로 조합이 상한을 넘은 경우다.
+    limitClaims?: number[]; openClaims?: number[] }[];
+  goalEvidence: { goal: number; workload: number; outcome: number; verdict: GoalVerdict; low: number | null; high: number | null;
+    connections: number[]; portVisits?: {connection: number; port: number}[]; reasons: number[]; claims: number[]; issue?: "notMember" }[];
+  goalWitnesses: {goal: number; world: number; workload: number; high: number | null;
+    assignments: {claim: number; value: string | number | boolean}[]}[];
   reservations: { scenario: number; workload: number }[];
   choices: (Choice & { scenario: number })[];
   searches: { scenario: number; examined: number; truncated: boolean }[];
@@ -24,7 +37,7 @@ export interface Results {
   errors: { domain: string; spec: string; field?: string; resource?: number; entryPoint: EntryPoint | null; targetKind: typeof errorTarget[EntryPoint]; row: number }[];
   possibleVerdicts: { outcome: number; verdict: Verdict }[];
   quests: { outcome: number; claim: number; instruction: string; impact?: "range" | "verdict" }[];
-  rangeInputs: { outcome: number; claim: number }[];
+  rangeInputs: { outcome: number; claim: number; deliveryRuns?: Run[] }[];
   profileWorlds: { world: number; claim: number; value: string | number | boolean }[];
   wirings: { world: number; claim: number; node: number }[];
   specSources: { domain: string; id: string; title: string; locator: string }[];
@@ -33,21 +46,24 @@ export interface Results {
   measures: (Measure & { outcome: number; run: Run })[];
   options: (Option & { effective?: true; poolResource?: number; serviceResource?: number; linkResource: number; connection: number; domain: string; direction: Direction })[];
   demands: (Demand & { workload: number })[];
-  paths: { workload: number; demand: number; verdict: Verdict; bestCase?: Verdict; conditioned?: boolean; disconnected?: number[]; disconnectedEdges?: number[]; key: string; truncated: boolean }[];
+  paths: { workload: number; demand: number; verdict: Verdict; bestCase?: Verdict; worstCase?: Verdict; conditioned?: boolean; disconnected?: number[]; disconnectedEdges?: number[]; key: string; truncated: boolean }[];
   matches: (Trace & { demand: number; option: number; verdict: Verdict })[];
   steps: (Step & { carrier?: Carrier; path: number; order: number })[];
   resourceUsage: { scenario: number; resourceKind: "scene" | "link"; resource: number; unit: string;
     used: number | null; capacity: number | null; capacityClaim?: number; basis: "calculated" | "assumed"; reasonRows: number[] }[];
   allocations: { scenario: number; workload: number; run: Run; value: number | null; unit: string }[];
   bindings: { scenario: number; workload: number; run: Run; resourceKind: "scene" | "link"; resource: number }[];
-  outcomes: { subjectKind: "connection" | "workload"; subjectRow: number; option?: number; path: number | null; soloPath?: number; direction: Direction | null; scenario: number | null; domain: string; unit?: string; pool?: { domain: string; id: string }; verdict: Verdict; mode: string; label: string }[];
+  outcomes: { subjectKind: "connection" | "workload"; subjectRow: number; option?: number; path: number | null; soloPath?: number; possiblePaths?: number[]; direction: Direction | null; scenario: number | null; domain: string; unit?: string; pool?: { domain: string; id: string }; verdict: Verdict; mode: string; label: string }[];
   metrics: { outcome: number; kind: "solo" | "together" | "drop" | "dropPercent" | "unused" | "limit"; unit: string;
     range?: "witnessed" | "conservative"; lowWorld?: number; highWorld?: number;
     value: number | null; low: number | null; high: number | null; basis: "calculated" | "assumed" }[];
   reasons: { outcome: number; run?: Run; profile?: string; stage: "physical" | "negotiate" | "path" | "allocate" | "judge"; rule: string; targetKind: Target; targetRow: number }[];
   reasonInputs: { reason: number; claim: number }[];
   reasonParents: { reason: number; prior: number }[];
-  needs: { outcome: number; requiredCapability: string }[];
+  needs: { outcome: number; requiredCapability: string; conditional?:true }[];
+  // 같은 결합 요구 집합은 한 번만 기록한다. size에는 요구가 없는 후보도 포함된다.
+  needCases?: { size:number; members:{ set:number; connection:number; capability:string }[] };
+  incompleteNeeds?: number[];
 }
 export function addReason(result: Results, reason: Results["reasons"][number], inputs: readonly number[], parents: readonly number[] = [], domain = "", specs: readonly string[] = []) {
   const row = result.reasons.push(reason) - 1;

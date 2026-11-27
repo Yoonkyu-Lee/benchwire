@@ -1,6 +1,6 @@
 // 영역은 저장 입력의 모양과 협상·수요·소비 규칙을 선언하고 계산에 읽은 주장 번호를 돌려준다.
 import type { Claim, Scene, Value } from "./scene.ts";
-export { effectiveClaim } from "./scene.ts";
+export { effectiveClaim, readClaim, hasClaimPrefix } from "./scene.ts";
 export type { Scene, Claim, Value, MeasurementContext } from "./scene.ts";
 
 export type Verdict = "ok" | "conditional" | "impossible" | "unknown";
@@ -8,7 +8,21 @@ export type Direction = "forward" | "reverse";
 export interface Trace { rule: string; inputs: number[]; specs: string[] }
 export type KnownVerdict = Exclude<Verdict, "unknown">;
 export interface Interval { low: number | null; high: number | null }
-export interface Measure extends Interval { kind: string; unit: string }
+// inputs는 이 지표의 low~high가 실제로 반영한 주장이다. 판정 전체의 인용은 Trace에 둔다.
+export interface Measure extends Interval { kind: string; unit: string; inputs?: readonly number[] }
+
+// 단위 환산과 배분의 연산 반올림을 흡수한다.
+const RELATIVE_TOLERANCE = 16 * Number.EPSILON;
+// 큰 두 값을 뺀 작은 잔량에는 원래 값의 반올림이 남는다. 10⁻¹²는 규격 걸음·실측 정밀도보다 작다.
+const ABSOLUTE_TOLERANCE = 1e-12;
+export function compareQuantity(a: number, b: number) {
+  if (a === b) return 0;
+  const difference = a - b;
+  const tolerance = Math.max(ABSOLUTE_TOLERANCE, RELATIVE_TOLERANCE * Math.max(Math.abs(a),Math.abs(b)));
+  if (Number.isFinite(difference) && Math.abs(difference) <= tolerance) return 0;
+  return Math.sign(difference);
+}
+
 export interface Choice extends Trace { connection: number; profile: string; domain: string }
 export type LoadTarget = { resource: number; possible?: boolean } | { connection: number; direction: Direction; domain: string; mode: string };
 export interface StandingLoad extends Trace {
@@ -47,7 +61,8 @@ export interface Demand extends Trace {
   mode: string; preference: number; elastic: boolean; via: number[]; requested: number | null; unit: string;
 }
 export interface Step { kind: "edge" | "connection"; row: number; from: number; to: number; direction: Direction; option: number | null }
-export interface Consumption extends Trace { resource: number; fixed: number; coefficient: number }
+// 고정 예약을 구간으로만 알면 fixed가 하한, fixedHigh가 그 자원에서 소비할 수 있는 상한이다.
+export interface Consumption extends Trace { resource: number; fixed: number; fixedHigh?: number; coefficient: number }
 export interface InputSchema {
   safeParse(input: unknown): { success: true } | { success: false; error: { issues: readonly { path: readonly PropertyKey[]; message: string }[] } };
 }
@@ -55,11 +70,13 @@ export interface PolicyContext {
   scene: Scene; resource: number; connectedPorts: readonly number[]; activeWorkloads: readonly number[];
 }
 // limit는 해당 자원 단위의 작업별 사용 상한이다. 적용할 표가 없으면 null을 돌려준다.
-export interface PolicyLimit extends Trace { workload: number; limit: number }
+export interface PolicyLimit extends Trace { workload: number; limit: number | null }
 export interface DomainPlugin {
   laneProfiles?(link: Link): readonly LaneProfile[];
+  // assess가 보고하는 영역 고유 지표다. delivery는 엔진이 계산하는 내장 전달량에 예약한다.
+  goalMeasures?: readonly { kind: string; unit: string; label: string }[];
   // 소유 대상에 관계없이 유효한 미확인 주장의 이산 후보를 준다. 참조 필드는 파일의 지역 ID를 쓴다.
-  profileValues?(claim: Claim): readonly Exclude<Value, null>[];
+  profileValues?(claim: Claim, topology: Pick<Scene,"interfaces" | "ports" | "resources">): readonly Exclude<Value, null>[];
   standingLoads?(scene: Scene): readonly StandingLoad[];
   pools?(link: Link): readonly Pool[];
   match?(link: Link, option: Option, demand: Demand, workload: number): Trace & { verdict: Verdict };

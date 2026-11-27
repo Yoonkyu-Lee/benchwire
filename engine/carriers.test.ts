@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { loadScene } from "../cli/load.ts";
 import { trialDomain } from "../fixtures/trial.ts";
-import type { DomainPlugin, Pool } from "./contract.ts";
+import { readClaim, type DomainPlugin, type Pool } from "./contract.ts";
 import { evaluate } from "./evaluate.ts";
 
 function setup(amounts: number[], limit: number | null = 100, scope: Pool["scope"] = "direction", unit = "MB/s") {
@@ -162,13 +162,25 @@ test("T4 공용 예산에 경계가 없어도 알려진 서비스 한도가 미�
   assert.deepEqual(r.possibleVerdicts.filter(v => v.outcome === outcome).map(v => v.verdict).sort(), ["conditional","impossible"]);
 });
 
-test("T8 미확인 예산의 전달량 전체가 같은 충전 판정이면 assess가 계산한 가능한 판정만 남는다", () => {
-  const { client, run } = setup([100], null, "direction", "W");
-  client.assess = (_s,_w,_d,_steps,p) => ({ possible: ["conditional"], metrics: [{ ...p, kind: "부하", unit: "W" }],
-    rule: "전체 범위에서 목표 미달", inputs: [], specs: [] });
-  const { r, row } = run(), outcome = row(0);
-  assert.deepEqual(r.possibleVerdicts.filter(v => v.outcome === outcome).map(v => v.verdict), ["conditional"]);
-  assert.deepEqual(r.measures.filter(m => m.outcome === outcome).map(m => [m.low,m.high]), [[0,100],[0,100]]);
+test("T8 공용 예산이 0일 수 있으면 경로 불가를 포함하고 양수가 보장되면 충전 판정만 남는다", () => {
+  function assess(limit: number | null, floor?: number) {
+    const { client, carrier, run } = setup([100],limit,"direction","W");
+    const pools = carrier.pools!;
+    if (limit === null && floor !== undefined) carrier.pools = link => pools(link).map(p => ({...p,bounds:{low:floor,high:100}}));
+    client.assess = (_s,_w,_d,_steps,p) => ({ possible: ["conditional"], metrics: [{ ...p, kind: "부하", unit: "W" }],
+      rule: "전체 범위에서 목표 미달", inputs: [], specs: [] });
+    const { r, row } = run(), outcome = row(0);
+    return {possible:r.possibleVerdicts.filter(v => v.outcome === outcome).map(v => v.verdict),
+      measures:r.measures.filter(m => m.outcome === outcome).map(m => [m.low,m.high])};
+  }
+  for (const floor of [0,40]) {
+    const fixed = [floor,60,100].map(limit => assess(limit,floor));
+    assert.deepEqual(fixed.map(r => r.possible),[[floor ? "conditional" : "impossible"],["conditional"],["conditional"]]);
+    const range = assess(null,floor);
+    assert.deepEqual(new Set(range.possible),new Set(fixed.flatMap(r => r.possible)));
+    assert.deepEqual(range.measures,[[floor,100],[floor,100]]);
+    if (floor === 0) assert.deepEqual(assess(null),range);
+  }
 });
 
 test("T4 다른 영역이 발행한 옵션도 같은 케이블 예산만 한 번 쓴다", () => {
@@ -328,7 +340,7 @@ for (const ownerKind of ["item","port","resource"] as const) test("T10 설정 �
   scene.claimSources.push(...scene.claimSources.filter(s => s.claim === capacity).map(s => ({...s,claim})));
   carrier.profileValues = f => f.field === "negotiated" ? [25,100] : [];
   const negotiate = carrier.negotiate;
-  carrier.negotiate = link => negotiate(link).map(o => ({...o, limit:link.scene.claims[claim]!.value as number | null,
+  carrier.negotiate = link => negotiate(link).map(o => ({...o, limit:readClaim(link.scene,claim).value as number | null,
     inputs:[...o.inputs,claim]}));
   const {r,row} = run(), outcome = row(0);
   const metric = r.metrics.find(m => m.outcome === outcome && m.kind === "together")!;

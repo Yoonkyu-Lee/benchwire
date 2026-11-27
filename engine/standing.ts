@@ -1,16 +1,19 @@
 // 장치가 연결돼 있는 동안 쓰는 양을 실물별로 한 번씩 해당 입력 링크와 상위 자원에서 덜어낸다.
-import type { DomainPlugin, Scene } from "./contract.ts";
+import { compareQuantity, type DomainPlugin, type Scene } from "./contract.ts";
 import { availableOption } from "./pools.ts";
-import { resourceFacts } from "./scene.ts";
+import { readClaim, resourceFacts } from "./scene.ts";
 import type { Results } from "./results.ts";
+import { callHook } from "./hook-reads.ts";
 
 function remaining(limit: number | null, amount: number | null) {
+  if (amount === 0) return limit;
   if (limit === 0) return 0;
-  return amount === null || limit === null ? null : Math.max(0, limit - amount);
+  if (amount === null || limit === null) return null;
+  return compareQuantity(limit,amount) > 0 ? limit - amount : 0;
 }
 
 export function resourceCapacity(scene: Scene, result: Results, resource: number) {
-  const value = scene.claims[resourceFacts(scene, resource).capacity]!.value;
+  const value = readClaim(scene,resourceFacts(scene, resource).capacity,"range").value;
   let capacity = typeof value === "number" ? value : null;
   for (const load of result.standingLoads) if (load.kind === "scene" && load.resource === resource)
     capacity = remaining(capacity, load.amount);
@@ -18,7 +21,8 @@ export function resourceCapacity(scene: Scene, result: Results, resource: number
 }
 
 export function reserveStanding(scene: Scene, plugins: readonly DomainPlugin[], result: Results) {
-  for (const plugin of plugins) for (const load of plugin.standingLoads?.(scene) ?? []) {
+  for (const plugin of plugins) for (const load of plugin.standingLoads ? callHook(scene,result,"standingLoads",-1,
+    view=>plugin.standingLoads!(view)).value : []) {
     const { item, id, unit, rule, inputs } = load;
     const issue = (field: string) => result.standingErrors.push({ domain: plugin.id, item, id, field });
     if (!scene.items[item]) { issue("item"); continue; }
@@ -60,7 +64,7 @@ export function reserveStanding(scene: Scene, plugins: readonly DomainPlugin[], 
     }
     function charge(cap: { limit: number | null; bounds?: { low: number; high: number } }, min: number, max: number) {
       const floor = cap.limit ?? cap.bounds?.low ?? 0, ceiling = cap.limit ?? cap.bounds?.high;
-      const left = Math.max(0,floor - max), right = ceiling === undefined ? null : Math.max(0,ceiling - min);
+      const left = remaining(floor,max)!, right = remaining(ceiling ?? null,min);
       cap.limit = left === right ? left : null;
       if (cap.limit === null && right !== null) cap.bounds = {low: left, high: right};
       else delete cap.bounds;

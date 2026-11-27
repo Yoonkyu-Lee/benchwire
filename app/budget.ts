@@ -73,7 +73,15 @@ function newLine(modelRef: string, product?: ProductRef): BudgetLine {
   return {key:priceKey(modelRef,product),modelRef,product,quantity:0n,instances:[],skippedSellers:[],packs:0n,cents:null};
 }
 
-export function calculateBudget(scenario: Scenario, items: readonly Item[], book: PriceBook, unassignedNeeds = 0) {
+type BudgetView = Pick<ResultView,"scenario" | "negotiations"> & {
+  scene: Pick<ResultView["scene"],"scenarios"> & Partial<Pick<ResultView["scene"],"connections">>;
+  result: Pick<ResultView["result"],"needs"|"needCases"|"incompleteNeeds"> & Partial<Pick<ResultView["result"],"searches">>;
+};
+export function calculateBudget(scenario: Scenario, items: readonly Item[], book: PriceBook, view: BudgetView | undefined) {
+  const assessed = view && view.scenario !== null && view.scene.scenarios[view.scenario]?.id === scenario.id
+    ? budgetRequirements(view,scenario) : undefined;
+  const requirements = assessed?.requirements ?? [];
+  const unassignedNeeds = assessed?.high ?? (assessed?.low || null);
   const grouped = new Map<string, BudgetLine>();
   const owned: string[] = [];
   const seen = new Set<string>();
@@ -162,20 +170,26 @@ export function calculateBudget(scenario: Scenario, items: readonly Item[], book
     }
     lines.push(...products.values());
   }
-  let subtotalCents = 0n, unknownCount = BigInt(unassignedNeeds);
+  let subtotalCents = 0n, unpricedPurchases = 0n;
   for (const line of lines) {
-    if (!line.quote) { unknownCount += line.quantity; continue; }
+    if (!line.quote) { unpricedPurchases += line.quantity; continue; }
     line.cents = line.packs * packPrice(line.quote);
     subtotalCents += line.cents;
   }
   const limitCents = scenario.budget === undefined ? null : BigInt(centsFromDollars(String(scenario.budget)));
-  const limitStatus = limitCents === null ? "unset" : subtotalCents > limitCents ? "over" : unknownCount ? "unknown" : "within";
-  return { lines, owned, subtotalCents, unknownCount, unassignedNeeds, limitCents, limitStatus };
+  const unknownRange={low:unpricedPurchases+BigInt(assessed?.low ?? 0),high:assessed?.high==null ? null : unpricedPurchases+BigInt(assessed.high)};
+  const unknownCount=unknownRange.high ?? unknownRange.low;
+  const limitStatus = limitCents === null ? "unset" : subtotalCents > limitCents ? "over"
+    : unknownRange.high === 0n ? "within" : "unknown";
+  return { lines, owned, subtotalCents, unknownCount, unknownRange, requirements, unassignedNeeds, limitCents, limitStatus };
 }
 
 type Budget = ReturnType<typeof calculateBudget>;
+export function unknownPrices({low,high}: Budget["unknownRange"]) {
+  return "가격 미확인 " + low + (high===null ? "개 이상" : high===low ? "개" : "–"+high+"개");
+}
 export function compareBudgets(before: Budget, after: Budget) {
-  if (before.unassignedNeeds || after.unassignedNeeds) return null;
+  if (before.unknownRange.high===null || after.unknownRange.high===null || before.unassignedNeeds !== 0 || after.unassignedNeeds !== 0) return null;
   const unknown = new Map<string, bigint>();
   for (const line of before.lines) if (line.cents === null) unknown.set(line.key, line.quantity);
   for (const line of after.lines) if (line.cents === null) unknown.set(line.key, (unknown.get(line.key) ?? 0n) - line.quantity);
@@ -212,27 +226,37 @@ async function json<T>(path: string, body?: unknown, method = "PUT"): Promise<T>
   return await response.json() as T;
 }
 
-function budgetRequirements(view: ResultView, scenario: Scenario) {
-  const rows = [...view.negotiations].flatMap(([connection,outcomes]) => {
-    const capabilities = new Set(view.result.needs.filter(n => outcomes.includes(n.outcome)).map(n => n.requiredCapability));
-    return [...capabilities].map(capability => ({
-      need: {connection,capability},
-      purchases: scenario.purchases?.filter(p => p.need?.connection === connection && p.need.capability === capability) ?? [],
-    }));
+function budgetRequirements(view: BudgetView, scenario: Scenario) {
+  const known = [...view.negotiations].flatMap(([connection,outcomes]) => {
+    const capabilities = new Set(view.result.needs.filter(n => outcomes.includes(n.outcome) && !n.conditional).map(n => n.requiredCapability));
+    return [...capabilities].map(capability => ({connection,capability}));
   });
-  return { rows, unassigned: rows.filter(row => !row.purchases.length).length };
+  const sets=view.result.needCases;
+  const cases=sets ? Array.from({length:sets.size},()=>[] as typeof known) : [known];
+  for (const {set,connection,capability} of sets?.members ?? []) {
+    const id=view.scene.connections![connection]!.id;
+    if (view.negotiations.has(id)) cases[set]!.push({connection:id,capability});
+  }
+  const union=new Map(cases.flat().map(n=>[JSON.stringify(n),n]));
+  const requirements=[...union.values()].map(need=>({need,
+    purchases:scenario.purchases?.filter(p=>p.need?.connection===need.connection && p.need.capability===need.capability) ?? [],
+    conditional:cases.some(rows=>!rows.some(n=>n.connection===need.connection && n.capability===need.capability))}));
+  const missing=new Set(requirements.filter(n=>!n.purchases.length).map(n=>JSON.stringify(n.need)));
+  const counts=cases.map(rows=>rows.filter(n=>missing.has(JSON.stringify(n))).length);
+  const incomplete=view.result.incompleteNeeds?.includes(view.scenario!) || view.result.searches?.some(s=>s.scenario===view.scenario && s.truncated);
+  return {requirements,low:Math.min(...counts),high:incomplete ? null : Math.max(...counts)};
 }
 
 // 선택한 시나리오만 평가한다. 서로 다른 장면에서 고른 두 시나리오는 비교 키에서 같은 자리다.
 async function comparisonSnapshot(doc: SceneDocument, scenario: Scenario, documents: Documents) {
-  const selected = {...doc, scenarios:[{...scenario,id:"선택한 시나리오"}]};
+  const selected = {...doc, scenarios:[scenario]};
   const loaded = loadAssessment(selected, documents, null);
   if ("error" in loaded) throw new Error(loaded.error);
   const reply = await evaluateInWorker({}, {kind:"primary",document:selected,documents});
   if (reply?.kind !== "primary") throw new Error(reply?.kind === "error" ? reply.message : "비교할 판정을 읽을 수 없습니다.");
-  const snapshot: Snapshot = {scene:loaded.scene,result:reply.result};
-  const {unassigned} = budgetRequirements(resultView(snapshot.scene,snapshot.result,loaded.scenario,"together"),scenario);
-  return {snapshot,unassigned};
+  const view = resultView(loaded.scene,reply.result,loaded.scenario,"together");
+  const snapshot: Snapshot = {scene:{...loaded.scene,scenarios:[{...loaded.scene.scenarios[0]!,id:"선택한 시나리오"}]},result:reply.result};
+  return {snapshot,view};
 }
 function technicalValue(snapshot: Snapshot, row: number | null) {
   if (row === null) return "없음";
@@ -390,7 +414,7 @@ export function mountBudget(root: HTMLElement, library: Library, documents: Docu
     dialog.onclose = () => { refresh = undefined; clearTimeout(expiryTimer); document.removeEventListener("visibilitychange",expire); dialog.remove(); };
     let book: PriceBook | undefined;
     let choices: Purchase[] = [];
-    let requirements: ReturnType<typeof budgetRequirements>["rows"] = [];
+    let requirements: Budget["requirements"] = [];
     const chosen = () => {
       const {doc,id} = state();
       return doc.scenarios.find(s => s.id === id);
@@ -478,18 +502,16 @@ export function mountBudget(root: HTMLElement, library: Library, documents: Docu
       picker.onchange = pick;
       pick();
     }
-    function showNeeds(scenario: Scenario) {
-      const {view,id,doc} = state();
+    function showNeeds(rows: Budget["requirements"]) {
+      const {doc} = state();
       const picker = select("need"), before = picker.value;
       const area = get(".needs");
       area.replaceChildren();
-      const assessed = view && view.scenario !== null && view.scene.scenarios[view.scenario]?.id === id
-        ? budgetRequirements(view,scenario) : undefined;
-      requirements = assessed?.rows ?? [];
+      requirements = rows;
       picker.replaceChildren(new Option("일반 구매",""));
       if (requirements.length) area.append(el("h3","필요한 결합 형태"));
-      for (const {need,purchases} of requirements) {
-        const label = need.connection + " · " + need.capability;
+      for (const {need,purchases,conditional} of requirements) {
+        const label = need.connection + " · " + need.capability + (conditional ? " · 일부 후보에서만 필요" : "");
         picker.add(new Option(label,JSON.stringify(need)));
         const connection = doc.connections.find(c => c.id === need.connection)!;
         const endpoints = [connection.from,connection.to].map(p => p.instanceId + "/" + p.id).join(" ↔ ");
@@ -506,7 +528,6 @@ export function mountBudget(root: HTMLElement, library: Library, documents: Docu
         area.append(line);
       }
       if ([...picker.options].some(o => o.value === before)) picker.value = before;
-      return assessed?.unassigned;
     }
     let lastScenario: Scenario | undefined;
     let comparisonScenarios: SceneDocument["scenarios"] | undefined;
@@ -516,14 +537,14 @@ export function mountBudget(root: HTMLElement, library: Library, documents: Docu
       area.replaceChildren();
       for (const name of ["add","cap","compare"]) get<HTMLButtonElement>("."+name+" button").disabled = !scenario;
       if (!scenario) { area.append(el("p","예산을 작성할 시나리오를 먼저 만드세요.")); return; }
-      const unassigned = showNeeds(scenario);
-      const budget = calculateBudget(scenario,doc.items,book,unassigned);
+      const budget = calculateBudget(scenario,doc.items,book,state().view);
+      showNeeds(budget.requirements);
       area.append(el("h3",scenarioName(scenario)),el("strong","확인된 상품 소계 " + usd(budget.subtotalCents)),
-        el("p","가격 미확인 " + budget.unknownCount + "개 · 세금과 배송비 미확인"));
+        el("p",unknownPrices(budget.unknownRange) + " · 세금과 배송비 미확인"));
       area.querySelector("strong")!.className = "budget-total";
       const remaining = budget.limitCents === null ? "상품 예산 상한 미설정" : budget.limitStatus === "over"
         ? "상품 예산 " + usd(budget.subtotalCents - budget.limitCents) + " 초과" : "상품 예산 " + usd(budget.limitCents) +
-          (budget.limitStatus === "within" && unassigned !== undefined ? " 이내" : " · 충족 여부 미확인");
+          (budget.limitStatus === "within" ? " 이내" : " · 충족 여부 미확인");
       area.append(el("p",remaining));
       if (budget.limitStatus === "over") area.lastElementChild!.className = "over";
       const list = el("ul","");
@@ -738,8 +759,8 @@ export function mountBudget(root: HTMLElement, library: Library, documents: Docu
         comparisonSnapshot(after,right,sceneSelect.value ? otherDocuments : documents)]);
       expire();
       if (version !== comparisonVersion || !dialog.open) return;
-      const a = calculateBudget(left,before.items,book!,leftSide.unassigned);
-      const b = calculateBudget(right,after.items,book!,rightSide.unassigned);
+      const a = calculateBudget(left,before.items,book!,leftSide.view);
+      const b = calculateBudget(right,after.items,book!,rightSide.view);
       const old = leftSide.snapshot, next = rightSide.snapshot;
       comparison.replaceChildren(el("h3","가격 차이 " + difference(compareBudgets(a,b))),
         el("p",before.sceneId + " / " + scenarioName(left) + " → " + after.sceneId + " / " + scenarioName(right)));

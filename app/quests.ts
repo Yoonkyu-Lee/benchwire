@@ -4,7 +4,7 @@ import type { Claim } from "../engine/contract.ts";
 import { measurementPrediction, measurementValueText, predictionText, recordMeasurement, sceneWithMeasurementContext,
   verificationLocator, verificationSource, type MeasurementTarget } from "../scene/measurement.ts";
 import { connectionPorts } from "../engine/scene.ts";
-import { claimInput, describe, field, showError, type JSONSchema } from "./field.ts";
+import { claimInput, describe, field, showError, showFieldError, type JSONSchema } from "./field.ts";
 import type { Connection, Item, SceneDocument } from "./document.ts";
 import { interval, verdictText, type ResultView } from "./results.ts";
 
@@ -112,19 +112,28 @@ function measurementTarget(view: ResultView, c: Claim) {
   };
 }
 
+export function claimQuest(view: ResultView, row: number) {
+  const claim=view.scene.claims[row]!, target=measurementTarget(view,claim);
+  const work=claim.ownerKind==="workload" ? view.scene.workloads[claim.owner] : undefined;
+  const connection=claim.ownerKind==="connection" ? view.scene.connections[claim.owner] : undefined;
+  const plugin=(work || connection) && domains.find(d=>d.plugin.id===claim.domain)?.plugin;
+  const schema=work ? plugin?.request : connection ? plugin?.observations : undefined;
+  const shape=schema && describe(schema);
+  const field=shape?.properties?.[claim.field] ?? shape?.additionalProperties;
+  const property: JSONSchema | undefined = typeof field==="object" ? field : target.property;
+  return {...target,property,title:target.template?.title ?? claim.field,
+    subject:target.subject ?? work?.id ?? connection?.id ?? "",workload:work?.id};
+}
+
 function quests(view: ResultView, saved: SceneDocument) {
   const { scene, result } = view;
   const active = new Set([...view.workloads.map(w => w.row), ...[...view.negotiations.values()].flat()]);
   const grouped = new Map<number, Quest>();
   for (const q of result.quests) {
     if (!active.has(q.outcome)) continue;
-    const claim = scene.claims[q.claim]!;
     let quest = grouped.get(q.claim);
     if (!quest) {
-      const target = measurementTarget(view, claim);
-      const workload = claim.ownerKind === "workload" ? scene.workloads[claim.owner]?.id : undefined;
-      quest = { ...target, claim: q.claim, title: target.template?.title ?? claim.field,
-        subject: target.subject ?? workload ?? "", workload, instruction: q.instruction, impact: 0, outcomes: new Set() };
+      quest = { ...claimQuest(view,q.claim), claim:q.claim, instruction:q.instruction, impact:0, outcomes:new Set() };
       grouped.set(q.claim, quest);
     }
     quest.outcomes.add(q.outcome);
@@ -182,7 +191,8 @@ function card(view: ResultView, saved: SceneDocument, q: Quest, save: Save, edit
   const detail = el("details");
   detail.className = "quest-card";
   const impact = q.impact === 2 ? "판정에 영향" : q.impact === 1 ? "범위에 영향" : "";
-  detail.append(el("summary", [q.title, q.subject, impact].filter(Boolean).join(" · ")));
+  const fieldName=!q.template && q.property?.title!==q.title ? q.property?.title : undefined;
+  detail.append(el("summary", [q.title, q.subject, fieldName, impact].filter(Boolean).join(" · ")));
   if (q.template) {
     const steps = el("ol");
     steps.append(...q.template.steps.map(step => el("li", step)));
@@ -274,6 +284,7 @@ function card(view: ResultView, saved: SceneDocument, q: Quest, save: Save, edit
     event.preventDefault();
     if (submit.disabled) return;
     message.textContent = status.textContent = "";
+    showFieldError(form, "measurement", "");
     const value = read();
     if (!value || value.value == null || typeof value.value === "number" && !Number.isFinite(value.value) || value.value === "") {
       showError(form, "measurement — 확인한 값을 입력하세요.");
@@ -319,7 +330,10 @@ function card(view: ResultView, saved: SceneDocument, q: Quest, save: Save, edit
     let next = recordMeasurement(scoped, target, value, source, "manual", prediction);
     if (next === saved) { status.textContent = "이미 같은 값이 저장되어 있습니다."; return; }
     const problem = save(saved, next, true);
-    if (problem) { showError(form, problem); return; }
+    if (problem) {
+      showError(form, problem.replace(/#personal\.\d+\.claim\.value(?= — )/, "#measurement"));
+      return;
+    }
     const file = photo.files?.[0];
     submit.disabled = true;
     try {
@@ -422,11 +436,12 @@ export function mountQuests(dialog: HTMLDialogElement, trigger: HTMLButtonElemen
   const cleanup = evidenceCleanup();
   close.onclick = () => dialog.close();
   let current: { view: ResultView; saved: SceneDocument };
-  trigger.onclick = () => {
-    render();
+  function open(claim?: number) {
     dialog.showModal();
-  };
-  function render() {
+    render(claim);
+  }
+  trigger.onclick = () => open();
+  function render(claim?: number) {
     const { view, saved } = current;
     const entries = quests(view, saved);
     const opened = [...body.querySelectorAll<HTMLDetailsElement>("details.quest-card[open]")]
@@ -464,14 +479,18 @@ export function mountQuests(dialog: HTMLDialogElement, trigger: HTMLButtonElemen
     state.append(form);
     if (saved.items.length) body.append(state);
     if (!entries.length) body.append(el("p", "현재 시나리오에 확인할 퀘스트가 없습니다."));
+    let selected: HTMLDetailsElement | undefined;
     body.append(...entries.map(q => {
       const entry = card(view, saved, q, save, id => { dialog.close(); editWorkload(id); });
-      entry.open = opened.includes(entry.querySelector("summary")!.textContent);
+      entry.open = claim===undefined ? opened.includes(entry.querySelector("summary")!.textContent) : q.claim===claim;
+      if (claim!==undefined && q.claim===claim) selected=entry;
       return entry;
     }), cleanup);
+    selected?.querySelector("summary")!.focus();
   }
-  return (view: ResultView, saved: SceneDocument) => {
+  function update(view: ResultView, saved: SceneDocument) {
     current = { view, saved };
     if (dialog.open) render();
-  };
+  }
+  return {update,open};
 }

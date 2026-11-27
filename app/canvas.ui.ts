@@ -436,6 +436,45 @@ test("PoE 손실이 미확인이면 케이블 위에 범위·점선을 그리고
   } finally { await page.close(); }
 });
 
+test("검산 중 편집하면 먼저 시작한 워커의 응답을 기다리지 않고 새 판정을 표시한다", async () => {
+  const {page,errors}=await newPage("/testbed.html?example");
+  const scene:SceneDocument=JSON.parse(readFileSync("fixtures/example/power.json","utf8"));
+  const supply:Model=JSON.parse(readFileSync("fixtures/power/supply@1.json","utf8"));
+  scene.scenarios[0]!.goals=[{id:"충전",kind:"scenario"}];
+  scene.personal=[{instanceId:"supply",ownerKind:"interface",ownerId:supply.ports[0]!.interfaces[0]!.id,
+    domain:"power",field:"pdo20",claim:{value:null,unit:"A",sources:[scene.sources[0]!.id],confidence:"user_verified"}}];
+  try {
+    await page.evaluate(doc=>window.benchwire.open({...doc,personal:[]}),scene);
+    await waitForAssessment(page);
+    await page.evaluate(doc=>{
+      const post=Worker.prototype.postMessage;
+      Worker.prototype.postMessage=function(message) {
+        Worker.prototype.postMessage=post;
+        // 실제 501점 검산을 시작하고 그 응답의 배달만 막아, PC 속도와 무관하게 재편집을 시험한다.
+        this.addEventListener("message",event=>event.stopImmediatePropagation(),{capture:true});
+        const terminate=this.terminate;
+        this.terminate=()=>{ document.body.dataset.oldAssessment="stopped"; terminate.call(this); };
+        post.call(this,message);
+      };
+      if (!window.benchwire.edit(doc)) throw new Error("검산 시작 실패");
+    },scene);
+    const progress=page.locator(".assessment-progress");
+    assert(await progress.isVisible());
+    assert.match(await progress.innerText(),/계산 중/);
+    await page.screenshot({path:"work/7차-검산중.png"});
+    await page.evaluate(()=>{
+      const doc=window.benchwire.read();
+      const personal=doc.personal!.map(p=>({...p,claim:{...p.claim,value:0.5}}));
+      window.benchwire.edit({...doc,personal});
+    });
+    await page.waitForFunction(()=>document.body.dataset.oldAssessment==="stopped" &&
+      !document.querySelector(".stage[data-assessing]"),undefined,{timeout:5000});
+    assert.equal(await progress.innerText(),"");
+    assert.match((await page.locator('.wire-result[data-workload="대기"]').allTextContents()).join(" "),/10 W/);
+    assert.deepEqual(errors,[]);
+  } finally { await page.close(); }
+});
+
 test("연속 편집의 최신 판정만 표시하고 판정 도착 중에도 카드 드래그를 마친다", async () => {
   const { page, errors } = await newPage("/testbed.html?performance");
   try {
@@ -748,6 +787,15 @@ test("USB-C 충전기 초안을 저장·배치하고 재시도와 서버 재시�
     await page.screenshot({ path: "work/m4-creator.png" });
 
     const submit = form.getByRole("button", { name: "저장하고 배치", exact: true });
+    const amps=firstPort.getByLabel("5 V 송전 PDO 전류 (A)",{exact:true});
+    await amps.fill("0.505");
+    await submit.click();
+    const error=page.locator("#"+await amps.getAttribute("aria-describedby"));
+    await error.filter({hasText:/USB PD.*0\.50.*0\.51/}).waitFor({timeout:4000});
+    assert.equal(await amps.getAttribute("step"),"0.01");
+    await error.scrollIntoViewIfNeeded();
+    await page.screenshot({path:"work/8차-생성기.png"});
+    await amps.fill("0");
     await page.route("**/api/inventory/item-*", async route => {
       const result = await route.fetch();
       assert.equal(result.status(), 201);
@@ -1462,6 +1510,49 @@ async function openStored(page: Page, id: string) {
   await page.waitForFunction(() => !document.querySelector<HTMLElement>("#app")?.inert);
   await waitForAssessment(page);
 }
+
+test("검증 퀘스트는 규격 걸음 밖의 PDO 전류를 입력 칸에서 설명하고 고친 값만 저장한다", async () => {
+  const { page, errors } = await newPage("/");
+  const id = "quest-step";
+  try {
+    const origin = new URL(page.url()).origin;
+    const model: Model = JSON.parse(readFileSync("fixtures/power/supply@1.json", "utf8"));
+    model.modelId = "quest-step-supply";
+    Object.assign(model.ports[0]!.interfaces[0]!.params.pdo20!, { value: null, confidence: "unknown" });
+    const scene: SceneDocument = JSON.parse(readFileSync("fixtures/power/single-port.json", "utf8"));
+    scene.sceneId = id;
+    scene.items[0]!.modelId = model.modelId;
+    const headers = { Origin: origin };
+    assert.equal((await page.request.put(origin + "/api/models/" + model.modelId + "/1", { headers, data: model })).status(), 201);
+    assert.equal((await page.request.put(origin + "/api/scenes/" + id, { headers, data: scene })).status(), 201);
+    await page.reload();
+    const picker = page.getByRole("combobox", { name: "장면" });
+    if (await picker.inputValue() !== id) await picker.selectOption(id);
+    await waitForAssessment(page);
+    await page.getByRole("button", { name: /^검증 퀘스트/ }).click();
+    const dialog = page.getByRole("dialog", { name: "검증 퀘스트" });
+    const card = dialog.locator("details.quest-card").filter({ hasText: /20 V 송전 PDO/ }).first();
+    await card.locator(":scope > summary").click();
+    const amps = card.getByLabel("20 V 송전 PDO (A)", { exact: true });
+    await amps.fill("0.505");
+    await card.getByLabel("현재 펌웨어 · supply", { exact: true }).fill("1.0");
+    await card.getByLabel("측정 조건", { exact: true }).fill("대기");
+    const save = card.getByRole("button", { name: "검증값 저장", exact: true });
+    await save.click();
+    const error = card.locator("#" + await amps.getAttribute("aria-describedby"));
+    await error.filter({ hasText: /USB PD.*0\.50.*0\.51/ }).waitFor({ timeout: 4000 });
+    assert.equal(await amps.getAttribute("step"), "0.01");
+    await error.scrollIntoViewIfNeeded();
+    await page.screenshot({ path: "work/8차-퀘스트.png" });
+    await amps.fill("0.51");
+    await save.click();
+    await page.waitForFunction(async sceneId => {
+      const saved: SceneDocument = await (await fetch("/api/scenes/" + sceneId)).json();
+      return saved.personal?.some(row => row.field === "pdo20" && row.claim.value === 0.51);
+    }, id, { timeout: 5000 });
+    assert.deepEqual(errors, []);
+  } finally { await page.close(); }
+});
 
 test("검증 퀘스트는 충전기 실물 하나에만 적용되고 재개방과 펌웨어 변경 후에도 근거가 남는다", async () => {
   const { page, errors } = await newPage("/");

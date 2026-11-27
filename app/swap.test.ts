@@ -10,6 +10,7 @@ import type { PriceBook, Quote } from "../server/prices.ts";
 import { calculateBudget, compareBudgets } from "./budget.ts";
 import { modelKey, type Model, type SceneDocument } from "./document.ts";
 import { compareSwap, swapSlot } from "./swap.ts";
+import { resultView } from "./results.ts";
 
 const library = openLibrary(resolve(), resolve("work", "swap-unit-library"));
 const { models, connectors } = library.describe();
@@ -63,13 +64,14 @@ test("가격만 다른 교체는 새 실물 ID를 써도 기술 차이 없이 �
     scenarios: base.scenarios.map(s => ({ ...s, purchases: [{ instanceId: "router" }] })) };
   const { document: after } = swap(before, "router", replacement);
   assert(after);
-  const changes = compareSwap(snapshot(before), snapshot(after, docs([replacement])), "router", copy.replacementId);
+  const a = snapshot(before), b = snapshot(after,docs([replacement]));
+  const changes = compareSwap(a,b,"router",copy.replacementId);
   assert.deepEqual(changes, []);
   const offer: Quote = { modelRef: modelKey(network), seller: "시험 매장", productId: "A", unitPriceCents: 2000,
     saleUnit: 1, currency: "USD", stock: "in", retrievedAt: "2026-01-01T00:00:00Z", source: "시험 판매가", provider: "manual" };
   const prices: PriceBook = { quotes: [offer, { ...offer, modelRef: modelKey(replacement), productId: "B", unitPriceCents: 3500 }], preferredSellers: [] };
-  assert.equal(compareBudgets(calculateBudget(before.scenarios[0]!, before.items, prices),
-    calculateBudget(after.scenarios[0]!, after.items, prices)), 1500n);
+  assert.equal(compareBudgets(calculateBudget(before.scenarios[0]!,before.items,prices,resultView(a.scene,a.result,0,"together")),
+    calculateBudget(after.scenarios[0]!,after.items,prices,resultView(b.scene,b.result,0,"together"))),1500n);
 });
 
 test("포트 대응이 여럿이면 배선 위치 선택이 필요하고 호환 포트를 고른 뒤에만 장면이 완성된다", () => {

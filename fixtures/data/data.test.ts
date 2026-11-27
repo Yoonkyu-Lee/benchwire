@@ -183,11 +183,16 @@ test("T4 USB4 통과 여부가 미확인이면 일반 USB 3.2로 연결될 때�
   const scene = fixture();
   scene.claims.find(c => c.field === "cableDataGbps")!.value = 40;
   const compatibility = scene.claims.findIndex(c => c.field === "cableUsb4");
-  scene.claims[compatibility]!.value = null;
   for (const claim of scene.claims) if (claim.field === "tunnelGbps") claim.value = 1;
   scene.claims.find(c => c.field === "throughput")!.value = 2_500;
+  const worlds = [true,false].map(value => {
+    scene.claims[compatibility]!.value = value;
+    return run(scene).work[0]!;
+  });
+  assert.deepEqual(worlds.map(w => [w.verdict,w.together.value]),[["conditional",125],["conditional",2200]]);
+  scene.claims[compatibility]!.value = null;
   const { result, work: [w] } = run(scene);
-  assert.deepEqual([w!.verdict, w!.together.low, w!.together.high], ["unknown", 0, 2_200]);
+  assert.deepEqual([w!.verdict,w!.together.low,w!.together.high],[worlds[0]!.verdict,worlds[0]!.together.value,worlds[1]!.together.value]);
   assert.ok(result.quests.some(q => q.outcome === w!.row && q.claim === compatibility));
   assert.ok(w!.specs.includes("usb4-link") && w!.specs.includes("usb3-estimate"));
   const pools = result.linkResources.filter(r => r.pool?.id === "usb4-tunnel");

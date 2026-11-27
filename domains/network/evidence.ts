@@ -1,12 +1,12 @@
 // 장면의 유효 주장과 프로토콜 선언을 읽고 네트워크 판정이 인용할 행을 모은다.
-import { effectiveClaim, type Claim, type Scene } from "../../engine/contract.ts";
+import { readClaim, effectiveClaim, type Claim, type Scene } from "../../engine/contract.ts";
 import { CHANNEL, NETWORK } from "./input.ts";
 
 export function readNetworkClaim(scene: Scene, inputs: number[], kind: Claim["ownerKind"], owner: number, field: string) {
   const row = effectiveClaim(scene, kind, owner, NETWORK, field);
   if (row === undefined) return null;
   inputs.push(row);
-  return scene.claims[row]!.value;
+  return readClaim(scene,row).value;
 }
 
 export function networkInterface(scene: Scene, inputs: number[], port: number, protocol: string, role: string) {

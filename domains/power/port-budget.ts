@@ -1,10 +1,10 @@
 // 물리적으로 접속한 출력 포트의 조합을 읽어 한 링크가 공유할 포트 전력 한도를 구한다.
-import { effectiveClaim, type Scene } from "../../engine/contract.ts";
+import { hasClaimPrefix, readClaim, effectiveClaim, type Scene } from "../../engine/contract.ts";
 import { PD, POWER } from "./input.ts";
 
 export function portBudget(scene: Scene, sourcePort: number) {
   const { item, id } = scene.ports[sourcePort]!;
-  if (!scene.claims.some(c => c.ownerKind === "item" && c.owner === item && c.domain === POWER && c.field.startsWith("budget:")))
+  if (!hasClaimPrefix(scene,"item",item,POWER,"budget:"))
     return undefined;
 
   const outlets = new Set(scene.interfaces.filter(i => i.domain === POWER && i.protocol === PD && i.role === "source" &&
@@ -22,6 +22,6 @@ export function portBudget(scene: Scene, sourcePort: number) {
   const combination = [...attached].map(p => encodeURIComponent(scene.ports[p]!.id)).sort().join("+");
   const row = effectiveClaim(scene, "item", item, POWER, "budget:" + combination + ":" + encodeURIComponent(id));
   if (row !== undefined) inputs.push(row);
-  const value = row === undefined ? null : scene.claims[row]!.value as number | null;
+  const value = row === undefined ? null : readClaim(scene,row).value as number | null;
   return { value, inputs };
 }

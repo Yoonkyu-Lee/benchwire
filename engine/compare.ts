@@ -1,4 +1,5 @@
 // 두 판정 스냅샷에서 영속 ID로 맞춘 결과의 의미가 달라진 행만 돌려준다.
+import { readClaim } from "./scene.ts";
 import { availableOption } from "./pools.ts";
 import type { Results } from "./results.ts";
 import type { Claim, Scene } from "./scene.ts";
@@ -102,9 +103,9 @@ function fields(snapshot: Snapshot, row: number) {
     bottleneck: multiset(bindings),
     assumption: multiset(metrics.filter(m => m.basis === "assumed").map(m => [m.kind, m.unit])),
     quest: multiset(result.quests.filter(q => q.outcome === row)
-      .map(q => [claimIdentity(scene, scene.claims[q.claim]!), q.instruction])),
+      .map(q => [claimIdentity(scene, readClaim(scene,q.claim)), q.instruction])),
     condition: link?.condition ?? "",
-    need: multiset(result.needs.filter(n => n.outcome === row).map(n => n.requiredCapability)),
+    need: multiset(result.needs.filter(n => n.outcome === row).map(n => n.requiredCapability + (n.conditional ? " · 일부 후보에서만 필요" : ""))),
   };
 }
 

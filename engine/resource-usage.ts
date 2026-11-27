@@ -1,14 +1,13 @@
 // 선택한 동시 계획의 실제 예약·계수 소비·상시 부하를 차감 전 자원 용량에 대응시킨다.
 import type { Flow } from "./allocate.ts";
-import type { Candidate } from "./selection.ts";
 import type { Results } from "./results.ts";
-import { resourceFacts, type Scene } from "./scene.ts";
+import { readClaim, resourceFacts, type Scene } from "./scene.ts";
 
 type Usage = Results["resourceUsage"][number];
 export interface GrossLimits { options: (number | null)[]; pools: (number | null)[] }
 
 export function recordUsage(scene: Scene, r: Results, scenario: number, flows: Flow[], outcomes: number[], gross: GrossLimits,
-  chosen: readonly { refused: Candidate[] }[]) {
+  chosen: readonly { pending: {flow: Flow}[] }[]) {
   const offset = scene.resources.length, budgets = new Map<number, Usage>();
   function add(row: number, unit: string, capacity: number | null) {
     const usage: Usage = { scenario, resourceKind: row < offset ? "scene" : "link", resource: row < offset ? row : row-offset,
@@ -18,7 +17,7 @@ export function recordUsage(scene: Scene, r: Results, scenario: number, flows: F
   }
   scene.resources.forEach((resource, i) => {
     const capacityClaim = resourceFacts(scene,i).capacity;
-    const cap = scene.claims[capacityClaim]!.value;
+    const cap = readClaim(scene,capacityClaim,"range").value;
     add(i, resource.unit, typeof cap === "number" ? cap : null).capacityClaim = capacityClaim;
   });
   r.linkResources.forEach((l,i) => { if (l.pool) add(offset+i, l.pool.unit, gross.pools[i]!); });
@@ -45,13 +44,13 @@ export function recordUsage(scene: Scene, r: Results, scenario: number, flows: F
   const uncertain = new Set<number>();
   flows.forEach((f,i) => {
     const outcome = outcomes[i]!, metric = r.metrics.find(m => m.outcome === outcome && m.kind === "together")!;
-    const unresolved = chosen[f.workload]!.refused.filter(c => c.solo.verdict === "unknown");
+    const unresolved = chosen[f.workload]!.pending;
     for (const c of unresolved) for (const u of c.flow.uses) uncertain.add(u.resource);
     if (unresolved.length) for (const u of f.uses) uncertain.add(u.resource);
     for (const u of f.uses) {
       if (metric.value === 0) continue;
       const budget = u.option !== undefined && u.pool === undefined ? service(u.option,true) : budgets.get(u.resource)!;
-      if (metric.value === null || u.unknown) budget.used = null;
+      if (metric.value === null || u.unknown || u.fixedHigh!==undefined) budget.used = null;
       else if (budget.used !== null) {
         budget.used += u.fixed + u.coefficient * metric.value;
         if (metric.basis === "assumed") budget.basis = "assumed";

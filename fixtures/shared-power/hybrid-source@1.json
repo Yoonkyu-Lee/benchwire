@@ -1,0 +1,150 @@
+{
+  "modelId": "hybrid-source",
+  "revision": "1",
+  "kind": "device",
+  "brand": "합성",
+  "name": "합성 PoE 송전 장치",
+  "category": "네트워크 시험",
+  "sources": [
+    {
+      "id": "network-pse",
+      "title": "합성 PoE 송전 장치",
+      "locator": "fixture:network/network-pse",
+      "retrievedAt": "2026-11-26"
+    },
+    {
+      "id": "supply",
+      "title": "supply 합성 모델",
+      "locator": "fixture:power/supply",
+      "retrievedAt": "2026-11-26"
+    },
+    {
+      "id": "table",
+      "title": "출력 포트의 접속 조합별 정격",
+      "locator": "fixture:power/table",
+      "retrievedAt": "2026-11-26"
+    }
+  ],
+  "nodes": [
+    {
+      "id": "supply",
+      "kind": "junction",
+      "label": "supply"
+    },
+    {
+      "id": "usb-out",
+      "label": "USB PD 출력",
+      "kind": "junction"
+    }
+  ],
+  "ports": [
+    {
+      "id": "pse",
+      "label": "pse",
+      "connector": {"value":"network-socket","confidence":"inferred","sources":["network-pse"]},
+      "attachment": {"value":"supply","confidence":"inferred","sources":["network-pse"]},
+      "interfaces": [
+        {
+          "id": "power",
+          "domain": "network",
+          "protocol": "PoE PSE",
+          "role": "source",
+          "evidence": {"value":true,"confidence":"inferred","sources":["network-pse"]},
+          "params": {
+            "poeType": {"value":2,"confidence":"inferred","sources":["network-pse"]},
+            "budgetResource": {"value":"port-budget","confidence":"inferred","sources":["network-pse"]}
+          }
+        }
+      ]
+    },
+    {
+      "id": "first",
+      "label": "first",
+      "connector": {"value":"network-socket","confidence":"inferred","sources":["network-pse"]},
+      "attachment": {"value":"supply","confidence":"inferred","sources":["network-pse"]},
+      "interfaces": [
+        {
+          "id": "first",
+          "domain": "network",
+          "protocol": "PoE PSE",
+          "role": "source",
+          "evidence": {"value":true,"confidence":"inferred","sources":["network-pse"]},
+          "params": {
+            "poeType": {"value":2,"confidence":"inferred","sources":["network-pse"]},
+            "budgetResource": {"value":"port-budget","confidence":"inferred","sources":["network-pse"]}
+          }
+        }
+      ]
+    },
+    {
+      "id": "second",
+      "label": "second",
+      "connector": {"value":"network-socket","confidence":"inferred","sources":["network-pse"]},
+      "attachment": {"value":"supply","confidence":"inferred","sources":["network-pse"]},
+      "interfaces": [
+        {
+          "id": "second",
+          "domain": "network",
+          "protocol": "PoE PSE",
+          "role": "source",
+          "evidence": {"value":true,"confidence":"inferred","sources":["network-pse"]},
+          "params": {
+            "poeType": {"value":2,"confidence":"inferred","sources":["network-pse"]},
+            "budgetResource": {"value":"port-budget","confidence":"inferred","sources":["network-pse"]}
+          }
+        }
+      ]
+    },
+    {
+      "id": "usb",
+      "label": "a",
+      "connector": {"value":"c-receptacle","confidence":"inferred","sources":["supply"]},
+      "attachment": {"value":"usb-out","confidence":"inferred","sources":["supply"]},
+      "interfaces": [
+        {
+          "id": "a-power",
+          "domain": "power",
+          "protocol": "USB PD",
+          "role": "source",
+          "evidence": {"value":true,"confidence":"inferred","sources":["supply"]},
+          "params": {
+            "maxW": {"value":100,"unit":"W","confidence":"inferred","sources":["supply"]},
+            "pdo20": {"value":5,"unit":"A","confidence":"inferred","sources":["supply"]}
+          }
+        }
+      ]
+    }
+  ],
+  "edges": [
+    {
+      "id": "shared-output",
+      "from": "supply",
+      "to": "usb-out",
+      "evidence": {"value":true,"confidence":"inferred","sources":["supply"]},
+      "uses": [
+        {
+          "resource": "port-budget",
+          "evidence": {"value":true,"confidence":"inferred","sources":["supply"]}
+        }
+      ]
+    }
+  ],
+  "resources": [
+    {
+      "id": "port-budget",
+      "kind": "poe-port",
+      "domain": "network",
+      "unit": "W",
+      "capacity": {"value":65,"unit":"W","confidence":"inferred","sources":["network-pse"]},
+      "policy": {"value":"max-min","confidence":"inferred","sources":["network-pse"]}
+    },
+    {
+      "id": "other-budget",
+      "kind": "poe-port",
+      "domain": "network",
+      "unit": "W",
+      "capacity": {"value":65,"unit":"W","confidence":"inferred","sources":["network-pse"]},
+      "policy": {"value":"max-min","confidence":"inferred","sources":["network-pse"]}
+    }
+  ]
+}

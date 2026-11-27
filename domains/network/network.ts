@@ -1,12 +1,12 @@
 // 이더넷과 PoE의 협상·수요·공유 자원 소비를 네트워크 영역으로 등록한다.
-import { effectiveClaim, type Demand, type DomainPlugin, type Verdict } from "../../engine/contract.ts";
+import { readClaim, effectiveClaim, type Demand, type DomainPlugin, type Verdict } from "../../engine/contract.ts";
 import { MAC_PAYLOAD_FRACTION, PCIE_CARRIER, PCIE_NIC } from "./constants.ts";
 import { negotiateEthernet } from "./ethernet.ts";
 import { readNetworkClaim } from "./evidence.ts";
 import {
   attributes, CHANNEL, ETHERNET, MAC, MBPS, NETWORK, observations, params, paramsFor, PD, POE, PSE, request, WATTS, WIRE_LINE,
 } from "./input.ts";
-import { negotiatePoe, reservePoe } from "./poe.ts";
+import { negotiatePoe, poeBudgets, reservePoe } from "./poe.ts";
 import { FRAMING, sources } from "./sources.ts";
 
 const labels: Record<Verdict, string> = { ok: "성립", conditional: "조건부", impossible: "불가", unknown: "미확인" };
@@ -18,6 +18,11 @@ export const network: DomainPlugin = {
       return { category: "", length: "m", screening: "", poeType: "", poeLoss: WATTS };
     return undefined;
   },
+  profileValues(claim,scene) {
+    if (claim.ownerKind!=="interface" || claim.field!=="budgetResource") return [];
+    const item=scene.ports[scene.interfaces[claim.owner]!.port]!.item;
+    return poeBudgets(scene,item).map(row=>scene.resources[row]!.id);
+  },
   negotiate(link) {
     const ends = link.scene.interfaces.filter(i => i.domain === NETWORK && [link.ports[0], link.ports.at(-1)].includes(i.port));
     const options = [];
@@ -27,7 +32,7 @@ export const network: DomainPlugin = {
   },
   demand(scene, workload) {
     const inputs: number[] = [];
-    const power = scene.claims.some(c => c.ownerKind === "workload" && c.owner === workload && c.domain === NETWORK && c.field === "watts");
+    const power = effectiveClaim(scene,"workload",workload,NETWORK,"watts")!==undefined;
     const requested = readNetworkClaim(scene, inputs, "workload", workload, power ? "watts" : "throughput") as number | null;
     const direct: Demand = { mode: power ? POE : MAC, unit: power ? WATTS : MBPS, elastic: !power, preference: 0, via: [], requested,
       rule: power ? "수전 포트의 고정 전력 요청" : "태그 없는 MTU 1500 MAC 페이로드 요청", inputs, specs: power ? [] : [FRAMING] };
@@ -37,7 +42,7 @@ export const network: DomainPlugin = {
     for (const iface of scene.interfaces) {
       if (iface.domain !== NETWORK || iface.protocol !== ETHERNET) continue;
       const attachment = effectiveClaim(scene, "port", iface.port, "", "attachment")!;
-      const node = scene.claims[attachment]!.attachmentNode;
+      const node = readClaim(scene,attachment).attachmentNode;
       if (node == null || scene.nodes[node]!.kind !== PCIE_NIC || w.from === node || w.to === node) continue;
       for (const carriers of [[PCIE_CARRIER, ethernet], [ethernet, PCIE_CARRIER]]) demands.push({ ...direct, via: [node], carriers,
         inputs: [...inputs, iface.evidence, attachment], rule: "PCIe NIC 경유 MAC 페이로드 · 8 Mbps당 터널 1 MB/s" });

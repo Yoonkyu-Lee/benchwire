@@ -32,7 +32,7 @@ test("T3 다른 배선의 후보가 많아도 독립 시나리오의 판정과 �
     }
     const r = evaluate(scene, [display]);
     const unresolved = r.outcomes.findIndex(o => o.subjectKind === "workload" && scene.workloads[o.subjectRow]!.id === "unresolved");
-    assert.equal(r.reasons.some(v => v.outcome === unresolved && v.rule === "배선 조합 상한"), connected);
+    assert.ok(r.reasons.some(v => v.outcome === unresolved && v.rule === "배선 조합 상한"));
     for (const [id, verdict] of [["native","ok"], ["too-large","impossible"]]) {
       const row = r.outcomes.findIndex(o => o.subjectKind === "workload" && scene.workloads[o.subjectRow]!.id === id);
       assert.equal(r.outcomes[row]!.verdict, verdict);

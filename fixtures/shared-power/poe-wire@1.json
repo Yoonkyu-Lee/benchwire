@@ -1,0 +1,88 @@
+{
+  "modelId": "poe-wire",
+  "revision": "1",
+  "kind": "cable",
+  "brand": "합성",
+  "name": "합성 Cat5e 통과 채널",
+  "category": "네트워크 시험",
+  "sources": [
+    {
+      "id": "network-copper",
+      "title": "합성 Cat5e 통과 채널",
+      "locator": "fixture:network/network-copper",
+      "retrievedAt": "2026-11-26"
+    }
+  ],
+  "attributes": {
+    "network": {
+      "category": {"value":"Cat5e","confidence":"inferred","sources":["network-copper"]},
+      "length": {"value":30,"unit":"m","confidence":"inferred","sources":["network-copper"]},
+      "screening": {"value":"unscreened","confidence":"inferred","sources":["network-copper"]},
+      "poeType": {"value":2,"confidence":"inferred","sources":["network-copper"]},
+      "poeLoss": {"value":2,"unit":"W","confidence":"inferred","sources":["network-copper"]}
+    }
+  },
+  "nodes": [
+    {
+      "id": "a",
+      "kind": "junction",
+      "label": "a"
+    },
+    {
+      "id": "b",
+      "kind": "junction",
+      "label": "b"
+    }
+  ],
+  "ports": [
+    {
+      "id": "a",
+      "label": "a",
+      "connector": {"value":"network-plug","confidence":"inferred","sources":["network-copper"]},
+      "attachment": {"value":"a","confidence":"inferred","sources":["network-copper"]},
+      "interfaces": [
+        {
+          "id": "a",
+          "domain": "network",
+          "protocol": "Ethernet channel",
+          "role": "bidirectional",
+          "evidence": {"value":true,"confidence":"inferred","sources":["network-copper"]},
+          "params": {}
+        }
+      ]
+    },
+    {
+      "id": "b",
+      "label": "b",
+      "connector": {"value":"network-plug","confidence":"inferred","sources":["network-copper"]},
+      "attachment": {"value":"b","confidence":"inferred","sources":["network-copper"]},
+      "interfaces": [
+        {
+          "id": "b",
+          "domain": "network",
+          "protocol": "Ethernet channel",
+          "role": "bidirectional",
+          "evidence": {"value":true,"confidence":"inferred","sources":["network-copper"]},
+          "params": {}
+        }
+      ]
+    }
+  ],
+  "edges": [
+    {
+      "id": "a-b",
+      "from": "a",
+      "to": "b",
+      "evidence": {"value":true,"confidence":"inferred","sources":["network-copper"]},
+      "uses": []
+    },
+    {
+      "id": "b-a",
+      "from": "b",
+      "to": "a",
+      "evidence": {"value":true,"confidence":"inferred","sources":["network-copper"]},
+      "uses": []
+    }
+  ],
+  "resources": []
+}

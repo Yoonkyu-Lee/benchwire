@@ -1,9 +1,9 @@
 // 연결과 작업의 판정을 만들고 실제 사용한 배선·협상·경쟁 수요를 추론 단계에 연결한다.
 import type { Scene, DomainPlugin, Direction, Choice } from "./contract.ts";
 import { addReason, type Results, type Run } from "./results.ts";
-import type { Flow, Share, Use } from "./allocate.ts";
-import { bestOption } from "./negotiate.ts";
-import { portFacts, resourceFacts } from "./scene.ts";
+import { allocationInputs, deliveryRange, type Flow, type Share, type Use } from "./allocate.ts";
+import { optionChoices } from "./negotiate.ts";
+import { claimRows, readClaim, portFacts, resourceFacts } from "./scene.ts";
 
 function physicalReasons(scene: Scene, result: Results, outcome: number, connection: number, direction: Direction) {
   const parents: number[] = [];
@@ -95,13 +95,26 @@ export function judgeConnections(scene: Scene, plugins: readonly DomainPlugin[],
           } else noOptionReason(scene, result, outcome, connection, direction, domain);
           continue;
         }
-        const { row: option, option: o, verdict } = bestOption(result, eligible);
-        const outcome = result.outcomes.push({ subjectKind: "connection", subjectRow: connection, path: null, scenario, direction, domain, verdict, mode: o.mode, unit: o.unit, option,
+        const { offers, floor, ceiling } = optionChoices(result, eligible);
+        const { row: option, option: o } = offers[0]!;
+        const unique = offers.length === 1, mode = offers.every(c => c.option.mode === o.mode) ? o.mode : "";
+        const verdict = unique ? offers[0]!.verdict : floor.verdict === ceiling.verdict ? floor.verdict : "unknown";
+        const outcome = result.outcomes.push({ subjectKind: "connection", subjectRow: connection, path: null, scenario, direction, domain, verdict, mode, unit: o.unit, ...(unique ? { option } : {}),
           ...(o.pool ? { pool: { domain: o.pool.domain, id: o.pool.id } } : {}),
-          label: plugins.find(p => p.id === domain)!.explain(verdict, o.mode) }) - 1;
-        if (o.unused !== undefined) result.metrics.push({ outcome, kind: "unused", unit: o.unit,
+          label: plugins.find(p => p.id === domain)!.explain(verdict, mode) }) - 1;
+        if (!unique) {
+          const lows = offers.map(c => c.option.limit ?? c.option.bounds?.low ?? 0);
+          const highs = offers.map(c => c.option.limit ?? c.option.bounds?.high ?? Infinity);
+          const low = floor.verdict === ceiling.verdict ? floor.option.limit : Math.min(...lows);
+          const high = highs.every(Number.isFinite) ? Math.max(...highs) : null;
+          result.metrics.push({ outcome, kind: "limit", unit:o.unit, value: low === high ? low : null, low, high, basis:"calculated", range:"conservative" });
+          for (const c of offers) for (const claim of result.options[c.row]!.inputs)
+            if (readClaim(scene,claim,"evidence").value === null && !result.rangeInputs.some(x=>x.outcome===outcome && x.claim===claim))
+              result.rangeInputs.push({outcome,claim});
+        }
+        if (unique && o.unused !== undefined) result.metrics.push({ outcome, kind: "unused", unit: o.unit,
           value: o.unused, low: o.unused, high: o.unused, basis: "calculated" });
-        linkReason(scene, result, outcome, option);
+        for (const c of offers) linkReason(scene, result, outcome, c.row);
       }
     }
   });
@@ -122,7 +135,8 @@ function useReason(scene: Scene, result: Results, outcome: number, domain: strin
 }
 
 export function judgeWork(scene: Scene, result: Results, plugin: DomainPlugin, scenario: number, flow: Flow,
-  solo: Share, together: Share, competitors: readonly Flow[], refused: readonly { flow: Flow; solo: Share }[], soloPath: number | null) {
+  solo: Share, together: Share, competitors: readonly Flow[], refused: readonly { flow: Flow; solo: Share; pending: boolean }[], soloFlow: Flow) {
+  const soloPath = soloFlow.path;
   const path = flow.path === null ? null : result.paths[flow.path]!;
   const demand = path ? result.demands[path.demand]! : null;
   const steps = result.steps.filter(s => s.path === flow.path);
@@ -130,7 +144,10 @@ export function judgeWork(scene: Scene, result: Results, plugin: DomainPlugin, s
   const verdict = together.verdict;
   const outcome = result.outcomes.push({ subjectKind: "workload", subjectRow: flow.workload, path: flow.path, direction: null, scenario, domain: plugin.id,
     ...(soloPath !== null && soloPath !== flow.path ? { soloPath } : {}), verdict, mode, label: plugin.explain(verdict, mode) }) - 1;
-  const unit = demand?.unit ?? "";
+  // 모드가 사라져 전달량이 0이면 목표에 명시된 전달 단위로 그 0을 표시할 수 있다.
+  const goalUnits = !demand ? new Set(scene.goals?.flatMap(g => g.scenario === scenario && g.kind === "metric" &&
+    g.metric === "delivery" && g.workloads.includes(flow.workload) ? [g.unit] : [])) : undefined;
+  const unit = demand?.unit ?? (goalUnits?.size === 1 ? [...goalUnits][0]! : "");
   const soloUnit = soloPath === null ? unit : result.demands[result.paths[soloPath]!.demand]!.unit;
   function metric(kind: Results["metrics"][number]["kind"], value: number | null, metricUnit = unit) {
     result.metrics.push({ outcome, kind, value, unit: metricUnit, basis: "calculated", low: value, high: value });
@@ -142,12 +159,19 @@ export function judgeWork(scene: Scene, result: Results, plugin: DomainPlugin, s
       result.bindings.push({ scenario, workload: flow.workload, run, resourceKind: link ? "link" : "scene", resource: link ? row - scene.resources.length : row });
     }
     metric(run, share.value, run === "solo" ? soloUnit : unit);
-    if (share.range) {
+    const runFlow = run === "solo" ? soloFlow : flow;
+    if (share.range || share.value === null && runFlow.path !== null) {
+      const range = deliveryRange(scene,result,runFlow,share);
       const m = result.metrics[result.metrics.length - 1]!;
-      if (share.range.low !== share.range.high) for (const claim of share.range.inputs ?? [])
-        if (scene.claims[claim]?.value === null && !result.rangeInputs.some(x => x.outcome === outcome && x.claim === claim))
-          result.rangeInputs.push({ outcome, claim });
-      Object.assign(m, { low: share.range.low, high: share.range.high, range: "conservative" });
+      if (range.low !== range.high) {
+        const claims = share.range?.inputs ?? allocationInputs(scene,result,run === "solo" ? [soloFlow] : competitors,share,"evidence");
+        for (const claim of claims) if (readClaim(scene,claim,"evidence")?.value === null) {
+          let input=result.rangeInputs.find(x=>x.outcome===outcome && x.claim===claim);
+          if (!input) result.rangeInputs.push(input={outcome,claim});
+          if (scene.goals?.length) (input.deliveryRuns ??= []).push(run);
+        }
+      }
+      Object.assign(m, { low: range.low, high: range.high, range: "conservative" });
     }
   }
   for (const possible of together.range?.possible ?? []) result.possibleVerdicts.push({ outcome, verdict: possible });
@@ -156,6 +180,15 @@ export function judgeWork(scene: Scene, result: Results, plugin: DomainPlugin, s
   const drop = soloUnit !== unit || solo.value === null || together.value === null ? null : solo.value - together.value;
   metric("drop", drop);
   metric("dropPercent", drop === null || !solo.value ? null : 100 * drop / solo.value, "%");
+  if (drop===null && soloUnit===unit) {
+    const s=deliveryRange(scene,result,soloFlow,solo), t=deliveryRange(scene,result,flow,together);
+    const absolute=result.metrics.at(-2)!, percent=result.metrics.at(-1)!;
+    absolute.low=t.high===null ? null : s.low-t.high;
+    absolute.high=s.high===null ? null : s.high-t.low;
+    absolute.range=percent.range="conservative";
+    percent.low=s.low>0 && t.high!==null ? 100*(1-t.high/s.low) : null;
+    percent.high=s.low>0 && s.high!==null ? 100*(1-t.low/s.high) : null;
+  }
   for (const s of steps) if (s.option !== null) {
     const o = result.options[s.option]!;
     if (o.unused !== undefined) metric("unused", o.unused, o.unit);
@@ -205,7 +238,7 @@ export function judgeWork(scene: Scene, result: Results, plugin: DomainPlugin, s
     for (const limit of candidate.solo.policies ?? []) if (candidate.solo.bindings.includes(limit.resource))
       limits.push(addReason(result, { outcome, stage: "allocate", rule: limit.rule, targetKind: "resource", targetRow: limit.resource },
         [resourceFacts(scene, limit.resource).policy, ...limit.inputs], [], scene.resources[limit.resource]!.domain, limit.specs));
-    const pending = candidate.solo.verdict === "unknown";
+    const pending = candidate.pending;
     for (const u of candidate.flow.uses) if (pending || candidate.solo.bindings.includes(u.resource))
       limits.push(useReason(scene, result, outcome, plugin.id, u, []));
     parents.push(addReason(result, { outcome, stage: path.verdict === "impossible" ? "path" : "allocate",
@@ -220,7 +253,10 @@ export function judgeWork(scene: Scene, result: Results, plugin: DomainPlugin, s
       if (s.kind === "edge") trace.push(addReason(result, { outcome, stage: "path", rule: "유향 내부 경로", targetKind: "edge", targetRow: s.row },
         [scene.edges[s.row]!.evidence]));
     }
-    const requestInputs = d?.inputs ?? scene.claims.flatMap((c, i) => c.ownerKind === "workload" && c.owner === f.workload ? [i] : []);
+    const requestInputs = d?.inputs ?? [...claimRows(scene)].filter(i => {
+      const c=readClaim(scene,i,"evidence");
+      return c.ownerKind==="workload" && c.owner===f.workload;
+    });
     const request = addReason(result, { outcome, stage: "path", rule: d?.rule ?? "가능한 요청 모드 없음", targetKind: "workload", targetRow: f.workload }, requestInputs, trace, scene.workloads[f.workload]!.domain, d?.specs);
     if (result.paths.some(p => p.workload === f.workload && p.truncated))
       parents.push(addReason(result, { outcome, stage: "path", rule: "경로 후보 열거 상한", targetKind: "workload", targetRow: f.workload }, [], [request]));

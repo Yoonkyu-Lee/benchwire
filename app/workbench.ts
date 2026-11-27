@@ -11,6 +11,7 @@ import { moveConnectionEnd, occupiedPorts, requiredMateCapabilities } from "./co
 import { addConnection, modelKey, place, portKey, type InventoryItem, type Library, type SceneDocument, type SceneIntent } from "./document.ts";
 import { mountEvidence } from "./evidence.ts";
 import { showFieldError } from "./field.ts";
+import { mountGoals } from "./goals.ts";
 import { INVENTORY_DRAG, MODEL_DRAG, mountInventory } from "./inventory.ts";
 import { mountLayers } from "./layers.ts";
 import { mountQuests } from "./quests.ts";
@@ -32,7 +33,6 @@ export function mountWorkbench(root: HTMLElement, initial: SceneDocument, librar
   let evaluated: Assessment | undefined;
   let primary: Results | undefined;
   const alternatives = new Map<number, Variants>();
-  const owner = {};
   let view: ResultView | undefined;
   let measured: CardMeasurements | undefined;
   let showHeat = false;
@@ -89,6 +89,7 @@ export function mountWorkbench(root: HTMLElement, initial: SceneDocument, librar
   const scenarioPanel = root.querySelector<HTMLDetailsElement>(".scenario-panel")!;
   const renderScenario = mountScenario(scenarioPanel.querySelector("div")!, documents, intent => {
     if (intent.kind === "select-scenario") setScenario(intent.scenarioId);
+    else if (intent.kind === "edit-goal") goalPanel.edit(intent.goalId);
     else editScenario(intent.document, intent.scenarioId);
   });
   const panel = mountEvidence(root.querySelector<HTMLElement>(".results-panel")!, {
@@ -98,7 +99,7 @@ export function mountWorkbench(root: HTMLElement, initial: SceneDocument, librar
   });
   const questTrigger = root.querySelector<HTMLButtonElement>(".quests-open")!;
   const questDialog = root.querySelector<HTMLDialogElement>(".quest-dialog")!;
-  const renderQuests = mountQuests(questDialog, questTrigger, (before, next, validateOnly) => {
+  const questPanel = mountQuests(questDialog, questTrigger, (before, next, validateOnly) => {
     if (scene !== before || !root.contains(questDialog)) return "장면이 바뀌었습니다. 현재 퀘스트에서 다시 입력하세요.";
     const loaded = loadAssessment(next, documents, readScenario());
     if ("error" in loaded) return loaded.error;
@@ -150,6 +151,10 @@ export function mountWorkbench(root: HTMLElement, initial: SceneDocument, librar
   const renderBudget = options.onChange && mountBudget(root,library,documents,
     () => ({doc:scene,id:readScenario(),view:assessment === evaluated ? view : undefined}),editScenario,
     id => panel.choose({kind:"connection",id}),items => { refreshCatalog([],items); render(); });
+  const goalPanel = mountGoals(root, () => ({ doc:scene, id:readScenario(), view:assessment === evaluated ? view : undefined }),
+    options.onChange && editScenario, (id,nextRun) => {
+      run = nextRun; redrawResults(); panel.choose({kind:"workload",id});
+    }, options.onChange && questPanel.open);
   let openCreator: () => void;
   if (options.onChange) trigger.hidden = false;
   trigger.onclick = () => {
@@ -260,8 +265,9 @@ export function mountWorkbench(root: HTMLElement, initial: SceneDocument, librar
     arrivals.clear();
     panel.render(view, variants, variant, preserveSelection);
     questTrigger.hidden = !options.onChange;
-    if (options.onChange) renderQuests(view, scene);
+    if (options.onChange) questPanel.update(view, scene);
     renderBudget?.();
+    goalPanel.refresh();
   }
 
   async function loadVariants() {
@@ -269,7 +275,7 @@ export function mountWorkbench(root: HTMLElement, initial: SceneDocument, librar
     if (!loaded || loaded !== evaluated || row === null) return [];
     const cached = alternatives.get(row);
     if (cached) return cached;
-    const reply = await evaluateInWorker(owner, { kind: "variants", document: scene, documents, scenario: row });
+    const reply = await evaluateInWorker(root, { kind: "variants", document: scene, documents, scenario: row });
     if (!reply || assessment !== loaded || !root.contains(display)) return [];
     if (reply.kind === "error") throw new Error(reply.message);
     if (reply.kind !== "variants") return [];
@@ -294,7 +300,7 @@ export function mountWorkbench(root: HTMLElement, initial: SceneDocument, librar
     progress.textContent = "판정 계산 중…";
     if (geometryChanged) render();
     else updateScenario();
-    void evaluateInWorker(owner, { kind: "primary", document: scene, documents }).then(reply => {
+    void evaluateInWorker(root, { kind: "primary", document: scene, documents }).then(reply => {
       if (!reply || assessment !== loaded || !root.contains(display)) return;
       canvas.afterGesture(() => {
         if (assessment !== loaded || !root.contains(display)) return;
@@ -313,7 +319,7 @@ export function mountWorkbench(root: HTMLElement, initial: SceneDocument, librar
 
   function updateDocument(next: SceneDocument) {
     scene = next;
-    if (view && assessment === evaluated && options.onChange) renderQuests(view, scene);
+    if (view && assessment === evaluated && options.onChange) questPanel.update(view, scene);
   }
 
   function commit(next: SceneDocument, intent: SceneIntent, prepared?: Assessment) {

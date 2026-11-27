@@ -2,9 +2,9 @@
 import type { Snapshot } from "../engine/compare.ts";
 import type { PriceBook } from "../server/prices.ts";
 import { evaluateInWorker, loadAssessment, type Documents } from "./assessment.ts";
-import { calculateBudget, compareBudgets } from "./budget.ts";
+import { calculateBudget, compareBudgets, unknownPrices } from "./budget.ts";
 import { modelKey, type Model, type SceneDocument } from "./document.ts";
-import { directionArrow, interval, verdictText } from "./results.ts";
+import { directionArrow, interval, resultView, verdictText } from "./results.ts";
 import { compareSwap, swapSlot, type SwapChoice } from "./swap.ts";
 
 const fields: Readonly<Record<string, string>> = {
@@ -148,11 +148,11 @@ export function mountSwap(root: HTMLElement, documents: Documents, saveCopy: (do
         costs.setAttribute("aria-label", "비용 차이");
         const left = before.scenarios[0], right = newDocument.scenarios[0];
         if (left && right && offers) {
-          const oldBudget = calculateBudget(left, before.items, offers);
-          const newBudget = calculateBudget(right, candidate.items, offers);
+          const oldBudget = calculateBudget(left, before.items, offers, resultView(a.scene,a.result,0,"together"));
+          const newBudget = calculateBudget(right, candidate.items, offers, resultView(b.scene,b.result,0,"together"));
           const delta = compareBudgets(oldBudget, newBudget);
-          const total = ({ subtotalCents, unknownCount }: typeof oldBudget) =>
-            money(subtotalCents) + (unknownCount ? " + 가격 미확인 " + unknownCount + "개" : "");
+          const total = ({ subtotalCents, unknownRange }: typeof oldBudget) =>
+            money(subtotalCents) + (unknownRange.high===0n ? "" : " + " + unknownPrices(unknownRange));
           costs.append(el("h3", "비용 차이 " + (delta === null ? "미확인" : (delta > 0n ? "+" : "") + money(delta))),
             el("p", total(oldBudget) + " → " + total(newBudget)));
         } else costs.append(el("h3", "비용 차이 미확인"),

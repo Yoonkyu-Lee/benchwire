@@ -41,6 +41,26 @@ test("영역 플러그인은 브라우저에서도 돌므로 허용한 패키지
   assert.equal(fails(checkImports("domains/power/rules.test.ts", 'import { test } from "node:test";')), 0);
 });
 
+test("영역 훅이 주장 표의 조회 기록을 우회하면 막는다",()=>{
+  const file="domains/trial/rules.ts";
+  for (const expr of ["s.claims[id]","s['claims'].some(f)","const { claims: facts } = s"])
+    assert.equal(fails(checkImports(file,expr)),1,expr);
+  assert.equal(fails(checkImports(file,"readClaim(s,id).value")),0);
+});
+
+test("엔진과 플러그인 모두 주장 표와 동적 장면 키의 우회를 막는다",()=>{
+  for (const path of ["domains/trial/rules.ts","engine/allocate.ts"]) {
+    for (const expr of ["scene.claims[row]","scene['claims']","scene[key]","link.scene[key]","scene.claimIndex!.claims[row]","scene?.claims","scene['cl'+'aims']", "const { claims: table } = scene"])
+      assert.equal(fails(checkImports(path,expr)),1,expr);
+    assert.equal(fails(checkImports(path,"readClaim(scene,row)")),0);
+    assert.equal(fails(checkImports(path,"const data = scene; data[key]")),1);
+  }
+});
+
+test("주장 접근 모듈에서도 색인 밖의 캐시 적중은 기록을 건너뛰지 않는다",()=>{
+  assert.equal(fails(checkImports("engine/scene.ts","export function portFacts(scene: Scene) { return scene.claimIndex!.claims[row] }")),1);
+});
+
 test("카탈로그의 기기 이름이 엔진 · 플러그인 코드에 나오면 막는다", () => {
   const names = ["Contoso Dock 9"];
   assert.equal(fails(checkDeviceNames("domains/data/rules.ts", 'if (model === "contoso dock 9") {}', names)), 1);

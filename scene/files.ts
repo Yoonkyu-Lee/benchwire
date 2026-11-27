@@ -43,6 +43,15 @@ export const productRef = z.strictObject({
   seller: z.string().trim().min(1), productId: z.string().trim().min(1), saleUnit: z.int().positive(),
 });
 const need = z.strictObject({ connection: id, capability: id }).optional();
+const goalFields = { id, label: id.optional() };
+const workloads = z.array(id).min(1, "작업을 하나 이상 선택하세요");
+const goal = z.discriminatedUnion("kind", [
+  z.strictObject({ ...goalFields, kind: z.literal("metric"), workloads, run: z.enum(["solo","together"]),
+    metric: id, metricDomain: id.optional(), unit: id, minimum: z.number() }),
+  z.strictObject({ ...goalFields, kind: z.literal("port"), workloads, instanceId: id, portId: id.optional() }),
+  z.strictObject({ ...goalFields, kind: z.literal("workload"), workload: id }),
+  z.strictObject({ ...goalFields, kind: z.literal("scenario") }),
+]);
 const purchase = z.union([
   z.strictObject({ instanceId: id, need }),
   z.strictObject({ modelRef: revisionRef, quantity: z.int().positive(), product: productRef.optional(), need }),
@@ -93,7 +102,7 @@ export const sceneFile = z.strictObject({
     id, from: localRef, to: localRef, evidence, observations: z.array(observation).optional(), parts: z.array(z.strictObject({ instanceId: id, entry: id, exit: id })),
   })),
   workloads: z.array(z.strictObject({ id, domain: id, kind: id, from: localRef, to: localRef, request: fields })),
-  scenarios: z.array(z.strictObject({ id, name: id.optional(), budget: z.number().nonnegative().multipleOf(0.01)
+  scenarios: z.array(z.strictObject({ id, name: id.optional(), goals: z.array(goal).optional(), budget: z.number().nonnegative().multipleOf(0.01)
     .max(Number.MAX_SAFE_INTEGER / 100).optional(), purchases: z.array(purchase).optional(),
     members: z.array(z.union([id, z.strictObject({ workload: id, priority: fact.refine(f =>
     typeof f.value === "number" && Number.isSafeInteger(f.value) && !f.conflicts?.some(c => !Number.isSafeInteger(c.value)) && !f.unit && !f.condition, "우선순위에는 단위 없는 정수가 필요합니다") })])) })),

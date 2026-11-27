@@ -1,14 +1,8 @@
 // 고정 예약과 반복 소비를 한 예산에 모으고 실제 처리량을 낼 수 있는 작업끼리 max-min으로 배분한다.
-import type { Carrier, Consumption, PolicyLimit, Scene, Verdict } from "./contract.ts";
+import { compareQuantity, type Carrier, type Consumption, type PolicyLimit, type Scene, type Verdict } from "./contract.ts";
 import type { Results } from "./results.ts";
 import { resourceCapacity } from "./standing.ts";
-import { resourceFacts } from "./scene.ts";
-
-// 0.3 / 3과 0.1처럼 같은 포화 시점이 연산 반올림으로 갈라지는 것을 막는다.
-const RELATIVE_TOLERANCE = 16 * Number.EPSILON;
-function tied(a: number, b: number) {
-  return Math.abs(a - b) <= RELATIVE_TOLERANCE * Math.max(Math.abs(a), Math.abs(b));
-}
+import { readClaim, resourceFacts } from "./scene.ts";
 
 // 배분 안에서만 장면 자원 뒤에 링크 자원의 번호를 이어 붙인다.
 export interface Use extends Consumption { option?: number; pool?: number; conversion?: Carrier["conversion"]; unknown?: boolean }
@@ -16,7 +10,28 @@ function linkLimit(result: Results, u: Use) {
   return u.pool === undefined ? result.options[u.option!]! : result.linkResources[u.pool]!.pool!;
 }
 export interface Flow { workload: number; path: number | null; cap: number | null; elastic: boolean; verdict: Verdict; bestCase?: Verdict; uses: Use[]; priority?: number }
-export interface Share { workload: number; value: number | null; verdict: Verdict; range?: { low: number; high: number | null; possible: Verdict[]; inputs?: number[] }; bindings: number[]; contested?: boolean; unresolvedPolicies?: number[]; policies?: (PolicyLimit & {resource: number})[] }
+export interface Share { workload: number; value: number | null; verdict: Verdict; range?: { low: number; high: number | null; possible: Verdict[]; inputs?: number[] }; bindings: number[]; contested?: boolean; policyReads?: number[]; unresolvedPolicies?: number[]; policies?: (PolicyLimit & {resource: number})[] }
+
+// 경로가 실제로 소비하는 예산과 같은 예산에 잡힌 상시 예약의 근거다.
+export function allocationInputs(scene: Scene, result: Results, flows: readonly Flow[], share: Share, purpose: "score" | "evidence") {
+  const claims = new Set(purpose==="evidence" ? share.policies?.flatMap(p => p.inputs) : []);
+  for (const id of share.policyReads ?? []) claims.add(id);
+  const resources = new Set<number>();
+  for (const flow of flows) for (const u of flow.uses) {
+    resources.add(u.resource);
+    if (purpose==="evidence") for (const id of u.inputs) claims.add(id);
+    if (u.option === undefined) {
+      const facts = resourceFacts(scene,u.resource);
+      claims.add(facts.capacity);
+      claims.add(facts.policy);
+    }
+  }
+  for (const load of result.standingLoads) if (purpose==="evidence" && resources.has(load.resource + (load.kind === "link" ? scene.resources.length : 0)))
+    for (const id of load.inputs) claims.add(id);
+  for (const r of result.hookReads ?? []) if (r.hook==="consume" && flows.some(f=>f.path===r.row))
+    for (const id of r.claims) claims.add(id);
+  return claims;
+}
 
 // 경쟁자가 자원을 전부 양보했을 때도 넘을 수 없는 작업률이다.
 export function throughputUpper(scene: Scene, result: Results, flow: Flow, policies: NonNullable<Share["policies"]> = []) {
@@ -25,13 +40,17 @@ export function throughputUpper(scene: Scene, result: Results, flow: Flow, polic
     const uses = flow.uses.filter(u => u.resource === row), first = uses[0]!;
     const capacity = first.option === undefined ? resourceCapacity(scene, result, row) : linkLimit(result, first).limit ?? linkLimit(result, first).bounds?.high;
     const limit = policies.find(p => p.workload === flow.workload && p.resource === row)?.limit;
-    if (typeof capacity !== "number" && limit === undefined) continue;
+    if (typeof capacity !== "number" && limit == null) continue;
     const budget = Math.min(typeof capacity === "number" ? capacity : Infinity, limit ?? Infinity);
     const fixed = uses.reduce((n, u) => n + u.fixed, 0), slope = uses.reduce((n, u) => n + u.coefficient, 0);
-    if (fixed > budget) upper = 0;
-    else if (slope > 0) upper = Math.min(upper ?? Infinity, (budget - fixed) / slope);
+    if (budget === 0 && fixed > 0 || compareQuantity(fixed,budget) > 0) upper = 0;
+    else if (slope > 0) upper = Math.min(upper ?? Infinity, Math.max(0,budget - fixed) / slope);
   }
   return upper;
+}
+
+export function deliveryRange(scene: Scene, result: Results, flow: Flow, share: Share) {
+  return share.range ?? { low: share.value ?? 0, high: share.value ?? throughputUpper(scene,result,flow,share.policies) };
 }
 
 export function allocationGroup(flows: readonly Flow[], start: Flow): Flow[] {
@@ -82,7 +101,7 @@ function fill(scene: Scene, result: Results, flows: readonly Flow[], fair: Reado
         const facts = option ? null : resourceFacts(scene, u.resource);
         const capacity = facts ? resourceCapacity(scene, result, u.resource) : option!.limit;
         pool = { capacity: typeof capacity === "number" ? capacity : null,
-          policy: facts ? scene.claims[facts.policy]!.value : "max-min",
+          policy: facts ? readClaim(scene,facts.policy).value : "max-min",
           unit: option?.unit ?? scene.resources[u.resource]!.unit, reserved: 0, coefficients: new Map(), weights: new Map(), fixed: new Map() };
         pools.set(u.resource, pool);
       }
@@ -96,7 +115,7 @@ function fill(scene: Scene, result: Results, flows: readonly Flow[], fair: Reado
     const users = new Set([...p.fixed.keys(), ...p.coefficients.keys()]);
     if (p.capacity !== null) for (const i of users) {
       const fixed = p.fixed.get(i) ?? 0;
-      if ((p.capacity === 0 && p.coefficients.has(i)) || (fixed > p.capacity && !tied(fixed, p.capacity))) {
+      if (p.capacity === 0 || compareQuantity(fixed,p.capacity) > 0) {
         shares[i]!.verdict = "impossible";
         shares[i]!.bindings.push(row);
         active.delete(i);
@@ -118,7 +137,7 @@ function fill(scene: Scene, result: Results, flows: readonly Flow[], fair: Reado
         result.errors.push({ domain: scene.workloads[workload]!.domain, entryPoint: null, targetKind: "workload", row: workload, spec: "", field });
     }
     p.reserved = [...p.fixed.values()].reduce((sum, x) => sum + x, 0);
-    if (p.capacity !== null && p.reserved > p.capacity && !tied(p.reserved, p.capacity)) {
+    if (p.capacity !== null && compareQuantity(p.reserved,p.capacity) > 0) {
       for (const i of p.fixed.keys()) overbooked.add(i);
     } else if (p.capacity === null || users.size > 1 && p.policy !== "max-min" && !fair.has(row)) {
       for (const i of users) if (active.has(i)) uncertain.add(i);
@@ -174,12 +193,12 @@ function fill(scene: Scene, result: Results, flows: readonly Flow[], fair: Reado
       for (const i of active) { shares[i]!.value = null; shares[i]!.verdict = "unknown"; }
       break;
     }
-    for (const e of capacityEvents) if (Number.isFinite(e.scale) && tied(e.scale, scale)) for (const i of e.users) {
+    for (const e of capacityEvents) if (compareQuantity(e.scale,scale) === 0) for (const i of e.users) {
       shares[i]!.value = Math.min(flows[i]!.cap!, offers.get(i)! * scale);
       shares[i]!.bindings.push(e.row);
       active.delete(i);
     }
-    for (const e of demandEvents) if (Number.isFinite(e.scale) && tied(e.scale, scale)) {
+    for (const e of demandEvents) if (compareQuantity(e.scale,scale) === 0) {
       shares[e.i]!.value = flows[e.i]!.cap;
       active.delete(e.i);
     }
@@ -195,7 +214,7 @@ function allocateKnown(scene: Scene, result: Results, flows: readonly Flow[], fa
     const failed: number[] = [];
     participants.forEach((f, i) => {
       const share = shares[i]!;
-      if (f.verdict === "impossible" || share.value === null || f.cap === null || f.cap === 0 || share.value >= f.cap) return;
+      if (f.verdict === "impossible" || share.value === null || f.cap === null || f.cap === 0 || compareQuantity(share.value,f.cap) >= 0) return;
       share.verdict = share.value === 0 || !f.elastic ? "impossible" : "conditional";
       if (share.verdict !== "impossible") return;
       const occupied = f.uses.some(u => u.fixed > 0) || share.value > 0;
@@ -219,7 +238,7 @@ function allocateKnown(scene: Scene, result: Results, flows: readonly Flow[], fa
         for (const i of members) {
           const blocked = [...pools].flatMap(([r,p]) => {
             const left = remaining.get(r), fixed = p.fixed.get(i) ?? 0;
-            return left != null && fixed > left && !tied(fixed,left) ? [r] : [];
+            return left != null && compareQuantity(fixed,left) > 0 ? [r] : [];
           });
           if (blocked.length) rejected.set(participants[i]!.workload, { ...shares[i]!, value: 0, verdict: "impossible", bindings: blocked });
         }
@@ -229,7 +248,7 @@ function allocateKnown(scene: Scene, result: Results, flows: readonly Flow[], fa
           const left = remaining.get(r);
           if (left == null) continue;
           const sum = members.reduce((n,i) => n + (p.fixed.get(i) ?? 0), 0);
-          if (sum < left || tied(sum,left)) fitting.add(r);
+          if (compareQuantity(sum,left) <= 0) fitting.add(r);
           remaining.set(r, fitting.has(r) ? Math.max(0,left-sum) : null);
         }
         for (const i of members) {
@@ -271,10 +290,10 @@ function guaranteedFloor(scene: Scene, lower: Results, flow: Flow, group: Flow[]
       capacity = link.limit;
     } else {
       const facts = resourceFacts(scene, row), available = resourceCapacity(scene, lower, row);
-      if (typeof available !== "number" || scene.claims[facts.policy]!.value !== "max-min" && !fair.has(row)) return 0;
+      if (typeof available !== "number" || readClaim(scene,facts.policy).value !== "max-min" && !fair.has(row)) return 0;
       capacity = available;
     }
-    const remaining = capacity - uses.reduce((n,u) => n + u.fixed, 0);
+    const remaining = capacity - uses.reduce((n,u) => n + (u.fixedHigh ?? u.fixed), 0);
     if (remaining < 0) return 0;
     if (flow.uses.some(u => u.resource === row && u.coefficient > 0)) {
       const slopes = group.map(f => f.uses.filter(u => u.resource === row).reduce((sum,u) => sum + u.coefficient,0));
@@ -285,18 +304,19 @@ function guaranteedFloor(scene: Scene, lower: Results, flow: Flow, group: Flow[]
       rate = Math.min(rate,remaining / slope * weights.get(index)!);
     }
   }
-  return flow.elastic || rate === flow.cap ? rate : 0;
+  return flow.elastic || flow.cap !== null && compareQuantity(rate,flow.cap) === 0 ? rate : 0;
 }
 
 // 링크 용량이 구간이면 같은 작업·예약을 양 경계에 배분한다. 다른 링크를 쓰는 경쟁자가 있으면 상한은 독점 시의 값이다.
-export function allocate(scene: Scene, result: Results, flows: readonly Flow[], fair: ReadonlySet<number> = new Set()): Share[] {
+export function allocate(scene: Scene, result: Results, flows: readonly Flow[], fair: ReadonlySet<number> = new Set(),
+  policies: NonNullable<Share["policies"]> = []): Share[] {
   // 경계가 없는 공용 예산도 활성 작업이 전부 요청한 양 이상에서는 배분이 달라지지 않는다.
   const requested = new Map<number, number>();
   for (const f of flows) for (const u of f.uses) {
     if (u.pool === undefined) continue;
     const pool = result.linkResources[u.pool]!.pool!;
     if (pool.limit !== null || pool.bounds) continue;
-    const use = f.cap === null ? Infinity : u.fixed + u.coefficient * f.cap;
+    const use = f.cap === null ? Infinity : (u.fixedHigh ?? u.fixed) + u.coefficient * f.cap;
     requested.set(u.pool, (requested.get(u.pool) ?? 0) + use);
   }
   if (requested.size) result = { ...result, linkResources: result.linkResources.map((r,i) => {
@@ -305,10 +325,10 @@ export function allocate(scene: Scene, result: Results, flows: readonly Flow[], 
   }) };
   const reserved = new Map<number,number>();
   for (const load of result.standingLoads) if (load.kind === "scene" && load.amount === null) {
-    const capacity = scene.claims[resourceFacts(scene,load.resource).capacity]!.value;
+    const capacity = readClaim(scene,resourceFacts(scene,load.resource).capacity,"range").value;
     if (typeof capacity === "number") reserved.set(load.resource,capacity);
   }
-  if (!flows.some(f => f.uses.some(u => reserved.has(u.resource) || u.option !== undefined && linkLimit(result, u).bounds)))
+  if (!flows.some(f => f.uses.some(u => u.fixedHigh!==undefined || reserved.has(u.resource) || u.option !== undefined && linkLimit(result, u).bounds)))
     return allocateKnown(scene, result, flows, fair);
   const at = (side: "low" | "high"): Results => ({ ...result,
     standingLoads: result.standingLoads.map(l => l.kind === "scene" && l.amount === null && reserved.has(l.resource)
@@ -317,39 +337,55 @@ export function allocate(scene: Scene, result: Results, flows: readonly Flow[], 
     linkResources: result.linkResources.map(r => r.pool?.bounds ? { ...r, pool: { ...r.pool, limit: r.pool.bounds[side] } } : r) });
   const lower = at("low"), upper = at("high");
   const optimistic = flows.map(f => ({ ...f, verdict: f.verdict === "unknown" ? f.bestCase ?? f.verdict : f.verdict }));
-  const lowShares = allocateKnown(scene, lower, optimistic, fair);
+  const pessimistic = flows.map((f,i) => {
+    const path = f.path === null ? undefined : result.paths[f.path];
+    const verdict=f.verdict === "unknown" && optimistic[i]!.verdict !== "unknown" && path?.worstCase
+      ? path.worstCase : optimistic[i]!.verdict;
+    const worst={...f,verdict,uses:f.uses.map(u=>u.fixedHigh===undefined ? u : {...u,fixed:u.fixedHigh})};
+    if (policies.length && f.uses.some(u=>u.fixedHigh!==undefined)) {
+      const cap=throughputUpper(scene,lower,worst,policies);
+      if (cap!==null && (f.cap===null || compareQuantity(cap,f.cap)<0)) {
+        worst.cap=cap;
+        if (!f.elastic || cap===0) worst.verdict="impossible";
+        else if (worst.verdict==="ok") worst.verdict="conditional";
+      }
+    }
+    return worst;
+  });
+  const lowShares = allocateKnown(scene, lower, pessimistic, fair);
   const highShares = allocateKnown(scene, upper, optimistic, fair);
   return flows.map((flow, i) => {
     const group = allocationGroup(flows, flow);
-    const varying = new Set(group.flatMap(f => f.uses.filter(u => reserved.has(u.resource) || u.option !== undefined &&
+    const varying = new Set(group.flatMap(f => f.uses.filter(u => u.fixedHigh!==undefined || reserved.has(u.resource) || u.option !== undefined &&
       linkLimit(result, u).bounds && linkLimit(lower, u).limit !== linkLimit(upper, u).limit).map(u => u.resource)));
     const canBind = [...varying].filter(row => {
       let used = 0, guaranteed = Infinity;
       for (const f of group) for (const u of f.uses.filter(u => u.resource === row)) {
-        used += u.fixed + (u.coefficient ? u.coefficient * (f.cap ?? Infinity) : 0);
+        used += (u.fixedHigh ?? u.fixed) + (u.coefficient ? u.coefficient * (f.cap ?? Infinity) : 0);
         const capacity = u.option === undefined ? resourceCapacity(scene,lower,u.resource) : linkLimit(lower,u).limit;
-        guaranteed = Math.min(guaranteed,capacity ?? 0);
+        const limit=u.fixedHigh===undefined ? null : policies.find(p=>p.resource===row && p.workload===f.workload)?.limit;
+        guaranteed = Math.min(guaranteed,capacity ?? 0,limit ?? Infinity);
       }
-      return used > guaranteed;
+      return compareQuantity(used,guaranteed) > 0;
     });
     const lo = lowShares[i]!, hi = highShares[i]!;
-    if (!canBind.length || flow.verdict === "impossible") return lo;
-    const shared = canBind.length === 1 && group.every(f => f.elastic && f.uses.every(u => !u.fixed) && f.uses.some(u => u.resource === canBind[0]));
+    if (flow.verdict === "impossible" || !canBind.length && lo.verdict === hi.verdict) return lo;
+    const shared = canBind.length === 1 && group.every(f => f.elastic && f.uses.every(u => !(u.fixedHigh ?? u.fixed)) && f.uses.some(u => u.resource === canBind[0]));
     const monotone = group.length === 1 || shared;
-    const low = monotone ? lo.value ?? 0 : guaranteedFloor(scene, lower, flow, group, fair);
+    const low = monotone ? lo.value ?? 0 : Math.min(pessimistic[i]!.cap ?? Infinity,guaranteedFloor(scene, lower, flow, group, fair));
     const high = (monotone ? hi.value : null) ?? throughputUpper(scene, upper, optimistic[i]!);
-    const possible: Verdict[] = [];
-    if (low === 0) possible.push("impossible");
+    const possible = new Set([lo.verdict,hi.verdict].filter(v => v !== "unknown"));
+    if (low === 0 && flow.cap !== 0) possible.add("impossible");
     const conditional = (flow.path !== null && result.paths[flow.path]!.conditioned) || flow.bestCase === "conditional" || flow.verdict === "conditional";
     if (high === null || high > 0) {
-      if (conditional || flow.elastic && (flow.cap === null || low < flow.cap)) possible.push("conditional");
-      if (!conditional && (flow.cap === null || high === null || high >= flow.cap)) possible.push("ok");
+      if (conditional || flow.elastic && (flow.cap === null || compareQuantity(low,flow.cap) < 0)) possible.add("conditional");
+      if (!conditional && (flow.cap === null || high === null || compareQuantity(high,flow.cap) >= 0)) possible.add("ok");
     }
-    const verdict = possible.length === 1 ? possible[0]! : "unknown";
+    const verdict = possible.size === 1 ? [...possible][0]! : "unknown";
     const bindings = monotone ? lo.bindings.filter(b => hi.bindings.includes(b)) : [];
     const loadInputs = result.standingLoads.filter(l => l.amount === null &&
       canBind.includes(l.resource + (l.kind === "link" ? scene.resources.length : 0))).flatMap(l => l.inputs);
     const inputs = [...new Set([...loadInputs,...group.flatMap(f => f.uses.filter(u => canBind.includes(u.resource)).flatMap(u => u.inputs))])];
-    return { workload: flow.workload, verdict, value: low === high ? low : null, bindings, range: { low, high, possible, inputs } };
+    return { workload: flow.workload, verdict, value: low === high ? low : null, bindings, range: { low, high, possible:[...possible], inputs } };
   });
 }

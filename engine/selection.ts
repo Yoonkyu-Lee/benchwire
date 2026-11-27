@@ -1,6 +1,6 @@
 // 연결 단위의 설정과 시나리오의 동시 모드 조합을 실제 배분 결과로 비교한다.
 import type { Choice, DomainPlugin, Scene } from "./contract.ts";
-import type { Flow, Share } from "./allocate.ts";
+import { allocationInputs, deliveryRange, type Flow, type Share } from "./allocate.ts";
 import type { Results } from "./results.ts";
 import { optionVerdict } from "./negotiate.ts";
 import { availableOption } from "./pools.ts";
@@ -63,27 +63,21 @@ export function compareScores(a: number[], b: number[]) {
 }
 
 export function planModes(scene: Scene, plugins: readonly DomainPlugin[], r: Results, members: Scene["members"],
-  candidates: Candidate[][], choices: Choice[], confirmed: boolean, budget: { examined: number; truncated: boolean }, selectedWorkloads?: WorkloadSelection) {
+  candidates: Candidate[][], choices: Choice[], confirmed: boolean, budget: { examined: number; truncated: boolean }, selectedWorkloads?: WorkloadSelection, scoreInputs?: Set<number>) {
   const ranks = [...new Set(members.flatMap(m => m.priority === undefined ? [] : [m.priority]))].sort((a,b) => a-b);
   const used = members.map(m => new Set(candidates[m.workload]!.flatMap(c => c.flow.uses.map(u => u.resource))));
   const menus = members.map((m,i) => {
-    const list = candidates[m.workload]!, first = list[0]!;
+    let list = candidates[m.workload]!;
     const wanted = selectedWorkloads?.modes.find(mode => mode.workload === m.workload);
     if (wanted) {
-      const matching = list.find(c => c.flow.path !== null && c.preference === wanted.preference &&
+      const matching = list.filter(c => c.flow.path !== null && c.preference === wanted.preference &&
         r.demands[r.paths[c.flow.path]!.demand]!.mode === wanted.mode);
-      if (matching) return [matching];
+      if (matching.length) list = matching;
     }
+    const first = list[0]!;
     const shared = used.some((resources,j) => j !== i && [...resources].some(r => used[i]!.has(r)));
     if (!shared || first.truncated) return [first];
-    const seen = new Set([first.flow.path === null ? -1 : r.paths[first.flow.path]!.demand]);
-    return [first, ...list.slice(1).filter(c => {
-      if (c.flow.path === null || c.solo.verdict === "unknown" || c.solo.verdict === "impossible") return false;
-      const demand = r.paths[c.flow.path]!.demand;
-      if (seen.has(demand)) return false;
-      seen.add(demand);
-      return true;
-    })];
+    return [first, ...list.slice(1).filter(c => c.flow.path !== null && c.solo.verdict !== "unknown" && c.solo.verdict !== "impossible")];
   });
   const best: Plan[] = [];
   for (const picked of combinations(menus)) {
@@ -95,10 +89,13 @@ export function planModes(scene: Scene, plugins: readonly DomainPlugin[], r: Res
       for (const flow of active) flow.priority = 2*tiers.indexOf(flow.priority ?? Infinity) + (selectedWorkloads.advances.includes(flow.workload) ? 0 : 1);
     }
     const together = policyAllocation(scene,plugins,r,active);
+    if (scoreInputs) together.forEach((share,i) => {
+      for (const claim of allocationInputs(scene,r,[active[i]!],share,"score")) scoreInputs.add(claim);
+    });
     const goals = together.map((share,i) => {
       const f = active[i]!, assess = plugins.find(p => p.id === scene.workloads[f.workload]!.domain)?.assess;
       if (!assess || f.path === null) return share;
-      const delivered = { low: share.range?.low ?? share.value ?? 0, high: share.range?.high ?? share.value ?? f.cap };
+      const delivered = deliveryRange(scene,r,f,share);
       return { ...share, verdict: assessDelivery(scene,r,assess,f.workload,f.path,delivered).verdict };
     });
     const score: number[] = [];

@@ -2,6 +2,8 @@
 
 // 출처: USB Power Delivery r3.2 v1.2 (2026-08) §3.2.5.3, 표 3.1·3.5·6.13 (신뢰도: official)
 export const USB_PD_MAX_CURRENT_A = 5;
+// 고정 공급 PDO의 최대 전류는 10 mA 단위다. USB Power Delivery r3.2 v1.2 표 6.13.
+export const USB_PD_FIXED_CURRENT_STEP_A = 0.01;
 
 // 표준 고정 PDO별 전류 상한이다. 실제 제공 전류는 포트의 가용 전력과 케이블 등급에 달려 있다.
 // 출처: USB Power Delivery r3.2 v1.2 (2026-08) 표 3.1·3.2·3.5·3.6 (신뢰도: official)

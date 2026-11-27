@@ -40,6 +40,23 @@ export function checkImports(path: string, text: string): Finding[] {
   const out: Finding[] = [];
   const isTest = path.endsWith(".test.ts");
   const domain = /^domains\/([^/]+)\//.exec(path)?.[1];
+  if (!isTest && (domain || path.startsWith("engine/"))) {
+    // 행 조회·색인 생성의 원본 접근만 허용한다. 진단 행 번호가 달라지지 않게 줄바꿈을 보존한다.
+    const code=path==="engine/scene.ts" ? text.replace(
+      /^export function (?:evaluationScene|effectiveClaim|claimRows|readClaim|hasClaimPrefix)\([^]*?^\}/gm,
+      body=>body.replace(/[^\n]/g," ")) : text;
+    const names=new Set(["scene","s","view","input","world","concrete"]);
+    for (const m of code.matchAll(/\b(\w+)\s*:\s*(?:Readonly<Scene>|Scene)\s*(?=[,)={;])/g)) names.add(m[1]!);
+    for (const m of code.matchAll(/\b(?:const|let)\s+(\w+)\s*=\s*(?:\w+\.)?(\w+)\s*[;,\n]/g))
+      if (names.has(m[2]!)) names.add(m[1]!);
+    const receiver="\\b(?:"+[...names].join("|")+")\\b\\s*";
+    const field="(?:claims|claimIndex)";
+    const direct=new RegExp((domain ? "" : receiver)+"(?:\\??\\.\\s*"+field+"\\b|(?:\\?\\.)?\\[\\s*['\"`]"
+      +field+"['\"`]\\s*\\])|\\{[^{}]*\\b"+field+"\\b[^{}]*\\}\\s*=\\s*"+(domain ? "" : receiver));
+    const variable=new RegExp(receiver+"(?:\\?\\.)?\\[(?!\\s*['\"`][\\w$]+['\"`]\\s*\\])");
+    const access=direct.exec(code) ?? variable.exec(code);
+    if (access) out.push({level:"FAIL",path,line:lineOf(text,access.index),message:"장면의 주장 조회는 effectiveClaim·readClaim을 거쳐야 한다"});
+  }
   for (const m of text.matchAll(IMPORT)) {
     const spec = m[1] ?? m[2] ?? m[3] ?? "";
     const target = spec.startsWith(".") ? posix.join(posix.dirname(path), spec) : spec;

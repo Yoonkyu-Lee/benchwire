@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { resolve } from "node:path";
 import test from "node:test";
 import { edgeSession, waitForAssessment } from "./edge-session.ts";
-import type { SceneDocument } from "./document.ts";
+import type { Library, SceneDocument } from "./document.ts";
 
 const edge = edgeSession();
 test("T9 예제에서 입력한 견적과 예산은 사본에 남고 같은 기술 결과 옆에도 가격 차이가 보인다", async () => {
@@ -131,6 +131,16 @@ test("T9 결합품을 고르기 전에는 상한 충족이 미확인이고 보�
     const totals = panel.locator(".totals");
     assert.match(await totals.innerText(),/가격 미확인 [1-9]\d*개/);
     assert.match(await totals.innerText(),/상품 예산 \$0.00 · 충족 여부 미확인/);
+    const goals=page.getByRole("dialog",{name:"목표 체크리스트"});
+    async function checkGoalBudget(status: RegExp, screenshot: string) {
+      await panel.getByRole("button",{name:"닫기",exact:true}).click();
+      await page.getByRole("button",{name:"목표 체크리스트",exact:true}).click();
+      await goals.locator(".goal-budget").getByText(status).waitFor({timeout:4000});
+      await goals.screenshot({path:resolve("work",screenshot)});
+      await goals.getByRole("button",{name:"닫기",exact:true}).click();
+      await page.getByRole("button",{name:"구매 예산",exact:true}).click();
+    }
+    await checkGoalBudget(/충족 여부 미확인/,"목표-결합품-미지정.png");
     await page.screenshot({path:resolve("work/m6-budget-unassigned.png")});
     for (const pending of await panel.locator(".needs p").all()) {
       await pending.getByRole("button",{name:"품목 지정"}).click();
@@ -139,6 +149,7 @@ test("T9 결합품을 고르기 전에는 상한 충족이 미확인이고 보�
       await pending.filter({hasText:"lan-a-wire"}).waitFor();
     }
     await totals.getByText("상품 예산 $0.00 이내",{exact:true}).waitFor();
+    await checkGoalBudget(/예산 이내/,"목표-결합품-지정.png");
     await page.screenshot({path:resolve("work/m6-budget-assigned.png")});
     await panel.getByText("lan-a-wire · 보유 $0.00").waitFor();
     await need.getByRole("button",{name:"연결 근거"}).click();
@@ -295,4 +306,29 @@ test("T9 이름을 다시 써도 다른 탭의 예산 상한은 원래 시나리
     await panel.getByRole("heading",{name:"C",exact:true}).waitFor();
     await panel.screenshot({path:resolve("work/m6-scenario-name-reuse.png")});
   } finally { await Promise.all([renamer.close(),budgetTab?.close()]); }
+});
+
+test("T9 커넥터가 충돌하면 일부 후보에만 필요한 부품과 미확인 수량 범위를 표시한다",async()=>{
+  const {page}=await edge.newPage("/");
+  try {
+    await page.evaluate(async()=>{
+      const library=await (await fetch("/api/library")).json() as Library;
+      const model=library.models.find(m=>m.modelId==="network-host")!;
+      model.revision="connector-conflict";const connector=model.ports.find(p=>p.id==="lan")!.connector;
+      connector.conflicts=[{value:"network-plug",confidence:"review",sources:connector.sources}];
+      const doc=await (await fetch("/api/scenes/network")).json() as SceneDocument;
+      doc.sceneId="budget-connector-conflict";doc.items.find(i=>i.instanceId==="host-a")!.revision=model.revision;
+      doc.scenarios[0]!.budget=0;
+      for (const [path,body] of [["/api/models/network-host/"+model.revision,model],["/api/scenes/"+doc.sceneId,doc]] as const) {
+        const reply=await fetch(path,{method:"PUT",headers:{"Content-Type":"application/json"},body:JSON.stringify(body)});
+        if (!reply.ok) throw new Error(await reply.text());
+      }
+    });
+    await page.reload();await waitForAssessment(page);
+    await page.getByRole("button",{name:"구매 예산",exact:true}).click();
+    const panel=page.getByRole("dialog",{name:"구매 예산"});
+    await panel.locator(".needs p").filter({hasText:"일부 후보에서만 필요"}).first().waitFor();
+    assert.match(await panel.locator(".totals").innerText(),/가격 미확인 0–1개/);
+    await panel.screenshot({path:resolve("work/6차-후보별-결합품.png")});
+  } finally {await page.close();}
 });

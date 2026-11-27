@@ -6,7 +6,7 @@ import { trialDomain } from "../fixtures/trial.ts";
 import { compare, connectionOption } from "./compare.ts";
 import { power } from "../domains/power/power.ts";
 import * as engine from "./evaluate.ts";
-import { effectiveClaim, type Demand, type Option } from "./contract.ts";
+import { effectiveClaim, readClaim, type Demand, type Option } from "./contract.ts";
 import type { Results } from "./results.ts";
 
 function setup(amounts: number[]) {
@@ -294,7 +294,11 @@ test("T2 미확인 설정 후보 257개로 고정 선택을 확인할 수 없으
     domain:plugin.id,field:"configuration",value:null,confidence:"unknown"})-1;
   scene.claimSources.push(...scene.claimSources.filter(s => s.claim === evidence).map(s => ({...s,claim})));
   plugin.profileValues = c => c.field === "configuration" ? Array.from({length:257},(_,i) => i) : [];
-  plugin.negotiate = () => ["A","B"].map((p,i) => ({...option("bulk",100-i*50,p),inputs:[claim]}));
+  plugin.negotiate = ({scene:s}) => ["A","B"].map((p,i) => {
+    const setting=readClaim(s,claim).value;
+    const preferred=typeof setting==="number" ? setting%2 : 0;
+    return {...option("bulk",preferred===i ? 100 : 50,p),inputs:[claim]};
+  });
   plugin.demand = () => [demand("bulk",100,true)];
   const variants = engine.evaluateVariants(scene,[plugin],0);
   assert.equal(variants.length,1);

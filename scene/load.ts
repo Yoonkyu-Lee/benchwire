@@ -1,11 +1,60 @@
 // 고정한 모델 판본을 실물별로 펼치고 저장 ID를 행 번호로 바꾼다. 입력 오류는 파일과 필드를 가리킨다.
-import { connectionPorts } from "../engine/scene.ts";
-import type { z } from "zod";
+import { connectionPorts, MAX_GRID_WORLDS } from "../engine/scene.ts";
+import { z } from "zod";
 import type { Scene, Claim, DomainPlugin, InputSchema, MeasurementContext } from "../engine/contract.ts";
 import { connectorsFile, modelFile, sceneFile, parseDocument, scenarioName, type Fact } from "./files.ts";
 
 function fail(at: string, why: string): never { throw new Error(at + " — " + why); }
 
+type Samples = {values:Exclude<Claim["value"],null>[]; grid?:true};
+function fieldSamples(schema: unknown, path: readonly string[]): Samples | undefined {
+  while (schema instanceof z.ZodOptional || schema instanceof z.ZodNullable || schema instanceof z.ZodDefault)
+    schema=schema.unwrap();
+  if (schema instanceof z.ZodUnion) {
+    const choices=schema.options.map(s=>fieldSamples(s,path));
+    if (!choices.every(v=>v!==undefined)) return;
+    if (choices.some(v=>v.grid && !v.values.length)) return {values:[],grid:true};
+    return {values:[...new Set(choices.flatMap(v=>v.values))],...(choices.some(v=>v.grid) ? {grid:true} : {})};
+  }
+  const [key,...rest]=path;
+  if (key!==undefined) {
+    if (schema instanceof z.ZodObject) {
+      const property=schema.shape[key]??schema.def.catchall;
+      return property && !(property instanceof z.ZodNever) ? fieldSamples(property,rest) : {values:[]};
+    }
+    if (schema instanceof z.ZodRecord) return fieldSamples(schema.valueType,rest);
+    return undefined;
+  }
+  if (schema instanceof z.ZodBoolean) return {values:[false,true]};
+  if (schema instanceof z.ZodNull) return {values:[]};
+  if (schema instanceof z.ZodNumber) {
+    const {minValue:low,maxValue:high}=schema;
+    if (low===null || high===null || !Number.isFinite(low) || !Number.isFinite(high)) return;
+    const json=schema.toJSONSchema();
+    const steps=[json.multipleOf,...(json.allOf ?? []).map(t=>t.multipleOf),schema.isInt ? 1 : undefined]
+      .filter((s):s is number=>typeof s==="number" && s>0);
+    // 여러 배수 제약의 공통 걸음은 유한 소수의 최소공배수다.
+    const places=Math.max(0,...steps.map(s=>{const [n,e]=s.toString().split("e");return (n!.split(".")[1]?.length ?? 0)-Number(e ?? 0);}));
+    const scale=10**places;
+    const gcd=(a:number,b:number):number=>b ? gcd(b,a%b) : a;
+    if (!steps.length) return;
+    const stride=steps.map(s=>Math.round(s*scale)).reduce((a,b)=>a/gcd(a,b)*b);
+    const step=stride/scale;
+    const tick=(i:number)=>i*stride/scale;
+    let first=Math.floor(low/step), last=Math.ceil(high/step);
+    // 열린 끝과 십진 나눗셈의 반올림은 스키마 자체로 검사한다.
+    if (!Number.isSafeInteger(first*stride) || !Number.isSafeInteger(last*stride)) return {values:[],grid:true};
+    if (tick(first)<low || !schema.safeParse(tick(first)).success) first++;
+    if (tick(last)>high || !schema.safeParse(tick(last)).success) last--;
+    if (last-first+1>MAX_GRID_WORLDS) return {values:[],grid:true};
+    const values:number[]=[];
+    for (let i=first;i<=last;i++) if (schema.safeParse(tick(i)).success) values.push(tick(i));
+    return {values,grid:true};
+  }
+  const values=schema instanceof z.ZodLiteral ? [...schema.values] : schema instanceof z.ZodEnum ? schema.options : undefined;
+  if (values) return {values:values.filter((v):v is string|number|boolean=>typeof v==="string" || typeof v==="number" || typeof v==="boolean")};
+  return undefined;
+}
 function unique<T>(map: Map<string, T>, id: string, value: T, at: string): T {
   if (map.has(id)) fail(at, "중복 ID: " + id);
   map.set(id, value);
@@ -85,7 +134,11 @@ export function loadSceneDocuments(document: unknown, library: { connectors: unk
     claims: [], sources: [], claimSources: [],
   };
   const domains = new Map<string, DomainPlugin>();
-  plugins.forEach(p => unique(domains, p.id, p, file + "#plugins"));
+  for (const p of plugins) {
+    unique(domains, p.id, p, file + "#plugins");
+    if (p.goalMeasures?.some(m => m.kind === "delivery"))
+      fail(file + "#plugins." + p.id + ".goalMeasures","delivery는 내장 전달량에 쓰는 이름입니다");
+  }
   function sources(rows: Scene["sources"], at: string, repeated = false) {
     const index = new Map<string, number>();
     function add(s: Scene["sources"][number], i: number) {
@@ -94,6 +147,16 @@ export function loadSceneDocuments(document: unknown, library: { connectors: unk
     if (repeated) readDistinct(rows,add);
     else rows.forEach(add);
     return index;
+  }
+  const domainsBySchema=new Map<InputSchema,Map<string,Samples|undefined>>();
+  function claimDomain(claim:Claim,schema:InputSchema) {
+    let fields=domainsBySchema.get(schema);
+    if (!fields) { fields=new Map(); domainsBySchema.set(schema,fields); }
+    if (!fields.has(claim.field)) fields.set(claim.field,fieldSamples(schema,[claim.field,"value"]));
+    const samples=fields.get(claim.field);
+    if (!samples) { claim.openDomain=true; return; }
+    claim.discrete=samples.values;
+    if (samples.grid) claim.numericGrid=true;
   }
   const conflictGroups = new Map<Fact, number>();
   function claim(ownerKind: Claim["ownerKind"], owner: number, scope: Claim["scope"], domain: string, field: string,
@@ -136,7 +199,8 @@ export function loadSceneDocuments(document: unknown, library: { connectors: unk
       fact.conflicts?.forEach((c,i) => validateFields(schema, { ...base, [key]: { value: c.value, unit: fact.unit } },
         where + ".conflicts." + i, key));
       const sourceRows = generated && Object.hasOwn(generated.values, key) ? generated.citations : citations;
-      claim(ownerKind, owner, scope, domain, key, fact, sourceRows, where);
+      const row = claim(ownerKind, owner, scope, domain, key, fact, sourceRows, where);
+      claimDomain(scene.claims[row]!, schema);
     }
   }
 
@@ -150,6 +214,7 @@ export function loadSceneDocuments(document: unknown, library: { connectors: unk
         fail(where, "결합 형태는 문자열 또는 null입니다");
     });
     const endForm = claim("connector", row, "catalog", "", "endForm", c.endForm, catalogSources, at + ".endForm");
+    scene.claims[endForm]!.openDomain=true;
     unique(connectors, c.id, scene.connectors.push({ id: c.id, endForm }) - 1, at + ".id");
   });
   registry.mates.forEach((m, i) => {
@@ -231,8 +296,10 @@ export function loadSceneDocuments(document: unknown, library: { connectors: unk
         if (r[key].condition) fail(where + "." + key, "기본 자원에는 조건을 붙일 수 없습니다");
       }
       scene.resources.push({ item, id, domain, kind, unit });
-      for (const field of ["capacity", "policy"] as const)
-        claim("resource", row, "model", domain, field, r[field], citations, where + "." + field);
+      for (const field of ["capacity", "policy"] as const) {
+        const id=claim("resource", row, "model", domain, field, r[field], citations, where + "." + field);
+        scene.claims[id]!.openDomain=true;
+      }
     });
     const edges = new Map<string, number>();
     model.edges.forEach((e, i) => {
@@ -321,6 +388,7 @@ export function loadSceneDocuments(document: unknown, library: { connectors: unk
     if (ownerKind === "resource") {
       const r = scene.resources[owner]!;
       checkResource(field, p.claim, r.unit, at + ".claim");
+      measured.openDomain=true;
     } else if (ownerKind === "port") {
       if (field === "connector") measured.connectorRow = referenceRow(p.claim, connectors, at + ".claim");
       else measured.attachmentNode = referenceRow(p.claim, local.nodes, at + ".claim");
@@ -331,6 +399,7 @@ export function loadSceneDocuments(document: unknown, library: { connectors: unk
         (!c.condition || c.condition === p.claim.condition));
       const values = Object.fromEntries(group.map(c => [c.field, { value: c.value, unit: c.unit }]));
       const schema = ownerKind === "item" ? plugin.attributes : interfaceSchema(plugin, scene.interfaces[owner]!.protocol);
+      claimDomain(measured, schema);
       const recovered = ownerKind === "item" && recoveredAttributes.has(JSON.stringify([owner, domain]));
       checkValues(p.claim, at + ".claim", (sample,where) =>
         validateFields(schema, { ...values, [field]: { value: sample.value, unit: sample.unit } }, where, field, recovered));
@@ -375,6 +444,7 @@ export function loadSceneDocuments(document: unknown, library: { connectors: unk
         if (plugin.observations) validateFields(plugin.observations,{ [field]:{value:fact.value,unit:fact.unit} },where + ".claim",field);
         const row = claim("connection",connection,"personal",domain,field,fact,sceneSources,where + ".claim");
         scene.claims[row]!.observedPorts = observation.ports;
+        if (plugin.observations) claimDomain(scene.claims[row]!,plugin.observations);
         const changed = ports.length !== observation.ports.length || ports.some((p,j) =>
           p.instanceId !== observation.ports[j]!.instanceId || p.id !== observation.ports[j]!.id);
         const inactive = changed ? "wiring" : observation.ports.map((p,j) =>
@@ -422,6 +492,44 @@ export function loadSceneDocuments(document: unknown, library: { connectors: unk
           sceneSources, pos + ".priority");
         const priority = scene.claims[evidence]!.value as number | null;
         scene.members.push({ scenario, workload, ...(priority === null ? {} : { priority }), evidence });
+      }
+    });
+    const goalIds = new Map<string, number>();
+    s.goals?.forEach((g, i) => {
+      const where = at + ".goals." + i;
+      unique(goalIds, g.id, i, where + ".id");
+      const goals = scene.goals ??= [];
+      const base = { id:g.id, scenario };
+      if (g.kind === "scenario") { goals.push({...base,kind:g.kind}); return; }
+      if (g.kind === "workload") {
+        goals.push({...base,kind:g.kind,workload:ref(members,g.workload,where + ".workload")}); return;
+      }
+      const selected = new Map<string, number>();
+      g.workloads.forEach((id,j) => {
+        const field = where + ".workloads." + j;
+        unique(selected, id, ref(members,id,field), field);
+      });
+      const workloads = [...selected.values()];
+      if (g.kind === "port") {
+        const owner = ref(instances,g.instanceId,where + ".instanceId");
+        goals.push({ ...base, workloads, kind:g.kind, item:owner.item,
+          ...(g.portId !== undefined && {port:ref(owner.ports,g.portId,where + ".portId")}) });
+      } else {
+        const metricDomain = g.metric === "delivery" ? undefined : g.metricDomain ?? scene.workloads[workloads[0]!]!.domain;
+        if (g.metric === "delivery" && g.metricDomain !== undefined) fail(where + ".metricDomain","내장 전달량에는 영역을 지정할 수 없습니다");
+        for (const work of workloads) {
+          const plugin = domains.get(scene.workloads[work]!.domain)!;
+          if (g.metric === "delivery") {
+            const demands = plugin.demand(scene,work);
+            if (demands.length && !demands.some(d => d.unit === g.unit)) fail(where + ".unit","이 작업의 전달량 단위가 아닙니다");
+          } else {
+            if (plugin.id !== metricDomain) fail(where + ".metricDomain","선택한 작업과 지표의 영역이 다릅니다");
+            const kinds = plugin.goalMeasures?.filter(m => m.kind === g.metric);
+            if (!kinds?.length) fail(where + ".metric","이 영역이 선언한 목표 지표가 아닙니다");
+            if (!kinds.some(m => m.unit === g.unit)) fail(where + ".unit","지표의 단위가 다릅니다");
+          }
+        }
+        goals.push({ ...base, workloads, kind:g.kind, run:g.run, metric:g.metric, ...(metricDomain && {metricDomain}), minimum:g.minimum, unit:g.unit });
       }
     });
   });

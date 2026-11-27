@@ -13,6 +13,7 @@ type Fact = Workload["request"][string];
 type Value = Fact["value"];
 type State = { document: SceneDocument; scenarioId: string | null };
 type Intent = { kind: "edit-scenario"; document: SceneDocument; scenarioId: string | null }
+  | { kind: "edit-goal"; goalId: string }
   | { kind: "select-scenario"; scenarioId: string };
 
 // 로더는 전체 요청을 검증한다. 여기서는 프리셋이 속한 스키마의 가지에서 입력 칸을 정한다.
@@ -215,6 +216,18 @@ export function mountScenario(root: HTMLElement, documents: Documents, act: (int
           members.push(priority.value === "" && !priority.validity.badInput ? workload.id
             : typeof member === "object" && member.priority.value === value ? member
             : { workload: workload.id, priority: fact(value, "") });
+        }
+        const enabled = new Set(members.map(memberId));
+        const blocked = scenario?.goals?.filter(g => g.kind === "workload" ? !enabled.has(g.workload)
+          : "workloads" in g && g.workloads.some(w => !enabled.has(w)));
+        if (blocked?.length) {
+          error.textContent = "제외할 작업을 참조하는 목표를 먼저 편집하세요. ";
+          for (const goal of blocked) {
+            const edit = button((goal.label ?? goal.id) + " 목표 편집");
+            edit.onclick = () => act({kind:"edit-goal",goalId:goal.id});
+            error.append(edit);
+          }
+          return before;
         }
         if (scenario && label === savedName && members.length === scenario.members.length
           && members.every((member, i) => member === scenario.members[i])) return before;

@@ -1,0 +1,196 @@
+{
+  "sceneId": "shared-poe",
+  "sources": [
+    {
+      "id": "network-scene",
+      "title": "합성 LAN·회선·PoE 작업",
+      "locator": "fixture:network/network-scene",
+      "retrievedAt": "2026-11-26"
+    }
+  ],
+  "items": [
+    {
+      "instanceId": "supply",
+      "modelId": "hybrid-source",
+      "revision": "1"
+    },
+    {
+      "instanceId": "first",
+      "modelId": "hybrid-load",
+      "revision": "1"
+    },
+    {
+      "instanceId": "first-wire",
+      "modelId": "poe-wire",
+      "revision": "1"
+    },
+    {
+      "instanceId": "second",
+      "modelId": "hybrid-load",
+      "revision": "1"
+    },
+    {
+      "instanceId": "second-wire",
+      "modelId": "poe-wire",
+      "revision": "1"
+    },
+    {
+      "instanceId": "pse",
+      "modelId": "hybrid-load",
+      "revision": "1"
+    },
+    {
+      "instanceId": "pse-wire",
+      "modelId": "poe-wire",
+      "revision": "1"
+    }
+  ],
+  "connections": [
+    {
+      "id": "first",
+      "from": {
+        "instanceId": "supply",
+        "id": "first"
+      },
+      "to": {
+        "instanceId": "first",
+        "id": "pd"
+      },
+      "parts": [
+        {
+          "instanceId": "first-wire",
+          "entry": "a",
+          "exit": "b"
+        }
+      ],
+      "evidence": {"value":true,"confidence":"inferred","sources":["network-scene"]}
+    },
+    {
+      "id": "second",
+      "from": {
+        "instanceId": "supply",
+        "id": "second"
+      },
+      "to": {
+        "instanceId": "second",
+        "id": "pd"
+      },
+      "parts": [
+        {
+          "instanceId": "second-wire",
+          "entry": "a",
+          "exit": "b"
+        }
+      ],
+      "evidence": {"value":true,"confidence":"inferred","sources":["network-scene"]}
+    },
+    {
+      "id": "pse",
+      "from": {
+        "instanceId": "supply",
+        "id": "pse"
+      },
+      "to": {
+        "instanceId": "pse",
+        "id": "pd"
+      },
+      "parts": [
+        {
+          "instanceId": "pse-wire",
+          "entry": "a",
+          "exit": "b"
+        }
+      ],
+      "evidence": {"value":true,"confidence":"inferred","sources":["network-scene"]}
+    }
+  ],
+  "workloads": [
+    {
+      "id": "first",
+      "domain": "network",
+      "kind": "power",
+      "from": {
+        "instanceId": "supply",
+        "id": "supply"
+      },
+      "to": {
+        "instanceId": "first",
+        "id": "load"
+      },
+      "request": {
+        "watts": {"value":20,"unit":"W","confidence":"inferred","sources":["network-scene"]}
+      }
+    },
+    {
+      "id": "second",
+      "domain": "network",
+      "kind": "power",
+      "from": {
+        "instanceId": "supply",
+        "id": "supply"
+      },
+      "to": {
+        "instanceId": "second",
+        "id": "load"
+      },
+      "request": {
+        "watts": {"value":20,"unit":"W","confidence":"inferred","sources":["network-scene"]}
+      }
+    },
+    {
+      "id": "pse",
+      "domain": "network",
+      "kind": "power",
+      "from": {
+        "instanceId": "supply",
+        "id": "supply"
+      },
+      "to": {
+        "instanceId": "pse",
+        "id": "load"
+      },
+      "request": {
+        "watts": {"value":20,"unit":"W","confidence":"inferred","sources":["network-scene"]}
+      }
+    },
+    {
+      "id": "first-again",
+      "domain": "network",
+      "kind": "power",
+      "from": {
+        "instanceId": "supply",
+        "id": "supply"
+      },
+      "to": {
+        "instanceId": "first",
+        "id": "load"
+      },
+      "request": {
+        "watts": {"value":4,"unit":"W","confidence":"inferred","sources":["network-scene"]}
+      }
+    }
+  ],
+  "scenarios": [
+    {
+      "id": "poe",
+      "members": [
+        {
+          "workload": "first",
+          "priority": {"value":1,"confidence":"inferred","sources":["network-scene"]}
+        },
+        {
+          "workload": "second",
+          "priority": {"value":2,"confidence":"inferred","sources":["network-scene"]}
+        },
+        {
+          "workload": "pse",
+          "priority": {"value":3,"confidence":"inferred","sources":["network-scene"]}
+        }
+      ]
+    },
+    {"id":"same-port","members":["first","first-again"],"goals":[
+      {"id":"같은 송전 포트","kind":"port","instanceId":"supply","portId":"first","workloads":["first","first-again"]},
+      {"id":"두 수전 작업","kind":"scenario"}
+    ]}
+  ]
+}

@@ -1,20 +1,20 @@
 // 구간별 운반 서비스가 이어지는 경로 후보를 모두 보존해 단독 배분과 미확인 배선 비교에 쓴다.
 import type { Carrier, Choice, DomainPlugin, Scene, Verdict } from "./contract.ts";
-import { bestOption, optionVerdict, verdictOrder } from "./negotiate.ts";
-import { availableOption } from "./pools.ts";
+import { optionChoices, optionVerdict, verdictOrder } from "./negotiate.ts";
 import { attachmentCandidates, portFacts } from "./scene.ts";
 import { checkedQuantity, checkedTrace, type Results } from "./results.ts";
+import { callHook } from "./hook-reads.ts";
 import { routes, MAX_PATHS, type Arc } from "./route.ts";
 
 type PathStep = Omit<Results["steps"][number], "path" | "order">;
-interface PathArc extends Arc { steps: PathStep[]; verdict: Verdict; bestCase?: Verdict; truncated: boolean }
+interface PathArc extends Arc { steps: PathStep[]; verdict: Verdict; bestCase?: Verdict; worstCase?: Verdict; truncated: boolean }
 
 function connectionArcs(scene: Scene, result: Results, plugin: DomainPlugin, demandRow: number, carrier: Carrier, choices: readonly Choice[]): PathArc[] {
   const arcs: PathArc[] = [];
   const demand = result.demands[demandRow]!;
   const service = { ...demand, mode: carrier.mode, unit: carrier.conversion?.unit ?? demand.unit,
     requested: demand.requested === null ? null : demand.requested * (carrier.conversion?.perUnit ?? 1) };
-  const pending = attachmentCandidates(scene, demand.via);
+  const pending = attachmentCandidates(scene);
   result.linkResources.forEach((link, resource) => {
     if (link.pool || link.service || link.domain !== carrier.domain) return;
     const { connection, direction } = link, c = scene.connections[connection]!;
@@ -30,23 +30,14 @@ function connectionArcs(scene: Scene, result: Results, plugin: DomainPlugin, dem
         if (option.mode !== carrier.mode || option.unit !== service.unit) continue;
         let match = result.matches.find(m => m.demand === demandRow && m.option === row);
         if (!match) {
-          const raw = plugin.match({ scene, connection, direction, ports }, option, demand, demand.workload);
+          const raw = callHook(scene,result,"match",demand.workload,view=>
+            plugin.match!({scene:view,connection,direction,ports},option,demand,demand.workload)).value;
           match = { ...checkedTrace(result, plugin.id, "match", demand.workload, raw), demand: demandRow, option: row };
           result.matches.push(match);
         }
         matches.set(row, match);
       }
     }
-    const best = rows.length ? bestOption(result, rows, service, matches) : {
-      row: null, verdict: all.length || link.declarationClaimsOnPortsWithoutDomain.length || physical.some(s => s.verdict === "impossible") ? "impossible" as const : "unknown" as const,
-    };
-    const raw = best.row === null ? undefined : result.options[best.row];
-    const o = best.row === null ? undefined : availableOption(result, best.row);
-    const match = best.row === null ? undefined : matches.get(best.row);
-    const unknownService = raw?.verdict === "unknown" && !raw.bounds;
-    let bestCase = !unknownService && o?.bounds && o.limit === null ? optionVerdict({ ...o, limit: o.bounds.high,
-      verdict: o.verdict === "unknown" ? "ok" : o.verdict }, service) : best.verdict;
-    if (match && verdictOrder.indexOf(match.verdict) > verdictOrder.indexOf(bestCase)) bestCase = match.verdict;
     const start = direction === "forward" ? c.from : c.to, end = direction === "forward" ? c.to : c.from;
     const a = portFacts(scene, start), b = portFacts(scene, end);
     let variants: number[][] = [[]], truncated = false;
@@ -56,15 +47,30 @@ function connectionArcs(scene: Scene, result: Results, plugin: DomainPlugin, dem
       truncated ||= part.truncated || next.length > MAX_PATHS;
       variants = next.slice(0, MAX_PATHS);
     }
-    for (const edges of variants) {
-      for (const from of pending.get(start) ?? [a.node!]) for (const to of pending.get(end) ?? [b.node!]) {
-        const steps: PathStep[] = [{ kind: "connection", row: connection, from, to, direction, option: best.row, carrier },
-          ...edges.map((row): PathStep => ({ kind: "edge", row, from: scene.edges[row]!.from, to: scene.edges[row]!.to, direction: "forward", option: null, carrier }))];
-        const attachmentUnknown = a.node === null || b.node === null;
-        const key = JSON.stringify([c.id, direction, scene.nodes[from]!.id, scene.nodes[to]!.id, edges.map(e => scene.edges[e]!.id)]);
-        arcs.push({ from, to, steps, truncated, key,
-          bestCase: attachmentUnknown && bestCase !== "impossible" ? "unknown" : bestCase,
-          verdict: attachmentUnknown && best.verdict !== "impossible" ? "unknown" : best.verdict });
+    const offers = rows.length ? optionChoices(result, rows, service, matches).offers : [{
+      row: null, option: undefined, verdict: all.length || link.declarationClaimsOnPortsWithoutDomain.length || physical.some(s => s.verdict === "impossible") ? "impossible" as const : "unknown" as const,
+    }];
+    for (const best of offers) {
+      const o = best.option, raw = best.row === null ? undefined : result.options[best.row];
+      const match = best.row === null ? undefined : matches.get(best.row);
+      const unknownService = raw?.verdict === "unknown" && !raw.bounds;
+      function atBound(end: "low" | "high") {
+        if (unknownService || !o?.bounds || o.limit !== null) return best.verdict;
+        const verdict = optionVerdict({ ...o, limit: o.bounds[end], verdict: o.verdict === "unknown" ? "ok" : o.verdict }, service);
+        return match && verdictOrder.indexOf(match.verdict) > verdictOrder.indexOf(verdict) ? match.verdict : verdict;
+      }
+      const bestCase = atBound("high"), worstCase = atBound("low");
+      for (const edges of variants) {
+        for (const from of pending.get(start) ?? [a.node!]) for (const to of pending.get(end) ?? [b.node!]) {
+          const steps: PathStep[] = [{ kind: "connection", row: connection, from, to, direction, option: best.row, carrier },
+            ...edges.map((row): PathStep => ({ kind: "edge", row, from: scene.edges[row]!.from, to: scene.edges[row]!.to, direction: "forward", option: null, carrier }))];
+          const attachmentUnknown = a.node === null || b.node === null;
+          const key = JSON.stringify([c.id, direction, scene.nodes[from]!.id, scene.nodes[to]!.id, edges.map(e => scene.edges[e]!.id)]);
+          arcs.push({ from, to, steps, truncated, key,
+            bestCase: attachmentUnknown && bestCase !== "impossible" ? "unknown" : bestCase,
+            worstCase: attachmentUnknown && worstCase !== "impossible" ? "unknown" : worstCase,
+            verdict: attachmentUnknown && best.verdict !== "impossible" ? "unknown" : best.verdict });
+        }
       }
     }
   });
@@ -136,7 +142,7 @@ export function paths(scene: Scene, plugins: readonly DomainPlugin[], result: Re
     const inputs: RouteInputs = routeInputs[workload] ?? { claims: new Set(), resources: new Set() };
     routeInputs[workload] = inputs;
     const plugin = plugins.find(p => p.id === w.domain)!;
-    for (const raw of plugin.demand(scene, workload)) {
+    for (const raw of callHook(scene,result,"demand",workload,view=>plugin.demand(view,workload)).value) {
       const trace = checkedTrace(result, plugin.id, "demand", workload, raw);
       const requested = checkedQuantity(result, plugin.id, "demand", workload, "requested", trace.requested);
       const d = { ...trace, requested };
@@ -191,15 +197,19 @@ export function paths(scene: Scene, plugins: readonly DomainPlugin[], result: Re
         if (verdict !== "impossible" && d.requested === null) verdict = "unknown";
         if (verdict === "ok" && d.preference > 0) verdict = "conditional";
         const key = JSON.stringify(selected.map(a => a.key));
-        const highest = verdictOrder[Math.max(0, ...selected.map(a => verdictOrder.indexOf(a.bestCase ?? a.verdict)))]!;
-        const bestCase = verdict === "unknown" && d.requested !== null ? (highest === "ok" && d.preference > 0 ? "conditional" : highest) : verdict;
+        function bound(which: "bestCase" | "worstCase"): Verdict {
+          if (verdict !== "unknown" || d.requested === null) return verdict;
+          const weakest = verdictOrder[Math.max(0,...selected.map(a => verdictOrder.indexOf(a[which] ?? a.verdict)))]!;
+          return weakest === "ok" && d.preference > 0 ? "conditional" : weakest;
+        }
         const conditioned = d.preference > 0 || selected.some(a => a.steps.some(s => {
           if (s.option === null) return false;
           const o = result.options[s.option]!;
           return !!o.condition || o.verdict === "conditional" ||
             result.matches.some(m => m.option === s.option && m.demand === demand && m.verdict === "conditional");
         }));
-        const path = result.paths.push({ workload, demand, verdict, key, bestCase, ...(conditioned ? { conditioned } : {}),
+        const path = result.paths.push({ workload, demand, verdict, key, bestCase: bound("bestCase"),
+          ...(verdict === "unknown" ? { worstCase: bound("worstCase") } : {}), ...(conditioned ? { conditioned } : {}),
           ...(disconnected?.length ? { disconnected } : {}),
           ...(disconnectedEdges?.length ? { disconnectedEdges } : {}),
           truncated: verdict !== "impossible" && (truncated || selected.some(a => a.truncated)) }) - 1;

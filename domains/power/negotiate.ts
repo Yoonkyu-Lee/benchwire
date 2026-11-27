@@ -1,5 +1,5 @@
 // 고정 PDO와 케이블 등급을 교차해 링크의 총 전력 한도와 그 근거를 낸다.
-import { effectiveClaim, type Link, type Option, type Scene } from "../../engine/contract.ts";
+import { readClaim, effectiveClaim, type Link, type Option, type Scene } from "../../engine/contract.ts";
 import {
   USB_C_EPR_CABLE_REPORTED_VOLTAGE_V, USB_C_UNMARKED_CABLE_MAX_CURRENT_A, USB_PD_FIXED_SOURCE_LIMITS,
   USB_PD_MAX_CURRENT_A, USB_PD_POWER_LIMITS_W,
@@ -14,7 +14,7 @@ function field(scene: Scene, iface: number, name: string, inputs: number[]) {
   const row = effectiveClaim(scene, "interface", iface, POWER, name);
   if (row === undefined) return undefined;
   inputs.push(row);
-  return scene.claims[row]!.value;
+  return readClaim(scene,row).value;
 }
 
 function cableCurrent(scene: Scene, cables: (number | undefined)[], epr: boolean, inputs: number[]) {

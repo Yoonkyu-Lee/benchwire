@@ -89,9 +89,10 @@ function mergeScenario(before: Scenario, wanted: Scenario, latest: Scenario) {
   const members = mergeFields(membersById(before), membersById(wanted), membersById(latest));
   const budget = mergeField(before.budget, wanted.budget, latest.budget);
   const purchases = mergeField(before.purchases, wanted.purchases, latest.purchases);
-  return name === CONFLICT || members === CONFLICT || budget === CONFLICT || purchases === CONFLICT ? CONFLICT
+  const goals = mergeField(before.goals, wanted.goals, latest.goals);
+  return name === CONFLICT || members === CONFLICT || budget === CONFLICT || purchases === CONFLICT || goals === CONFLICT ? CONFLICT
     : { id: latest.id, ...(name !== undefined && {name}), members: [...members.values()],
-      ...(budget !== undefined && {budget}), ...(purchases && {purchases}) };
+      ...(budget !== undefined && {budget}), ...(purchases && {purchases}), ...(goals && {goals}) };
 }
 
 function mergeWorkload(before: Workload, wanted: Workload, latest: Workload) {

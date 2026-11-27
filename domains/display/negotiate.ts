@@ -1,6 +1,6 @@
 // 방향별 영상 전송 한도와 DSC 인코더·디코더의 출처를 연결 옵션으로 낸다.
 // DP 터널 케이블의 한도는 data 예산에서 가져온다. 한 연결에서 공통 영상 프로토콜이 여럿이면 선택은 미확인이다.
-import { effectiveClaim, type Link, type Option, type Value, type Verdict } from "../../engine/contract.ts";
+import { readClaim, effectiveClaim, type Link, type Option, type Value, type Verdict } from "../../engine/contract.ts";
 import { altModeProfiles, supportsDisplayRole } from "./alt-mode.ts";
 import {
   DP_ALT_MODE_PIN_ASSIGNMENTS, DP_LINK_RATES, DP_MAX_LANES, DP_VERSION_MAX_LINK_RATES, HDMI_21_FRL_LINK_RATES,
@@ -144,7 +144,7 @@ export function negotiateDisplay({ scene, connection, ports }: Link): DisplayOpt
       const claim = effectiveClaim(scene, "interface", row, "display", field);
       if (claim === undefined) return null;
       inputs.push(claim);
-      return scene.claims[claim]!.value;
+      return readClaim(scene,claim).value;
     }
 
     let capacity: Capacity;

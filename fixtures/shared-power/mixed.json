@@ -1,0 +1,118 @@
+{
+  "sceneId": "mixed-output",
+  "sources": [
+    {
+      "id": "network-scene",
+      "title": "합성 LAN·회선·PoE 작업",
+      "locator": "fixture:network/network-scene",
+      "retrievedAt": "2026-11-26"
+    }
+  ],
+  "items": [
+    {
+      "instanceId": "supply",
+      "modelId": "hybrid-source",
+      "revision": "1"
+    },
+    {
+      "instanceId": "first",
+      "modelId": "hybrid-load",
+      "revision": "1"
+    },
+    {
+      "instanceId": "first-wire",
+      "modelId": "poe-wire",
+      "revision": "1"
+    },
+    {
+      "instanceId": "receiver",
+      "modelId": "hybrid-load",
+      "revision": "1"
+    }
+  ],
+  "connections": [
+    {
+      "id": "first",
+      "from": {
+        "instanceId": "supply",
+        "id": "first"
+      },
+      "to": {
+        "instanceId": "first",
+        "id": "pd"
+      },
+      "parts": [
+        {
+          "instanceId": "first-wire",
+          "entry": "a",
+          "exit": "b"
+        }
+      ],
+      "evidence": {"value":true,"confidence":"inferred","sources":["network-scene"]}
+    },
+    {
+      "id": "usb",
+      "from": {
+        "instanceId": "supply",
+        "id": "usb"
+      },
+      "to": {
+        "instanceId": "receiver",
+        "id": "in"
+      },
+      "parts": [],
+      "evidence": {"value":true,"confidence":"inferred","sources":["network-scene"]}
+    }
+  ],
+  "workloads": [
+    {
+      "id": "first",
+      "domain": "network",
+      "kind": "power",
+      "from": {
+        "instanceId": "supply",
+        "id": "supply"
+      },
+      "to": {
+        "instanceId": "first",
+        "id": "load"
+      },
+      "request": {
+        "watts": {"value":20,"unit":"W","confidence":"inferred","sources":["network-scene"]}
+      }
+    },
+    {
+      "id": "charge",
+      "domain": "power",
+      "kind": "charge",
+      "from": {
+        "instanceId": "supply",
+        "id": "supply"
+      },
+      "to": {
+        "instanceId": "receiver",
+        "id": "load"
+      },
+      "request": {
+        "requestedW": {"value":60,"unit":"W","confidence":"inferred","sources":["network-scene"]},
+        "loadW": {"value":20,"unit":"W","confidence":"inferred","sources":["network-scene"]},
+        "targetW": {"value":30,"unit":"W","confidence":"inferred","sources":["network-scene"]}
+      }
+    }
+  ],
+  "scenarios": [
+    {
+      "id": "mixed",
+      "members": [
+        "first",
+        "charge"
+      ]
+    },
+    {
+      "id": "solo",
+      "members": [
+        "charge"
+      ]
+    }
+  ]
+}

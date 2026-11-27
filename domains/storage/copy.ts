@@ -1,6 +1,6 @@
 // 저장장치 복사는 USB 벌크 경로를 따라 매체·발열 한도와 내부 전송 자원을 소비한다.
 import { z } from "zod";
-import { effectiveClaim, type DomainPlugin } from "../../engine/contract.ts";
+import { readClaim, effectiveClaim, type DomainPlugin } from "../../engine/contract.ts";
 
 const DOMAIN = "storage";
 const MODE = "copy";
@@ -22,13 +22,14 @@ export const storageDomain: DomainPlugin = {
     }),
   negotiate() { return []; },
   demand(scene, workload) {
-    const inputs = scene.claims.flatMap((c, row) => c.ownerKind === "workload" && c.owner === workload && c.domain === DOMAIN ? [row] : []);
+    const inputs:number[]=[];
     const read = (field: string) => {
       const row = effectiveClaim(scene, "workload", workload, DOMAIN, field);
-      return row === undefined ? null : scene.claims[row]!.value;
+      if (row!==undefined) inputs.push(row);
+      return row === undefined ? null : readClaim(scene,row).value;
     };
     const rate = read("throughput");
-    const waypoints = inputs.some(row => scene.claims[row]!.field === "viaInstance");
+    const waypoints = effectiveClaim(scene,"workload",workload,DOMAIN,"viaInstance")!==undefined;
     const instance = read("viaInstance"), node = read("viaNode");
     const stop = waypoints ? scene.nodes.findIndex(n => n.id === node && scene.items[n.item]!.id === instance) : -1;
     const missing = waypoints && stop < 0;

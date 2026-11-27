@@ -1,0 +1,70 @@
+{
+  "modelId": "hybrid-load",
+  "revision": "1",
+  "kind": "device",
+  "brand": "합성",
+  "name": "합성 PoE 수전 장치",
+  "category": "네트워크 시험",
+  "sources": [
+    {
+      "id": "network-pd",
+      "title": "합성 PoE 수전 장치",
+      "locator": "fixture:network/network-pd",
+      "retrievedAt": "2026-11-26"
+    },
+    {
+      "id": "receiver",
+      "title": "receiver 합성 모델",
+      "locator": "fixture:power/receiver",
+      "retrievedAt": "2026-11-26"
+    }
+  ],
+  "nodes": [
+    {
+      "id": "load",
+      "kind": "junction",
+      "label": "load"
+    }
+  ],
+  "ports": [
+    {
+      "id": "pd",
+      "label": "pd",
+      "connector": {"value":"network-socket","confidence":"inferred","sources":["network-pd"]},
+      "attachment": {"value":"load","confidence":"inferred","sources":["network-pd"]},
+      "interfaces": [
+        {
+          "id": "power",
+          "domain": "network",
+          "protocol": "PoE PD",
+          "role": "sink",
+          "evidence": {"value":true,"confidence":"inferred","sources":["network-pd"]},
+          "params": {
+            "poeType": {"value":2,"confidence":"inferred","sources":["network-pd"]}
+          }
+        }
+      ]
+    },
+    {
+      "id": "in",
+      "label": "in",
+      "connector": {"value":"c-plug","confidence":"inferred","sources":["receiver"]},
+      "attachment": {"value":"load","confidence":"inferred","sources":["receiver"]},
+      "interfaces": [
+        {
+          "id": "in-power",
+          "domain": "power",
+          "protocol": "USB PD",
+          "role": "sink",
+          "evidence": {"value":true,"confidence":"inferred","sources":["receiver"]},
+          "params": {
+            "maxW": {"value":80,"unit":"W","confidence":"inferred","sources":["receiver"]},
+            "accepts20": {"value":true,"confidence":"inferred","sources":["receiver"]}
+          }
+        }
+      ]
+    }
+  ],
+  "edges": [],
+  "resources": []
+}

@@ -60,6 +60,12 @@ function alternatives(schema: JSONSchema): JSONSchema[] {
   return Array.isArray(schema.type) ? schema.type.map(type => ({ ...schema, type })) : [schema];
 }
 
+export function hasUnsteppedNumber(property?: JSONSchema) {
+  const value=property?.properties?.value;
+  return typeof value==="object" && alternatives(value).some(s=>s.type==="number" && s.const===undefined && !s.enum && !s.multipleOf &&
+    !s.allOf?.some(part=>part.multipleOf || part.type==="integer"));
+}
+
 export function fieldUnit(schema: JSONSchema) {
   const unit = schema.properties?.unit;
   const literal = typeof unit === "object" ? unit.const : undefined;
@@ -93,7 +99,11 @@ export function claimInput(form: HTMLElement, key: string, property: JSONSchema 
     const input = document.createElement("input");
     const numeric = known.every(schema => schema.type === "number" || schema.type === "integer" || typeof schema.const === "number");
     input.type = numeric ? "number" : "text";
-    if (numeric) input.step = known.every(schema => schema.type === "integer") ? "1" : "any";
+    if (numeric) {
+      const step = known[0]?.multipleOf;
+      input.step = step && known.every(schema => schema.multipleOf === step) ? String(step)
+        : known.every(schema => schema.type === "integer") ? "1" : "any";
+    }
     input.value = initial?.value == null ? "" : String(initial.value);
     control = input;
     read = () => numeric ? input.valueAsNumber : input.value;

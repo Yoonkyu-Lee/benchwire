@@ -159,6 +159,11 @@ test("T4 업스트림 케이블의 USB4 지원이 미확인이면 두 영상의 
   const scene = fixture("scene");
   const upstream = scene.items.findIndex(i => i.id === "upstream");
   const cable = effectiveClaim(scene, "item", upstream, "data", "cableUsb4")!;
+  const fixed = [false,true].map(value => {
+    const known = structuredClone(scene);
+    known.claims[cable]!.value = value;
+    return inspect(known);
+  });
   scene.claims[cable]!.value = null;
   scene.claims[cable]!.confidence = "unknown";
 
@@ -166,8 +171,12 @@ test("T4 업스트림 케이블의 USB4 지원이 미확인이면 두 영상의 
   for (const id of ["video-a", "video-b"]) {
     const w = work("two-video", id);
     assert.equal(w.outcome.verdict, "unknown");
-    for (const metric of [w.solo, w.together]) assert.deepEqual([metric.value, metric.low, metric.high, metric.unit], [null, 0, 16, "Gbps"]);
-    assert.deepEqual(result.possibleVerdicts.filter(v => v.outcome === w.row).map(v => v.verdict).sort(), ["impossible", "ok"]);
+    const worlds = fixed.map(s => s.work("two-video",id));
+    for (const run of ["solo","together"] as const) {
+      const values = worlds.map(v => v[run].value!);
+      assert.deepEqual([w[run].value,w[run].low,w[run].high,w[run].unit],[null,Math.min(...values),Math.max(...values),"Gbps"]);
+    }
+    assert.deepEqual(result.possibleVerdicts.filter(v => v.outcome === w.row).map(v => v.verdict).sort(),worlds.map(v => v.outcome.verdict).sort());
     const pool = w.links.find(l => l.name === "usb4-upstream")!.option.poolResource!;
     assert.deepEqual(result.linkResources[pool]!.pool!.bounds, { low: 0, high: 28 });
     assert.ok(cited(w.inputs, "cableUsb4", null, "fixture:t4/usb4-cable"));

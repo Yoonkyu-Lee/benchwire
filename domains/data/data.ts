@@ -1,5 +1,5 @@
 // USB 데이터의 벌크·PCIe 터널 수요와 허브·호스트 컨트롤러 자원 소비를 등록한다.
-import { effectiveClaim, type DomainPlugin, type Verdict } from "../../engine/contract.ts";
+import { readClaim, effectiveClaim, type DomainPlugin, type Verdict } from "../../engine/contract.ts";
 import { attributes, BULK, DATA, MB_PER_SECOND, observations, params, paramsFor, PCIE_TUNNEL, request, USB, USB4 } from "./input.ts";
 import { usbServices } from "./negotiate.ts";
 import { sources } from "./sources.ts";
@@ -14,11 +14,13 @@ export const data: DomainPlugin = {
       return { cableDataGbps: "Gbps", cableUsb4: "" };
     return undefined;
   },
+  // 같은 케이블을 지나는 모든 터널은 그 케이블의 USB4 지원 여부를 공유한다.
+  profileValues(claim) { return claim.ownerKind === "item" && claim.field === "cableUsb4" ? [false,true] : []; },
   negotiate(link) { return usbServices(link).options; },
   pools(link) { return usbServices(link).pools; },
   demand(scene, workload) {
     const row = effectiveClaim(scene, "workload", workload, DATA, "throughput");
-    const requested = row === undefined ? null : scene.claims[row]!.value as number | null;
+    const requested = row === undefined ? null : readClaim(scene,row).value as number | null;
     const mode = scene.workloads[workload]!.kind === PCIE_TUNNEL ? PCIE_TUNNEL : BULK;
     return [{ mode, unit: MB_PER_SECOND, requested, via: [], preference: 0, elastic: true,
       rule: "요청한 데이터 페이로드 처리량", inputs: row === undefined ? [] : [row], specs: [] }];

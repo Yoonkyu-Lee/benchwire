@@ -148,7 +148,7 @@ export function printResults(scene: Scene, result: Results): string {
         lines.push(`${indent}${runs[b.run]} 병목 ${resource}`);
       }
     }
-    for (const n of result.needs.filter(n => n.outcome === row)) lines.push(`${indent}필요한 결합 형태 ${n.requiredCapability}`);
+    for (const n of result.needs.filter(n => n.outcome === row)) lines.push(`${indent}필요한 결합 형태 ${n.requiredCapability}${n.conditional ? " · 일부 후보에서만 필요" : ""}`);
     const possible = result.possibleVerdicts.filter(p => p.outcome === row).map(p => verdicts[p.verdict]);
     if (possible.length > 1 && !assessments.some(a => a.run === "together")) lines.push(`${indent}가능한 판정 ${possible.join(" ")}`);
     for (const q of result.quests.filter(q => q.outcome === row)) {

@@ -1,6 +1,13 @@
 // 시나리오의 구매 수량·묶음·품절과 가격 미확인이 예산 및 로드아웃 차액에 미치는 영향을 확인한다.
 import assert from "node:assert/strict";
 import test from "node:test";
+import { readFileSync } from "node:fs";
+import { z } from "zod";
+import { effectiveClaim } from "../engine/scene.ts";
+import { trialDomain } from "../fixtures/trial.ts";
+import { loadSceneDocuments } from "../scene/load.ts";
+import { evaluate } from "../engine/evaluate.ts";
+import { resultView } from "./results.ts";
 import { calculateBudget, compareBudgets } from "./budget.ts";
 import type { Quote } from "../server/prices.ts";
 import type { Item, SceneDocument } from "./document.ts";
@@ -12,9 +19,133 @@ const offer: Quote = { modelRef: "cable@1", seller: "선호점", productId: "낱
   saleUnit: 1, currency: "USD", stock: "in", retrievedAt: "2026-01-01T00:00:00Z", source: "매장", provider: "manual" };
 const stock = { quotes: [offer], preferredSellers: ["선호점", "다음점"] };
 type Purchases = NonNullable<SceneDocument["scenarios"][number]["purchases"]>;
+test("T9 주장 종류마다 고정 장면의 목표와 결합 비용을 모두 합친 판정과 비교한다",()=>{
+  const read=(name:string)=>JSON.parse(readFileSync("fixtures/"+name+".json","utf8"));
+  type Value=string | number | boolean;
+  const flags=z.boolean(), modes=z.enum(["낮음","중간","높음"]), grid=z.number().min(0).max(1).multipleOf(.01);
+  for (const [kind,schema,values,exception] of [
+    ["불리언",flags,[false,true],true],["열거",modes,modes.options,"중간"],
+    ["격자",grid,Array.from({length:101},(_,i)=>i/100),.37],
+    ["충돌",grid,[.1,.9],.9],["커넥터",null,["trial-plug","trial-socket"],null],["부착점",null,["root","out","isolated"],null],
+  ] as const) {
+    const plugin=trialDomain(), doc:SceneDocument=read("three-flows"), host=read("source@1"), scenario=doc.scenarios[0]!;
+    doc.connections.length=1;scenario.members=["a"];scenario.budget=0;
+    scenario.goals=[{id:"최저",kind:"metric",workloads:["a"],run:"together",metric:"delivery",unit:"회/s",minimum:50}];
+    const table=read("connectors"), sources=host.ports[0].connector.sources;
+    const models=new Map([["source@1",host],["sink@1",read("sink@1")]]);
+    const field=kind==="커넥터" ? host.ports[0].connector : kind==="부착점" ? host.ports[0].attachment :
+      {value:null,confidence:"inferred",sources};
+    if (kind==="부착점") host.nodes.push({id:"isolated",kind:"junction",label:"분리됨"});
+    if (schema) {
+      host.attributes={trial:{setting:field}};
+      plugin.attributes=z.strictObject({setting:z.strictObject({value:schema.nullable(),unit:z.literal("")})});
+      const negotiate=plugin.negotiate;
+      plugin.negotiate=link=>negotiate(link).map(o=>{
+        const id=effectiveClaim(link.scene,"item",0,plugin.id,"setting")!;
+        return {...o,inputs:[...o.inputs,id],limit:link.scene.claims[id]!.value===exception ? 0 : 100};
+      });
+    }
+    function judge() {
+      const scene=loadSceneDocuments(doc,{models,connectors:table},[plugin]), r=evaluate(scene,[plugin]);
+      const b=calculateBudget(scenario,doc.items,stock,resultView(scene,r,0,"together"));
+      return {goal:r.goals[0]!.verdict,budget:b.limitStatus,low:b.unknownRange.low,high:b.unknownRange.high};
+    }
+    const fixed=(values as readonly Value[]).map(value=>{field.value=value;return judge();});
+    if (kind==="충돌") {
+      field.value=values[0];field.conflicts=[{value:values[1],confidence:"review",sources}];
+    } else field.value=null;
+    const first=fixed[0]!;
+    const lows=fixed.map(f=>f.low), highs=fixed.map(f=>f.high);
+    assert.ok(highs.every(n=>n!==null));
+    assert.deepEqual(judge(),{goal:fixed.every(f=>f.goal===first.goal) ? first.goal : "unknown",
+      budget:fixed.every(f=>f.budget===first.budget) ? first.budget : "unknown",
+      low:lows.reduce((a,b)=>a<b ? a : b), high:highs.reduce((a,b)=>a>b ? a : b)},kind);
+  }
+});
+test("T9 커넥터 후보별 결합 요구로 0달러 예산을 판정하고 후보 상한에서 확인한 초과만 확정한다",()=>{
+  const read=(name:string)=>JSON.parse(readFileSync("fixtures/"+name+".json","utf8"));
+  const doc:SceneDocument=read("three-flows"), scenario=doc.scenarios[0]!, host=read("source@1"), sink=read("sink@1");
+  doc.connections.length=1; scenario.members=["a"]; scenario.budget=0; scenario.goals=[{kind:"scenario",id:"작업"}];
+  const plugin=trialDomain(), library={models:new Map([["source@1",host],["sink@1",sink]]),connectors:read("connectors")};
+  const judge=()=>{const scene=loadSceneDocuments(doc,library,[plugin]), r=evaluate(scene,[plugin]);
+    return calculateBudget(scenario,doc.items,stock,resultView(scene,r,0,"together"));};
+  const connector=sink.ports[0].connector;
+  connector.value="trial-plug"; const bad=judge();
+  connector.value="trial-socket"; const good=judge();
+  assert.deepEqual([good.limitStatus,bad.limitStatus],["within","unknown"]);
+  connector.value=null;
+  for (const goals of [scenario.goals,[]]) {
+    scenario.goals=goals;
+    const unknown=judge();
+    assert.equal(unknown.limitStatus,"unknown");
+    assert.deepEqual(unknown.unknownRange,{low:0n,high:1n});
+  }
+  scenario.goals=[{kind:"scenario",id:"작업"}];
+  connector.value="trial-socket";
+  connector.conflicts=[{value:"trial-plug",confidence:"review",sources:connector.sources}];
+  const merged=judge();
+  assert.equal(merged.limitStatus,"unknown");
+  assert.deepEqual(merged.unknownRange,{low:0n,high:1n});
+  assert.ok(merged.requirements.some(r=>r.need.connection==="wire-a" && r.conditional));
+  scenario.purchases=merged.requirements.map((r,i)=>({ownedInstanceId:"adapter-"+i,modelRef:"adapter@1",need:r.need}));
+  assert.equal(judge().limitStatus,"within");
+  scenario.purchases=[];
+  doc.workloads[0]!.request.rate!.conflicts=Array.from({length:257},(_,i)=>({value:i+101,confidence:"review",sources:[doc.sources[0]!.id]}));
+  const capped=judge();
+  assert.equal(capped.limitStatus,"unknown");
+  assert.equal(capped.unknownRange.high,null);
+  assert.equal(capped.unassignedNeeds,null);
+  scenario.purchases=merged.requirements.map((r,i)=>({ownedInstanceId:"adapter-"+i,modelRef:"adapter@1",need:r.need}));
+  assert.equal(judge().limitStatus,"unknown");
+  scenario.purchases=[{modelRef:offer.modelRef,quantity:1}];
+  assert.equal(judge().limitStatus,"over");
+});
+test("T9 한 모델의 커넥터 후보가 두 연결의 결합품을 번갈아 요구하면 미지정은 항상 한 개다",()=>{
+  const read=(name:string)=>JSON.parse(readFileSync("fixtures/"+name+".json","utf8"));
+  const doc:SceneDocument=read("three-flows"),host=read("source@1"),sink=read("sink@1");
+  const scenario=doc.scenarios[0]!,connector=sink.ports[0].connector;
+  doc.connections.length=2;host.ports[1].connector.value="trial-socket";
+  scenario.budget=0;
+  const plugins=[trialDomain()],library={models:new Map([["source@1",host],["sink@1",sink]]),connectors:read("connectors")};
+  const judge=()=>{const s=loadSceneDocuments(doc,library,plugins);return calculateBudget(scenario,doc.items,stock,resultView(s,evaluate(s,plugins),0,"together"));};
+  const fixed=["trial-plug","trial-socket"].map(v=>{connector.value=v;return judge();});
+  connector.conflicts=[{value:"trial-plug",confidence:"review",sources:connector.sources}];
+  const merged=judge();
+  assert.ok(fixed.every(b=>b.limitStatus===merged.limitStatus && b.unassignedNeeds===1));
+  assert.deepEqual(merged.unknownRange,{low:1n,high:1n});
+  assert.equal(merged.requirements.filter(r=>r.conditional).length,2);
+});
+test("T9 후보 조합이 상한을 넘어도 필요한 결합품을 지정하지 않은 0달러 예산은 미확인이다", () => {
+  const read = (name: string) => JSON.parse(readFileSync("fixtures/" + name + ".json", "utf8"));
+  const doc: SceneDocument = read("three-flows"), scenario = doc.scenarios[0]!;
+  scenario.budget = 0;
+  scenario.goals = [{kind:"scenario",id:"전체"}];
+  doc.workloads[0]!.request.rate!.conflicts = Array.from({length:257}, (_,i) => ({
+    value:i+1000, confidence:"review", sources:[doc.sources[0]!.id],
+  }));
+  const host = read("source@1");
+  host.ports[0].connector.value = "trial-socket";
+  const models = new Map([["source@1",host],["sink@1",read("sink@1")]]);
+  const plugins = [trialDomain()], scene = loadSceneDocuments(doc,{models,connectors:read("connectors")},plugins);
+  const result = evaluate(scene,plugins);
+  assert.ok(result.goals[0]!.truncated);
+  const budget = calculateBudget(scenario,doc.items,{quotes:[],preferredSellers:[]},resultView(scene,result,0,"together"));
+  assert.deepEqual([budget.limitStatus,budget.unassignedNeeds],["unknown",1]);
+});
 function total(purchases: Purchases, budget = 100, data = stock) {
-  return calculateBudget({ id: "작업대", members: ["작업1", "작업2"], purchases, budget }, items, data);
+  return calculateBudget({ id: "작업대", members: ["작업1", "작업2"], purchases, budget }, items, data,
+    {scene:{scenarios:[{id:"작업대"}]},scenario:0,negotiations:new Map(),result:{needs:[]}});
 }
+test("T9 결합 요구 평가를 기다리거나 다른 시나리오의 결과만 있으면 확정된 초과만 표시한다", () => {
+  const s={id:"현재",members:[],purchases:[{instanceId:"a"}],budget:100};
+  const other={scene:{scenarios:[{id:"이전"}]},scenario:0,negotiations:new Map(),result:{needs:[]}};
+  for (const view of [undefined,other]) {
+    const pending=calculateBudget(s,items,stock,view);
+    assert.equal(pending.limitStatus,"unknown");
+    assert.equal(compareBudgets(pending,pending),null);
+    assert.equal(calculateBudget({...s,budget:1},items,stock,view).limitStatus,"over");
+  }
+});
 test("T9 공유 실물은 한 번, 같은 모델 두 실물은 두 번, 다른 시나리오 실물과 보유품은 비용 0", () => {
   assert.equal(total([{instanceId:"a"},{instanceId:"a"},{instanceId:"owned"}]).subtotalCents, 4000n);
   assert.equal(total([{instanceId:"a"},{instanceId:"b"}]).subtotalCents, 8000n);
