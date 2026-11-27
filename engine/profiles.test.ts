@@ -307,3 +307,57 @@ test("T2 미확인 설정 후보 257개로 고정 선택을 확인할 수 없으
   assert.deepEqual(result,engine.evaluate(scene,[plugin]));
   assert.ok(result.quests.some(q => q.claim === claim));
 });
+
+test("T8 상시 입력이 실제 설정의 서비스와 환산된 공용 풀에서 같은 공급량을 쓴다",()=>{
+  const {scene,plugin,option,demand,inputs,specs}=setup([100]);
+  const link=scene.connections[0]!,inputPort=link.to,node=scene.workloads[0]!.from;
+  plugin.pools=()=>[{id:"예산",scope:"direction",unit:"점",limit:100,rule:"환산 예산",inputs,specs}];
+  plugin.negotiate=()=>[5,60].map(cap=>({...option("서비스",cap,String(cap)),pool:{id:"예산",domain:plugin.id,perUnit:2}}));
+  plugin.demand=()=>[demand("서비스",100,true)];
+  plugin.standingLoads=()=>[{id:"입력",item:scene.ports[inputPort]!.item,amount:10,unit:"회/s",rule:"우선 사용",inputs,specs,
+    feed:{inputPort,mode:"서비스",sources:[{node,rule:"시험 공급원",inputs,specs}]}}];
+  const variants=engine.evaluateVariants(scene,[plugin],0);
+  assert.deepEqual(variants.map(v=>[v.choices[0]!.profile,work(v.result,0).value]),[["60",40],["5",0]]);
+  for (const {result,choices} of variants) {
+    const used=choices[0]!.profile==="5" ? 5 : 10;
+    assert.deepEqual(result.standingLoads.map(l=>[l.unit,l.amount]).sort(),[["점",2*used],["회/s",used]]);
+    assert.ok(result.standingLoads.every(l=>l.inputs.includes(link.evidence)));
+  }
+});
+
+test("T8 두 시나리오가 다른 설정을 고르면 연결 판정과 비교도 각각의 상시 소비 뒤 한도를 쓴다",()=>{
+  const {scene,plugin,option,demand,inputs,specs}=setup([100,100]);
+  scene.scenarios.push({id:"둘째"});
+  scene.members=[{scenario:0,workload:0},{scenario:1,workload:1}];
+  const inputPort=scene.connections[0]!.to, node=scene.workloads[0]!.from;
+  plugin.negotiate=()=>["A","B"].flatMap(p=>[option("입력",p==="A" ? 60 : 5,p),
+    {...option("별도",p==="B" ? 100 : 0,p),unit:"개"}]);
+  plugin.demand=(_s,w)=>[w===0 ? demand("입력",100,true) : {...demand("별도",100,true),unit:"개"}];
+  plugin.standingLoads=()=>[{id:"상시 입력",item:scene.ports[inputPort]!.item,amount:10,unit:"회/s",rule:"자체 소비",inputs,specs,
+    feed:{inputPort,mode:"입력",sources:[{node,rule:"시험 공급원",inputs,specs}]}}];
+  const result=engine.evaluate(scene,[plugin]);
+  assert.deepEqual(result.choices.map(c=>c.profile),["A","B"]);
+  for (const [scenario,expected] of [[0,50],[1,0]] as const) {
+    const connection=result.outcomes.find(o=>o.scenario===scenario && o.subjectKind==="connection" && o.direction==="forward" && o.mode==="입력")!;
+    assert.equal(connectionOption({scene,result},connection)?.limit,expected);
+    assert.deepEqual(result.standingLoads.filter(l=>l.scenario===scenario).map(l=>l.amount),[scenario ? 5 : 10]);
+  }
+});
+
+test("T8 입력 작업에만 적용된 정책 한도만큼 상시 소비를 공급한다",()=>{
+  const {scene,plugin,option,demand,inputs,specs}=setup([100]);
+  const inputPort=scene.connections[0]!.to, node=scene.workloads[0]!.from;
+  const policy=effectiveClaim(scene,"resource",0,plugin.id,"policy")!;
+  scene.claims[policy]!.value="입력 우선 한도";
+  plugin.policy=({activeWorkloads})=>activeWorkloads.map(workload=>({workload,limit:workload===0 ? 100 : 5,
+    inputs:[policy],specs,rule:"상시 입력은 5"}));
+  plugin.negotiate=()=>[option("서비스",60)];
+  plugin.demand=()=>[demand("서비스",100,true)];
+  plugin.consume=()=>[{resource:0,coefficient:1,fixed:0,inputs,specs,rule:"상위 예산"}];
+  plugin.standingLoads=()=>[{id:"입력",item:scene.ports[inputPort]!.item,amount:10,unit:"회/s",rule:"자체 소비",inputs,specs,
+    feed:{inputPort,mode:"서비스",sources:[{node,rule:"시험 공급원",inputs,specs}]}}];
+  const result=engine.evaluate(scene,[plugin]);
+  assert.deepEqual(result.standingLoads.map(r=>r.amount),[5,5]);
+  assert.ok(result.standingLoads.every(r=>r.inputs.includes(policy)));
+  assert.equal(work(result,0).value,55);
+});

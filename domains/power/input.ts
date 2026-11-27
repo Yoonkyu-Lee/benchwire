@@ -32,6 +32,8 @@ const pd = z.strictObject({
     })],
   ])),
   maxW: watts.meta({ title: "포트 최대 전력", unit: POWER_UNIT }),
+  // 빈 노드 ID는 독립 공급이 없다는 모델 주장이다. 미확인은 이 실물의 가능한 시작점들과 함께 검산한다.
+  sourceNode: fact(z.string()).optional().meta({ title: "독립 전력 공급 노드", description: "독립 공급이 없으면 빈 값" }),
   reserveW: watts.optional().meta({ title: "패스스루 선점 전력", unit: POWER_UNIT }),
 });
 const cable = z.strictObject({

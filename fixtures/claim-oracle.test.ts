@@ -56,6 +56,10 @@ function space(scene:Scene,c:Claim,domains:readonly DomainPlugin[]) {
   }
   if (c.connectorRow!==undefined) return {exact:true,values:scene.connectors.map(v=>v.id)};
   if (c.attachmentNode!==undefined) return {exact:true,values:scene.nodes.filter(n=>n.item===scene.ports[c.owner]!.item).map(n=>n.id)};
+  if (c.domain==="power" && c.field==="sourceNode" && c.ownerKind==="interface") {
+    const item=scene.ports[scene.interfaces[c.owner]!.port]!.item;
+    return {exact:true,values:["",...scene.nodes.filter(n=>n.item===item).map(n=>n.id)]};
+  }
   if (c.domain==="network" && c.field==="budgetResource" && c.ownerKind==="interface") {
     const owner=scene.ports[scene.interfaces[c.owner]!.port]!.item;
     return {exact:true,values:scene.resources.filter(r=>r.item===owner && r.unit==="W" && r.domain==="network").map(r=>r.id)};
@@ -428,6 +432,23 @@ test("T7 한 실물의 예약 우선순위 출처 충돌을 양 끝의 고정 �
   const scene=sharedPowerScene("poe");
   const member=scene.members.find(m=>m.scenario===0 && m.priority===1)!;
   oracle(scene,plugins,c=>c===scene.claims[member.evidence!]);
+});
+
+test("T8 직렬 허브의 독립 전원 주장을 가능한 모든 공급 노드와 대조한다",t=>{
+  const dir="power",doc=read(dir,"serial-passthrough");
+  const models=new Map<string,ReturnType<typeof read>>();
+  for (const {modelId,revision} of doc.items) {
+    const key=modelId+"@"+revision;
+    models.set(key,read(dir,key));
+  }
+  const relay=structuredClone(models.get("relay@1"));
+  relay.modelId="independent-relay";
+  const params=relay.ports[1].interfaces[0].params;
+  params.sourceNode={value:null,unit:"",confidence:"unknown",sources:["relay"]};
+  doc.items.find((i:{instanceId:string})=>i.instanceId==="relay-a").modelId=relay.modelId;
+  models.set(relay.modelId+"@1",relay);
+  const scene=loadSceneDocuments(doc,{models,connectors:read(dir,"connectors")},plugins);
+  t.diagnostic("독립 전원 "+oracle(scene,plugins,c=>c.field==="sourceNode"));
 });
 
 test("T8 공유 전력 경로에 패스스루를 추가하면 10 W 상시 부하를 같은 예산에 예약한다",t=>{

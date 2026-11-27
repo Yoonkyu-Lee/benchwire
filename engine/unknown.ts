@@ -351,6 +351,7 @@ export function resolveUnknowns(scene: Scene, plugins: readonly DomainPlugin[], 
   completeUnknowns(scene, plugins, result);
   if (scene.goals?.length) Object.assign(result,judgeGoals(scene,result));
   const all: Variable[] = [];
+  const feedReads=new Set(result.hookReads?.filter(r=>r.hook==="standingLoads").flatMap(r=>r.claims));
   const profileLinks = new Map<number, Set<number>>();
   const conflicts = new Map<number, Map<SourceCandidate["value"], SourceCandidate>>();
   for (const { claim, candidate } of scene.claimSources) if (readConflicts && candidate) {
@@ -360,7 +361,7 @@ export function resolveUnknowns(scene: Scene, plugins: readonly DomainPlugin[], 
       values.set(candidate.value, candidate);
     conflicts.set(claim, values);
   }
-  const topology={interfaces:scene.interfaces,ports:scene.ports,resources:scene.resources};
+  const topology={nodes:scene.nodes,interfaces:scene.interfaces,ports:scene.ports,resources:scene.resources};
   claimRows(scene).forEach(claim => {
     const c=readClaim(scene,claim);
     if (c.value !== null || effectiveClaim(scene, c.ownerKind, c.owner, c.domain, c.field, c.condition) !== claim) return;
@@ -369,8 +370,9 @@ export function resolveUnknowns(scene: Scene, plugins: readonly DomainPlugin[], 
     const hasGoals=Boolean(scene.goals?.length);
     const conflict=conflicts.get(claim);
     const connectors=c.connectorRow===null ? scene.connectors.map(row=>row.id) : undefined;
-    if (!conflict && !connectors && !declared.length && !(hasGoals && (c.discrete || c.openDomain))) return;
-    const values=new Set(conflict?.keys() ?? connectors ?? (hasGoals ? c.discrete ?? declared : declared));
+    const useSchema=hasGoals || feedReads.has(claim) && !!c.discrete?.length;
+    if (!conflict && !connectors && !declared.length && !(useSchema && (c.discrete || c.openDomain))) return;
+    const values=new Set(conflict?.keys() ?? connectors ?? (useSchema ? c.discrete ?? declared : declared));
     const samples: Variable["samples"] = [];
     for (const value of values) {
       if (c.connectorRow !== undefined) {

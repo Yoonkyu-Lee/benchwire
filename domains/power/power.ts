@@ -12,6 +12,11 @@ export const power: DomainPlugin = {
   id: POWER, sources, params, paramsFor, attributes, request, resourceUnits: [POWER_UNIT],
   goalMeasures: [{ kind: "netCharge", unit: POWER_UNIT, label: "순충전 전력" }],
   negotiate: negotiatePower, standingLoads,
+  profileValues(claim,scene) {
+    if (claim.ownerKind!=="interface" || claim.field!=="sourceNode") return [];
+    const item=scene.ports[scene.interfaces[claim.owner]!.port]!.item;
+    return ["",...scene.nodes.filter(n=>n.item===item).map(n=>n.id)];
+  },
   demand(scene, workload) {
     const claim = effectiveClaim(scene, "workload", workload, POWER, "requestedW")!;
     const requested = readClaim(scene,claim).value as number | null;
@@ -47,6 +52,7 @@ export const power: DomainPlugin = {
     if (field.startsWith("budget:")) return "현재 접속 포트 조합의 출력 한도(W)를 확인하세요.";
     if (field === "currentA" || field === "eMarked" || field === "eprVoltage")
       return "USB-C 케이블의 전자 표지, 정격 전류와 EPR 전압을 확인하세요.";
+    if (field === "sourceNode") return "이 장치가 독립 전원을 갖는지, 어느 내부 노드에서 전력을 공급하는지 확인하세요.";
     if (field === "reserveW") return "패스스루 입력에서 중간 장치가 먼저 쓰는 전력(W)을 확인하세요.";
     if (field === "loadW") return "해당 상황에서 기기가 쓰는 전력(W)을 확인하세요.";
     if (field === "targetW") return "해당 작업의 목표 순충전 전력(W)을 확인하세요.";

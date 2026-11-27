@@ -9,7 +9,7 @@ export interface Use extends Consumption { option?: number; pool?: number; conve
 function linkLimit(result: Results, u: Use) {
   return u.pool === undefined ? result.options[u.option!]! : result.linkResources[u.pool]!.pool!;
 }
-export interface Flow { workload: number; path: number | null; cap: number | null; elastic: boolean; verdict: Verdict; bestCase?: Verdict; uses: Use[]; priority?: number }
+export interface Flow { workload: number; path: number | null; cap: number | null; elastic: boolean; verdict: Verdict; bestCase?: Verdict; uses: Use[]; standingUpper?:number; priority?: number }
 export interface Share { workload: number; value: number | null; verdict: Verdict; range?: { low: number; high: number | null; possible: Verdict[]; inputs?: number[] }; bindings: number[]; contested?: boolean; policyReads?: number[]; unresolvedPolicies?: number[]; policies?: (PolicyLimit & {resource: number})[] }
 
 // 경로가 실제로 소비하는 예산과 같은 예산에 잡힌 상시 예약의 근거다.
@@ -35,7 +35,7 @@ export function allocationInputs(scene: Scene, result: Results, flows: readonly 
 
 // 경쟁자가 자원을 전부 양보했을 때도 넘을 수 없는 작업률이다.
 export function throughputUpper(scene: Scene, result: Results, flow: Flow, policies: NonNullable<Share["policies"]> = []) {
-  let upper = flow.cap;
+  let upper = flow.standingUpper === undefined ? flow.cap : Math.min(flow.cap ?? Infinity,flow.standingUpper);
   for (const row of new Set(flow.uses.map(u => u.resource))) {
     const uses = flow.uses.filter(u => u.resource === row), first = uses[0]!;
     const capacity = first.option === undefined ? resourceCapacity(scene, result, row) : linkLimit(result, first).limit ?? linkLimit(result, first).bounds?.high;
@@ -373,8 +373,13 @@ export function allocate(scene: Scene, result: Results, flows: readonly Flow[], 
     const shared = canBind.length === 1 && group.every(f => f.elastic && f.uses.every(u => !(u.fixedHigh ?? u.fixed)) && f.uses.some(u => u.resource === canBind[0]));
     const monotone = group.length === 1 || shared;
     const low = monotone ? lo.value ?? 0 : Math.min(pessimistic[i]!.cap ?? Infinity,guaranteedFloor(scene, lower, flow, group, fair));
-    const high = (monotone ? hi.value : null) ?? throughputUpper(scene, upper, optimistic[i]!);
+    const ceiling = (monotone ? hi.value : null) ?? throughputUpper(scene, upper, optimistic[i]!);
+    const high = flow.standingUpper===undefined ? ceiling : Math.min(ceiling??Infinity,flow.standingUpper);
     const possible = new Set([lo.verdict,hi.verdict].filter(v => v !== "unknown"));
+    if (flow.standingUpper!==undefined) {
+      if (high!==null && flow.cap!==null && compareQuantity(high,flow.cap)<0) possible.delete("ok");
+      if (high===0) possible.delete("conditional");
+    }
     if (low === 0 && flow.cap !== 0) possible.add("impossible");
     const conditional = (flow.path !== null && result.paths[flow.path]!.conditioned) || flow.bestCase === "conditional" || flow.verdict === "conditional";
     if (high === null || high > 0) {

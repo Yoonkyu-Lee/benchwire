@@ -1,51 +1,56 @@
-// 패스스루 상시 소비를 입력 링크와 그 포트에 공급하는 소스 내부 전력 예산에 연결한다.
-// 입력 링크의 물리 판정과 여러 장치를 직렬로 잇는 상위 공급 경로는 이 훅에서 확인할 수 없다.
-import { readClaim, effectiveClaim, type Scene, type StandingLoad } from "../../engine/contract.ts";
+// 입력에서 먼저 쓰는 전력과 독립 공급을 증명하는 모델 간선을 엔진의 공급 경로 탐색에 넘긴다.
+import { effectiveClaim, readClaim, type FeedLoad, type Scene } from "../../engine/contract.ts";
 import { PD, POWER, POWER_UNIT } from "./input.ts";
-import { negotiatePower } from "./negotiate.ts";
+import { PD_FIXED } from "./sources.ts";
 
-export function standingLoads(scene: Scene): StandingLoad[] {
-  const loads: StandingLoad[] = [];
-  scene.connections.forEach((c, connection) => {
-    for (const direction of ["forward", "reverse"] as const) {
-      const [from, to] = direction === "forward" ? [c.from, c.to] : [c.to, c.from];
-      const sink = scene.interfaces.findIndex(i => i.port === to && i.domain === POWER && i.protocol === PD && i.role === "sink");
-      if (sink < 0) continue;
-      const reserve = effectiveClaim(scene, "interface", sink, POWER, "reserveW");
-      if (reserve === undefined) continue;
-
-      const parts = scene.parts.filter(p => p.connection === connection).sort((a, b) => a.order - b.order);
-      const through = parts.flatMap(p => [p.entry, p.exit]);
-      if (direction === "reverse") through.reverse();
-      const [option] = negotiatePower({ scene, connection, direction, ports: [from, ...through, to] });
-      if (option.verdict === "impossible") continue;
-
-      const targets: StandingLoad["targets"][number][] = [{ connection, direction, domain: POWER, mode: PD }];
-      const inputs = [reserve, c.evidence, ...option.inputs];
-      const sourceItem = scene.ports[from]!.item;
-      const attachment = effectiveClaim(scene, "port", from, "", "attachment")!;
-      const start = readClaim(scene,attachment).attachmentNode;
-      inputs.push(attachment);
-      // 부착점이 미확인이면 이 실물의 후보 노드마다 연결될 수 있는 자원을 보존한다.
-      const upstream = new Set(start == null ? scene.nodes.flatMap((node, i) => node.item === sourceItem ? [i] : []) : [start]);
-      for (const node of upstream) scene.edges.forEach((edge, row) => {
-        if (edge.item !== sourceItem || edge.to !== node) return;
-        upstream.add(edge.from);
-        inputs.push(edge.evidence);
-        for (const use of scene.resourceUses) {
-          if (use.edge !== row) continue;
-          const resource = scene.resources[use.resource]!;
-          if (resource.unit !== POWER_UNIT) continue;
-          if (!targets.some(t => "resource" in t && t.resource === use.resource))
-            targets.push({ resource: use.resource, ...(start == null ? { possible: true } : {}) });
-          inputs.push(use.evidence);
-        }
-      });
-
-      const amount = readClaim(scene,reserve).value as number | null;
-      loads.push({ item: scene.ports[to]!.item, id: "reserveW:" + scene.ports[to]!.id, amount, unit: POWER_UNIT, targets,
-        rule: amount === null ? "패스스루 자체 소비 미확인" : `패스스루 자체 소비 ${amount} W 우선 사용`, inputs, specs: option.specs });
+export function standingLoads(scene: Scene): FeedLoad[] {
+  const loads: FeedLoad[] = [], sources: FeedLoad["feed"]["sources"][number][] = [];
+  const inputs=new Set<number>(), outputs=new Set<number>();
+  for (const [row,iface] of scene.interfaces.entries()) {
+    if (iface.domain!==POWER || iface.protocol!==PD) continue;
+    const item=scene.ports[iface.port]!.item;
+    if (iface.role==="source") outputs.add(item);
+    if (iface.role!=="sink") continue;
+    inputs.add(item);
+    const reserve=effectiveClaim(scene,"interface",row,POWER,"reserveW");
+    if (reserve===undefined || !scene.connections.some(c=>c.from===iface.port || c.to===iface.port)) continue;
+    const amount=readClaim(scene,reserve).value as number|null;
+    loads.push({item,id:"reserveW:"+scene.ports[iface.port]!.id,unit:POWER_UNIT,amount,
+      feed:{inputPort:iface.port,mode:PD,sources},inputs:[reserve,iface.evidence],specs:[PD_FIXED],
+      rule:amount===null ? "패스스루 자체 소비 미확인" : `패스스루 자체 소비 ${amount} W 우선 사용`});
+  }
+  if (!loads.length) return loads;
+  for (const item of outputs) {
+    const ports=scene.interfaces.flatMap((i,row)=>i.domain===POWER && i.protocol===PD && i.role==="source" && scene.ports[i.port]!.item===item ? [{...i,row}] : []);
+    const declarations=ports.flatMap(p=>{
+      const row=effectiveClaim(scene,"interface",p.row,POWER,"sourceNode");
+      return row===undefined ? [] : [{row,port:p}];
+    });
+    if (declarations.length) {
+      for (const {row,port} of declarations) {
+        const value=readClaim(scene,row).value;
+        scene.nodes.forEach((n,node)=>{
+          if (n.item===item && (value===null || n.id===value)) sources.push({node,possible:value===null,
+            inputs:[row,port.evidence],specs:[],rule:"모델의 독립 전력 공급 노드"});
+        });
+      }
+      continue;
     }
-  });
+    if (inputs.has(item)) continue;
+    const edges=scene.edges.filter(e=>e.item===item);
+    // 송전 전용 실물의 내부 배선 시작점에서 실제 출력과 전력 예산 간선을 함께 거친다.
+    for (const [node,n] of scene.nodes.entries()) {
+      if (n.item!==item || edges.some(e=>e.to===node)) continue;
+      const outgoing=scene.edges.flatMap((e,i)=>e.from===node ? [i] : []);
+      const uses=scene.resourceUses.filter(u=>outgoing.includes(u.edge) && scene.resources[u.resource]!.unit===POWER_UNIT);
+      const proof=ports.map(p=>p.evidence);
+      if (outgoing.length) proof.push(...outgoing.map(i=>scene.edges[i]!.evidence),...uses.map(u=>u.evidence));
+      else if (!ports.some(p=>{const a=effectiveClaim(scene,"port",p.port,"","attachment")!;
+        if (readClaim(scene,a).attachmentNode!==node) return false;
+        proof.push(a); return true;
+      })) continue;
+      sources.push({node,inputs:proof,specs:[],rule:"독립 송전 장치의 공급 시작점"});
+    }
+  }
   return loads;
 }

@@ -1,5 +1,5 @@
 // 구간별 운반 서비스가 이어지는 경로 후보를 모두 보존해 단독 배분과 미확인 배선 비교에 쓴다.
-import type { Carrier, Choice, DomainPlugin, Scene, Verdict } from "./contract.ts";
+import type { Carrier, Choice, Demand, DomainPlugin, Scene, Verdict } from "./contract.ts";
 import { optionChoices, optionVerdict, verdictOrder } from "./negotiate.ts";
 import { attachmentCandidates, portFacts } from "./scene.ts";
 import { checkedQuantity, checkedTrace, type Results } from "./results.ts";
@@ -134,15 +134,19 @@ function through(scene: Scene, legs: PathArc[][], stops: number[]) {
 }
 
 export interface RouteInputs { claims: Set<number>; resources: Set<number> }
-export function paths(scene: Scene, plugins: readonly DomainPlugin[], result: Results, routeInputs: RouteInputs[] = [], choices: readonly Choice[] = []) {
+export interface FeedDemand { demand: Demand; inputPort: number; workload: number }
+export function paths(scene: Scene, plugins: readonly DomainPlugin[], result: Results, routeInputs: RouteInputs[] = [], choices: readonly Choice[] = [],
+  feed?: FeedDemand) {
   const internal: PathArc[] = scene.edges.map((e, row) => ({ from: e.from, to: e.to,
     key: JSON.stringify(["edge", scene.items[e.item]!.id, e.id]), verdict: "ok", truncated: false,
     steps: [{ kind: "edge", row, from: e.from, to: e.to, option: null, direction: "forward" }] }));
   scene.workloads.forEach((w, workload) => {
+    if (feed && workload !== feed.workload) return;
     const inputs: RouteInputs = routeInputs[workload] ?? { claims: new Set(), resources: new Set() };
     routeInputs[workload] = inputs;
     const plugin = plugins.find(p => p.id === w.domain)!;
-    for (const raw of callHook(scene,result,"demand",workload,view=>plugin.demand(view,workload)).value) {
+    const demands = feed ? [feed.demand] : callHook(scene,result,"demand",workload,view=>plugin.demand(view,workload)).value;
+    for (const raw of demands) {
       const trace = checkedTrace(result, plugin.id, "demand", workload, raw);
       const requested = checkedQuantity(result, plugin.id, "demand", workload, "requested", trace.requested);
       const d = { ...trace, requested };
@@ -160,7 +164,16 @@ export function paths(scene: Scene, plugins: readonly DomainPlugin[], result: Re
       }
       const legs = carriers.map(carrier => {
         const edges = carrier.conversion ? internal.map(a => ({ ...a, steps: [{ ...a.steps[0]!, carrier }] })) : internal;
-        return [...edges, ...connectionArcs(scene, result, plugin, demand, carrier, choices)];
+        const arcs = [...edges, ...connectionArcs(scene, result, plugin, demand, carrier, choices)];
+        if (!feed) return arcs;
+        // 같은 내부 노드에서 끝나는 다른 포트가 이 상시 입력을 대신할 수 없다.
+        return arcs.filter(a=>{
+          if (a.to!==w.to) return true;
+          const s=a.steps[0]!;
+          if (s.kind!=="connection") return false;
+          const c=scene.connections[s.row]!;
+          return (s.direction==="forward" ? c.to : c.from)===feed.inputPort;
+        });
       });
       const { found, truncated, disconnected, disconnectedEdges } = through(scene, legs, stops);
       const relevant = new Set(found.filter(route => route.every(a => a.verdict !== "impossible")).flat());

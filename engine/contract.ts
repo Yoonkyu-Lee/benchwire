@@ -25,9 +25,10 @@ export function compareQuantity(a: number, b: number) {
 
 export interface Choice extends Trace { connection: number; profile: string; domain: string }
 export type LoadTarget = { resource: number; possible?: boolean } | { connection: number; direction: Direction; domain: string; mode: string };
-export interface StandingLoad extends Trace {
-  item: number; id: string; amount: number | null; unit: string; targets: readonly LoadTarget[];
-}
+export type StandingLoad = Trace & { item: number; id: string; amount: number | null; unit: string } & (
+  | { targets: readonly LoadTarget[] }
+  | { feed: { inputPort: number; mode: string; sources: readonly (Trace & { node: number; possible?: boolean })[] } });
+export type FeedLoad = Extract<StandingLoad, { feed: unknown }>;
 export interface Pool extends Trace {
   id: string; scope: "direction" | "connection"; unit: string; limit: number | null;
   bounds?: { low: number; high: number };
@@ -76,7 +77,7 @@ export interface DomainPlugin {
   // assess가 보고하는 영역 고유 지표다. delivery는 엔진이 계산하는 내장 전달량에 예약한다.
   goalMeasures?: readonly { kind: string; unit: string; label: string }[];
   // 소유 대상에 관계없이 유효한 미확인 주장의 이산 후보를 준다. 참조 필드는 파일의 지역 ID를 쓴다.
-  profileValues?(claim: Claim, topology: Pick<Scene,"interfaces" | "ports" | "resources">): readonly Exclude<Value, null>[];
+  profileValues?(claim: Claim, topology: Pick<Scene,"interfaces" | "ports" | "resources" | "nodes">): readonly Exclude<Value, null>[];
   standingLoads?(scene: Scene): readonly StandingLoad[];
   pools?(link: Link): readonly Pool[];
   match?(link: Link, option: Option, demand: Demand, workload: number): Trace & { verdict: Verdict };

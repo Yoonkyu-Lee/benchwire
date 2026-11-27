@@ -19,6 +19,8 @@ export interface Results {
   // 미확인 세계를 찾는 동안 훅의 실제 조회와 선택·배분에서의 용도를 기록한다.
   readClaims?: ClaimUse[];
   hookReads?: HookRead[];
+  // 사용자가 같은 예산들을 모두 지나면 양의 전달량에 앞서 충족돼야 하는 내부 부하들이다.
+  feedRequirements?: {resource:number; option?:number; amount:number; capacity:number}[][];
   goals: { id: string; scenario: number; verdict: GoalVerdict; combined: boolean; truncated: boolean;
     // 빈 limitClaims는 특정 미확인 주장 없이 계획·경로 조합이 상한을 넘은 경우다.
     limitClaims?: number[]; openClaims?: number[] }[];
@@ -33,7 +35,7 @@ export interface Results {
   searches: { scenario: number; examined: number; truncated: boolean }[];
   standingErrors: { domain: string; item: number; id: string; field: string }[];
   standingLoads: (Trace & { item: number; id: string; domain: string; amount: number | null; bounds?: { low: number; high: number }; unit: string;
-    kind: "scene" | "link"; resource: number })[];
+    kind: "scene" | "link"; resource: number; scenario?: number })[];
   physical: PhysicalStep[];
   linkResources: { connection: number; domain: string; direction: Direction; declarationClaimsOnPortsWithoutDomain: number[]; pool?: Pool; service?: { mode?: string; unit: string; poolResource?: number } }[];
   errors: { domain: string; spec: string; field?: string; resource?: number; entryPoint: EntryPoint | null; targetKind: typeof errorTarget[EntryPoint]; row: number }[];

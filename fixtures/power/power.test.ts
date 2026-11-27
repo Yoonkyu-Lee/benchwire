@@ -266,8 +266,7 @@ test("T8 패스스루의 자체 소비를 소스 총예산과 실제 입력 방�
   assert.equal(analyze(scene).work("solo", "primary").metric("together").value, 50);
 });
 
-test("T8 직렬 패스스루 두 대의 자체 소비를 첫 입력과 충전기 총예산에서 한 번씩 뺀다",
-  { todo: "엔진이 상시 소비의 상위 공급 경로를 계산해야 한다" }, () => {
+test("T8 직렬 패스스루 두 대의 자체 소비를 첫 입력과 충전기 총예산에서 한 번씩 뺀다", () => {
   const scene = read("serial-passthrough");
   const reserves = scene.claims.flatMap((claim, row) => claim.domain === "power" && claim.field === "reserveW" ? [row] : []);
   assert.equal(reserves.length, 2);
@@ -289,16 +288,27 @@ test("T8 직렬 패스스루 두 대의 자체 소비를 첫 입력과 충전기
   }
 });
 
-test("T8 직렬 패스스루 첫 입력이 미확인이면 공급 가능한 상한에서 두 장치의 소비를 차감한다",
-  { todo: "엔진이 공급 한도와 상시 소비를 같은 후보에서 계산해야 한다" }, () => {
+test("T8 직렬 패스스루 첫 입력이 미확인이면 공급 가능한 상한에서 두 장치의 소비를 차감한다", () => {
   const scene = read("serial-passthrough");
   const limit = effectiveClaim(scene, "item", 0, "power", "budget:a:a")!;
   Object.assign(scene.claims[limit]!, { value: null, confidence: "unknown" });
+  for (const input of [0,5,10,15,20,45,60]) {
+    scene.claims[limit]!.value=input;
+    const {result,work}=analyze(scene);
+    assert.equal(work("only","charge").metric("together").value,Math.max(0,input-20));
+    const used=result.standingLoads.filter(l=>l.kind==="scene" && l.resource===0).reduce((sum,l)=>sum+l.amount!,0);
+    assert.equal(used,Math.min(input,20));
+  }
+  scene.claims[limit]!.value=null;
   const { result, work } = analyze(scene);
   const charge = work("only", "charge");
   const { value, low, high } = charge.metric("together");
   assert.deepEqual([value, low, high], [null, 0, 40]);
   assert.ok(result.quests.some(q => q.outcome === charge.outcome && q.claim === limit));
+  const total=effectiveClaim(scene,"resource",0,"power","capacity")!;
+  scene.claims[total]!.value=45;
+  const clipped=analyze(scene).work("only","charge").metric("together");
+  assert.deepEqual([clipped.low,clipped.high],[0,25]);
 });
 
 test("T8 패스스루 자체 소비가 미확인이면 소스 총예산까지의 범위와 확인 퀘스트를 남긴다", () => {
@@ -396,4 +406,27 @@ test("T8 입력 조합 한도가 0–60 W면 자체 소비 10 W 뒤의 입력은
   const input = result.options.find(o => o.connection === 0 && o.direction === "forward" && o.unit === "W")!;
   assert.deepEqual(input.bounds,{low:0,high:50});
   assert.ok(input.inputs.includes(limit));
+});
+
+test("T8 중간 장치의 독립 공급원 주장이 미확인이면 목표 유무와 무관하게 고정 세계를 합친다",()=>{
+  const s=read("serial-passthrough");
+  const owner=s.interfaces.findIndex(i=>i.id==="out-power" && s.items[s.ports[i.port]!.item]!.id==="relay-a");
+  const other=effectiveClaim(s,"interface",owner,"power","maxW")!;
+  const claim=s.claims.push({...s.claims[other]!,field:"sourceNode",unit:"",value:null,openDomain:true})-1;
+  s.claimSources.push(...s.claimSources.filter(c=>c.claim===other).map(c=>({...c,claim})));
+  const measure=()=>analyze(s).work("only","charge").metric("together");
+  for (const [source,delivery] of [["",40],["entry",50],["exit",50]] as const) {
+    s.claims[claim]!.value=source;
+    assert.equal(measure().value,delivery);
+  }
+  s.claims[claim]!.value=null;
+  for (const goals of [[],[{id:"45 W",kind:"metric" as const,run:"together" as const,minimum:45,
+    metric:"delivery",unit:"W",workloads:[0],scenario:0}]]) {
+    s.goals=goals;
+    const {work,result}=analyze(s),{low,high}=work("only","charge").metric("together");
+    assert.deepEqual([low,high],[40,50]);
+    assert.deepEqual(new Set(result.profileWorlds.filter(w=>w.claim===claim).map(w=>w.value)),new Set(["","entry","exit"]));
+    assert.ok(result.quests.some(q=>q.claim===claim));
+    if (goals.length) assert.equal(result.goals[0]!.verdict,"unknown");
+  }
 });
