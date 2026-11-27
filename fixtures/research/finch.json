@@ -143,7 +143,7 @@
             "source": {
               "type": "text",
               "media_type": "text/plain",
-              "data": "Morrow Finch FA-24. USB-C A: maxW: 60 W.\nUSB-C A: maxW: 15 W (other load condition)."
+              "data": "Morrow Finch FA-24. USB-C A: maxW: 60 W.\n\nUSB-C A: maxW: 15 W (other load condition)."
             }
           }
         }
@@ -216,8 +216,8 @@
             "document_index": 1,
             "document_title": "FA-24 부하 측정",
             "cited_text": "USB-C A: maxW: 15 W (other load condition).",
-            "start_char_index": 41,
-            "end_char_index": 84
+            "start_char_index": 42,
+            "end_char_index": 85
           },
           {
             "type": "char_location",

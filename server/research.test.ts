@@ -207,6 +207,23 @@ test("인용의 30 W를 99 W로 바꾼 정규화 값을 버린다", async t => {
 
 
 
+function officialContext(quote: string, before = "", after = "", codePoints = false) {
+  const found = structuredClone(recording.investigate);
+  const fetch = found.content.find(row => row.type === "web_fetch_tool_result" && row.tool_use_id === "fixture-fetched-0");
+  assert(fetch?.type === "web_fetch_tool_result" && fetch.content.type === "web_fetch_result" && fetch.content.content.source.type === "text");
+  const citation = found.content.find(row => row.type === "text")!.citations![0]!;
+  assert.equal(citation.type, "char_location");
+  const length = (value: string) => codePoints ? [...value].length : value.length;
+  citation.cited_text = quote;
+  citation.start_char_index = length(before);
+  citation.end_char_index = length(before + quote);
+  fetch.content.content.source.data = before + quote + after;
+  return found;
+}
+
+const maxPowerQuote = "Morrow Finch FA-24. USB-C A: maxW: 99 W.";
+const pdoListQuote = "Morrow Finch FA-24. USB-C A: All source PDOs: 5 V / 3 A, 9 V / 2 A.";
+
 test("적대적 인용 변형은 값이나 PDO 미지원으로 확정하지 않는다", async t => {
   const dir = await dataDir(t);
   const connectors = openLibrary(root, dir).describe().connectors;
@@ -225,10 +242,21 @@ test("적대적 인용 변형은 값이나 PDO 미지원으로 확정하지 않�
     { name: "정규화가 경쟁 포트를 누락", quote: " USB-C A, USB-C B 99 W." },
     { name: "조건부 PDO 목록", quote: "\nUSB-C A only when used alone.\nUSB-C A: All source PDOs: 5 V / 3 A, 9 V / 2 A", omission: true },
     { name: "같은 포트의 모순되는 PDO 목록", quote: "\nUSB-C A: All source PDOs: 5 V / 3 A\nUSB-C A: All source PDOs: 20 V / 3 A", omission: true },
+    { name: "포트 수에 따른 99 W와 30 W", quote: maxPowerQuote + " 1-port operation: 99 W. 2-port operation: 30 W.", otherValue: true },
+    { name: "비교값 순서가 다른 인용", quote: "Morrow Finch FA-24. 2-port operation: 30 W. USB-C A: maxW: 99 W. 1-port operation: 99 W.", otherValue: true },
+    { name: "공백 없는 수량", quote: "Morrow Finch FA-24. USB-C A: maxW: 99W. 2-port operation: 30W.", otherValue: true },
+    { name: "인용 바로 뒤의 다른 값", quote: maxPowerQuote, after: "\n2-port operation: 30 W.", otherValue: true },
+    { name: "유니코드 문자 인덱스 인용 앞의 다른 값", quote: maxPowerQuote, before: "📟 2-port operation: 30W. ", codePoints: true, otherValue: true },
+    { name: "열 제목에 단위를 둔 비교표", quote: maxPowerQuote, after: "\n| Ports used | Max W |\n| --- | --- |\n| 1 | 99 |\n| 2 | 30 |", otherValue: true },
+    { name: "인용에 20 V가 있는 완전 목록", quote: pdoListQuote + " 1-port operation: 20 V / 3 A.", omission: true, nearbyPdo: true },
+    { name: "20 V가 목록 선언보다 먼저 나옴", quote: "Morrow Finch FA-24. 1-port operation: 20V / 3A. USB-C A: All source PDOs: 5 V / 3 A, 9 V / 2 A.", omission: true, nearbyPdo: true },
+    { name: "인용 바로 뒤 표에 20 V가 있음", quote: pdoListQuote, after: "\nPorts used | Voltage (V)\n1 | 20", omission: true, nearbyPdo: true },
   ];
   for (const variant of cases) await t.test(variant.name, async child => {
     const isolated = await dataDir(child);
-    const found = withOfficialQuote(variant.quote);
+    const found = variant.otherValue || variant.nearbyPdo
+      ? officialContext(variant.quote, variant.before, variant.after, variant.codePoints)
+      : withOfficialQuote(variant.quote);
     if (variant.splitQuote) {
       const citations = found.content.find(row => row.type === "text")!.citations!;
       const first = citations[0]!;
@@ -270,17 +298,41 @@ test("적대적 인용 변형은 값이나 PDO 미지원으로 확정하지 않�
     assert.equal(params?.maxW?.value, null);
     assert.equal(params.pdo20?.value, null);
     assert.deepEqual(draft.omissions, []);
-    if (["다른 포트", "영어 조건", "한국어 조건", "같은 문서의 미식별 판본", "출처 둘의 같은 값", "정규화가 대상과 조건을 비움",
-      "정규화가 경쟁 포트를 누락"].includes(variant.name)) {
+    if (variant.otherValue || ["다른 포트", "영어 조건", "한국어 조건", "같은 문서의 미식별 판본", "출처 둘의 같은 값",
+      "정규화가 대상과 조건을 비움", "정규화가 경쟁 포트를 누락"].includes(variant.name)) {
       const matches = draft.proposals.claims.filter(row => row.field === "maxW" && row.claim.value === 99);
       assert.equal(matches.length, variant.duplicate ? 2 : 1);
       for (const proposal of matches) {
-        assert.match(proposal.quote, /99 W/);
-        assert(proposal.reason);
+        assert.match(proposal.quote, /99\s*W/);
+        if (variant.otherValue) assert.match(proposal.reason, /같은 구간에 다른 값.*99 W.*30 W/);
+        else assert(proposal.reason);
         assert.equal(proposal.claim.sources.length, 1);
       }
+    } else if (variant.nearbyPdo) {
+      assert(draft.discarded.some(row => row.includes("pdo20") && row.includes("20 V")));
     } else assert(draft.discarded.some(row => row.includes(variant.omission ? "pdo20" : "maxW")));
   });
+});
+
+test("확인된 단일 값은 반복, 다른 단위, 다른 대상과 문단의 값이 있어도 유지한다", async t => {
+  const dir = await dataDir(t);
+  const connectors = openLibrary(root, dir).describe().connectors;
+  const normalized = structuredClone(recording.normalized);
+  const text = normalized.content.find(row => row.type === "text")!;
+  const doc = JSON.parse(text.text);
+  doc.claims = [{ ...doc.claims.find((row: { field: string }) => row.field === "maxW"), value: 99 }];
+  doc.ports = [{ id: "a", label: "USB-C A", citation: "quote-1" }, { id: "b", label: "USB-C B", citation: "quote-1" }];
+  text.text = JSON.stringify(doc);
+  const found = officialContext(maxPowerQuote, "41 W " + "내용 ".repeat(200),
+    " 99.0 W. 30 mW. USB-C B: maxW: 30 W.\r\n| Port | Max. W |\r\n| USB-C A | 99 |\r\n| USB-C B | 42 |\r\n\r\n다른 문단 50 W.");
+  const { client } = fixtureClient([oneCandidate(), found, normalized]);
+  const research = openResearch(dir, connectors, client);
+  const result = await settled(research, research.submit(input));
+  assert.equal(result.phase, "complete", result.stop ?? "");
+  const { model, proposals } = result.draft!;
+  assert.deepEqual(model.ports[0]?.interfaces[0]?.params.maxW,
+    { value: 99, unit: "W", condition: "", confidence: "official", sources: ["source-1"] });
+  assert.deepEqual(proposals.claims, []);
 });
 
 test("인용 메타데이터에만 있는 구간을 실제 열람 본문으로 취급하지 않는다", async t => {

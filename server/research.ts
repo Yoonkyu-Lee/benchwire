@@ -18,8 +18,9 @@ const MODEL = "claude-opus-5-5";
 const BUDGET_USD = 5;
 const MAX_SEARCHES = 6;
 const CACHE_DAYS = 30;
-// 이전 초안의 값·미지원 근거는 대상이 분명한 인용으로 다시 검증해야 한다.
-const CACHE_VERSION = "scoped-quotes-v2";
+// 이전 초안의 값·미지원 근거는 열람 본문에서 인용 주변까지 다시 검증해야 한다.
+const CACHE_VERSION = "single-value-quotes-v3";
+const QUOTE_CONTEXT_CHARS = 512;
 const DAY_MS = 86_400_000;
 const CONTEXT_TOKENS = 1_000_000;
 // Claude Platform Pricing: https://platform.claude.com/docs/en/about-claude/pricing
@@ -118,7 +119,9 @@ const { type: formatType, schema: formatSchema } = zodOutputFormat(output);
 const FORMAT = { type: formatType, schema: formatSchema };
 
 type ClaimRow = z.infer<typeof shapes.claims>;
-type Citation = { id: string; source: string; quote: string; verified: boolean };
+type Citation = { id: string; source: string; quote: string } & (
+  { verified: true; context: string } | { verified: false; context?: never }
+);
 type Collected = { sources: Map<string, Source>; citations: Citation[]; text: string };
 const phase = z.enum(["identifying", "choosing", "researching", "normalizing", "complete", "stopped"]);
 const stopReason = z.enum(["budget", "refusal", "incomplete", "unidentified", "unverified", "provider", "interrupted"]);
@@ -184,6 +187,20 @@ function decode(text: string): unknown {
   }
 }
 
+function verifiedContext(text: string, quote: string, start: number, end: number) {
+  if (start < 0 || end <= start) return;
+  if (end > text.length || text.slice(start, end) !== quote) {
+    const characters = [...text];
+    if (end > characters.length || characters.slice(start, end).join("") !== quote) return;
+    start = characters.slice(0, start).join("").length;
+    end = start + quote.length;
+  }
+  const paragraph = /\r?\n[^\S\r\n]*\r?\n|\u2029/u;
+  const before = text.slice(Math.max(0, start - QUOTE_CONTEXT_CHARS), start).split(paragraph).at(-1)!;
+  const after = text.slice(end, end + QUOTE_CONTEXT_CHARS).split(paragraph)[0]!;
+  return before + quote + after;
+}
+
 function collect(blocks: readonly Block[], retrievedAt: string): Collected {
   const sources = new Map<string, Source>();
   const documents: { url: string; text?: string }[] = [];
@@ -217,11 +234,10 @@ function collect(blocks: readonly Block[], retrievedAt: string): Collected {
       const source = url && byUrl.get(publicUrl(url) ?? "");
       if (!source || !cite.cited_text.trim()) continue;
       // 검색 요약과 PDF는 비교할 수 있는 원문 구간을 제공하지 않는다.
-      const verified = cite.type === "char_location" && doc?.text !== undefined && cite.start_char_index >= 0 &&
-        cite.end_char_index > cite.start_char_index &&
-        (doc.text.slice(cite.start_char_index, cite.end_char_index) === cite.cited_text ||
-          [...doc.text].slice(cite.start_char_index, cite.end_char_index).join("") === cite.cited_text);
-      citations.push({ id: "quote-" + (citations.length + 1), source, quote: cite.cited_text, verified });
+      const context = cite.type === "char_location" && doc?.text !== undefined
+        ? verifiedContext(doc.text, cite.cited_text, cite.start_char_index, cite.end_char_index) : undefined;
+      citations.push({ id: "quote-" + (citations.length + 1), source, quote: cite.cited_text,
+        ...(context === undefined ? { verified: false } : { verified: true, context }) });
     }
   }
   return { sources, citations, text: parts.join("") };
@@ -272,14 +288,81 @@ function exactClaim(lines: readonly string[], row: ClaimRow, labels: readonly st
   return quantity !== null && Number(quantity[1]) === row.value && quantity[2] === row.unit;
 }
 
+const NUMBER_TEXT = "[+-]?(?:(?:\\d{1,3}(?:,\\d{3})+|\\d+)(?:\\.\\d+)?|\\.\\d+)";
+const JUST_NUMBER = new RegExp("^" + NUMBER_TEXT + "$", "u");
+const QUANTITY_START = "(?<![\\p{L}\\p{N}_.,+\\-])";
+const TOKEN_END = "(?![\\p{L}\\p{N}_])";
+
+function numericValue(token: string) {
+  return Number(token.replaceAll(",", ""));
+}
+
+function quantityPattern(unit: string) {
+  return new RegExp(QUANTITY_START + "(" + NUMBER_TEXT + ")(?![\\p{N}]|[.,]\\p{N})" +
+    (unit ? "\\s*" + RegExp.escape(unit) : "") + TOKEN_END, "gu");
+}
+
+function tableCells(line: string) {
+  return line.trim().replace(/^\||\|$/g, "").split("|").map(cell => cell.trim());
+}
+
+function contextQuantities(context: string, unit: string) {
+  const text = context.normalize("NFKC").replaceAll("\u2212", "-");
+  const quantity = quantityPattern(unit);
+  const values = new Set([...text.matchAll(quantity)].map(match => numericValue(match[1]!)));
+  if (!text.includes("|")) return values;
+
+  // 표의 단위는 열 제목에서 읽고 같은 열의 숫자만 후보에 넣는다.
+  const unitToken = new RegExp("(?<![\\p{L}\\p{N}_])" + RegExp.escape(unit) + TOKEN_END, "u");
+  let columns: number[] = [];
+  let width = 0;
+  for (const line of text.split(/\r?\n/u)) {
+    const cells = tableCells(line);
+    if (cells.length < 2) { columns = []; continue; }
+    const headings = cells.flatMap((cell, index) => unitToken.test(cell) && ![...cell.matchAll(quantity)].length ? [index] : []);
+    if (headings.length) {
+      columns = headings;
+      width = cells.length;
+    } else if (cells.length === width) {
+      for (const index of columns) {
+        const cell = cells[index]!;
+        if (JUST_NUMBER.test(cell)) values.add(numericValue(cell));
+      }
+    } else columns = [];
+  }
+  return values;
+}
+
+function subjectQuantities(context: string, subject: Subject, unit: string, labels: readonly string[], voltageV?: number) {
+  const lines = context.normalize("NFKC").split(/\r?\n/u).flatMap(line => {
+    if (line.includes("|")) {
+      const cells = tableCells(line).map(cell => cell.toLowerCase());
+      const peer = subject.peers.some(label => cells.includes(label.normalize("NFKC").toLowerCase()));
+      return peer && !cells.includes(subject.label.normalize("NFKC").toLowerCase()) ? [] : [line];
+    }
+    return clauses(line).map(clause =>
+      subject.peers.some(peer => afterLabel(clause, peer) !== undefined) && !mentions(clause, subject.label) ? "" : clause);
+  });
+  if (!unit) {
+    const bodies = labeledBodies(lines.map(line => afterLabel(line, subject.label)).filter(line => line !== undefined), labels);
+    return new Set(bodies.filter(body => JUST_NUMBER.test(body)).map(numericValue));
+  }
+  let text = lines.join("\n");
+  if (voltageV !== undefined && unit === "A") {
+    // PDO 전류는 짝을 이룬 전압이 같을 때 같은 대상이다.
+    const pair = new RegExp(QUANTITY_START + "(" + NUMBER_TEXT + ")\\s*V\\s*[/@]\\s*" + NUMBER_TEXT + "\\s*A" + TOKEN_END, "gu");
+    text = text.replace(pair, (whole, voltage: string) => numericValue(voltage) === voltageV ? whole : "");
+  }
+  return contextQuantities(text, unit);
+}
+
 function quotedValue(quote: string, value: ClaimRow["value"], unit: string) {
   const token = String(value).normalize("NFKC");
   if (!token) return false;
   const assertive = clauses(quote).filter(clause => !NEGATIVE.test(clause));
   if (typeof value === "number") {
-    const quantity = new RegExp("(?<![\\p{L}\\p{N}_.,+\\-])([+-]?(?:\\d+(?:\\.\\d+)?|\\.\\d+))(?![\\p{N}]|[.,]\\p{N})" +
-      (unit ? "\\s*" + RegExp.escape(unit) : "") + "(?![\\p{L}\\p{N}_])", "gu");
-    return assertive.some(clause => [...clause.matchAll(quantity)].some(match => Number(match[1]) === value));
+    const quantity = quantityPattern(unit);
+    return assertive.some(clause => [...clause.matchAll(quantity)].some(match => numericValue(match[1]!) === value));
   }
   const literal = new RegExp("(?<![\\p{L}\\p{N}_-])" + RegExp.escape(token) + "(?![\\p{L}\\p{N}_-])", "iu");
   return assertive.some(clause => literal.test(clause));
@@ -359,6 +442,7 @@ function assembledDraft(selected: Candidate, data: unknown, result: Collected, i
     else discarded.push(rank.id + " · 선택한 판본의 출처 목록에 없습니다.");
   }
   const quotes = new Map(verified.map(c => [c.id, c.quote]));
+  const contexts = new Map(verified.map(c => [c.id, c.context]));
   function selectedRevisionHeading(quote: string) {
     const [heading, ...body] = clauses(quote).filter(Boolean);
     return heading !== undefined && (heading.toLowerCase() === modelLabel.normalize("NFKC").toLowerCase() ||
@@ -396,7 +480,7 @@ function assembledDraft(selected: Candidate, data: unknown, result: Collected, i
   }
 
   function fact(target: z.infer<typeof claimProposal>["target"], id: string, domain: string, field: string,
-    subject: Subject, valid: (row: ClaimRow) => boolean, title = field): Fact | undefined {
+    subject: Subject, valid: (row: ClaimRow) => boolean, title = field, voltageV?: number): Fact | undefined {
     const candidates = (grouped.get(key(target, id, domain, field)) ?? []).filter(({ row }) => valid(row));
     const sameQuantity = Map.groupBy(candidates, ({ row }) => JSON.stringify([row.value, row.unit]));
     const accepted = new Map<ClaimRow["value"], Omit<Proof, "value"> & { value: ClaimRow["value"] }>();
@@ -409,10 +493,15 @@ function assembledDraft(selected: Candidate, data: unknown, result: Collected, i
       const lines = namedClauses(quote, subject);
       const duplicate = new Set(sameQuantity.get(JSON.stringify([row.value, row.unit]))!.flatMap(item => item.evidence.sources)).size > 1;
       const base = accepted.values().next().value;
+      const labels = [title, field];
+      const otherValues = typeof row.value === "number"
+        ? [...subjectQuantities(contexts.get(row.citation)!, subject, row.unit, labels, voltageV)].filter(value => value !== row.value) : [];
       const reason = condition ? "조건이 붙은 값입니다."
         : !selectedRevisionHeading(quote) ? "인용 구간에서 선택한 모델과 판본을 확인할 수 없습니다."
         : !lines.length ? "인용에서 대상을 하나로 확인할 수 없습니다."
-        : NEGATIVE.test(quote) || !exactClaim(lines, row, [title, field]) ? "대상과 항목에 값·단위가 직접 붙은 확정 구절을 확인할 수 없습니다."
+        : NEGATIVE.test(quote) || !exactClaim(lines, row, labels) ? "대상과 항목에 값·단위가 직접 붙은 확정 구절을 확인할 수 없습니다."
+        : otherValues.length ? "같은 구간에 다른 값 " +
+          [row.value, ...otherValues].map(value => row.unit ? `${value} ${row.unit}` : String(value)).join(" · ") + "이 있습니다."
         : duplicate ? "같은 값의 출처가 여럿입니다. 해당 근거를 골라 주세요."
         : base && base.unit !== row.unit ? "이미 확인한 값과 단위가 다릅니다." : "";
       const claim = { ...evidence, value: row.value, unit: row.unit, condition };
@@ -483,10 +572,11 @@ function assembledDraft(selected: Candidate, data: unknown, result: Collected, i
       if (row.target !== target || row.id !== id || row.domain !== domain) continue;
       const fieldSchema = Object.hasOwn(properties, row.field) ? properties[row.field] : undefined;
       const property = description.properties?.[row.field];
+      const meta = omissionMeta.safeParse(typeof property === "object" ? property.researchOmission : undefined);
       const value = fact(target, id, domain, row.field, subject, claim => {
         const item = { value: claim.value, unit: claim.unit };
         return fieldSchema ? fieldSchema.safeParse(item).success : schema.safeParse({ [claim.field]: item }).success;
-      }, typeof property === "object" ? property.title : undefined);
+      }, typeof property === "object" ? property.title : undefined, meta.data?.voltageV);
       if (value) result[row.field] = value;
       else if (!fieldSchema) {
         const proposal = proposals.claims.findLast(p => p.target === target && p.id === id && p.domain === domain && p.field === row.field);
@@ -503,8 +593,11 @@ function assembledDraft(selected: Candidate, data: unknown, result: Collected, i
         const omission = !offered && candidates.find(row => {
           const quote = quotes.get(row.citation);
           const evidence = proof(row.citation);
-          return quote && evidence && evidence.confidence !== "inferred" && selectedRevisionHeading(quote) &&
-            !CONDITIONAL.test(quote) && !NEGATIVE.test(quote) && excludedFromCompleteList(namedClauses(quote, subject), meta.data);
+          if (!quote || !evidence || evidence.confidence === "inferred" || !selectedRevisionHeading(quote) ||
+            CONDITIONAL.test(quote) || NEGATIVE.test(quote) || !excludedFromCompleteList(namedClauses(quote, subject), meta.data)) return false;
+          if (!contextQuantities(contexts.get(row.citation)!, "V").has(meta.data.voltageV)) return true;
+          discarded.push(id + "." + field + " · 인용 주변에 " + meta.data.voltageV + " V가 있습니다.");
+          return false;
         });
         if (omission) {
           omissions.push({ field: id + "." + field, quote: quotes.get(omission.citation)!, source: cited.get(omission.citation)! });
@@ -719,7 +812,7 @@ export function openResearch(dataDir: string, connectors: Connectors, client: Re
       "인터페이스 params의 주장은 자기 interface ID와 영역, 자원은 capacity/policy를 사용하세요.",
       "researchOmission 필드는 검증된 원문에 메타의 제목으로 시작하는 완전한 목록이 명시되고 그 목록에 해당 항목이 없을 때만 omissions에 넣으세요.",
       "간선에 자원 사용 근거가 있으면 domain이 빈 문자열인 uses 주장에 자원 ID를 넣으세요. 같은 판본·조건의 값이 다르면 각각 남기세요.",
-    ].join("\n"), { revision: chosen.revision, text: found.text, citations: found.citations,
+    ].join("\n"), { revision: chosen.revision, text: found.text, citations: found.citations.map(({ context: _context, ...citation }) => citation),
       sources: [...found.sources.values()].map(source => ({ ...source, locator: researchQuery(source.locator) })),
       domains: vocabulary(chosen.domains), connectors: connectors.connectors.map(connector => connector.id) }, NORMALIZE, true);
     if (normalized.stop) { stop(job, normalized.stop); return; }
