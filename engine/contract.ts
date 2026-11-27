@@ -9,6 +9,11 @@ export interface Trace { rule: string; inputs: number[]; specs: string[] }
 export type KnownVerdict = Exclude<Verdict, "unknown">;
 export interface Interval { low: number | null; high: number | null }
 export interface Measure extends Interval { kind: string; unit: string }
+export interface Choice extends Trace { connection: number; profile: string; domain: string }
+export type LoadTarget = { resource: number } | { connection: number; direction: Direction; domain: string; mode: string };
+export interface StandingLoad extends Trace {
+  item: number; id: string; amount: number | null; unit: string; targets: readonly LoadTarget[];
+}
 export interface Pool extends Trace {
   id: string; scope: "direction" | "connection"; unit: string; limit: number | null;
   bounds?: { low: number; high: number };
@@ -20,6 +25,7 @@ export interface Link {
 }
 export interface Option extends Trace {
   verdict: Verdict; mode: string; limit: number | null; unit: string; condition: string; unused?: number;
+  profile?: string;
   pool?: { domain: string; id: string; perUnit: number };
   // limit가 null일 때 같은 단위의 유한한 0 ≤ low ≤ high를 준다. low는 해당 모드에서 보장한 한도다.
   bounds?: { low: number; high: number };
@@ -40,6 +46,7 @@ export interface PolicyContext {
 // limit는 해당 자원 단위의 작업별 사용 상한이다. 적용할 표가 없으면 null을 돌려준다.
 export interface PolicyLimit extends Trace { workload: number; limit: number }
 export interface DomainPlugin {
+  standingLoads?(scene: Scene): readonly StandingLoad[];
   pools?(link: Link): readonly Pool[];
   match?(link: Link, option: Option, demand: Demand, workload: number): Trace & { verdict: Verdict };
   assess?(scene: Scene, workload: number, demand: Demand, steps: readonly Step[], delivered: Interval):

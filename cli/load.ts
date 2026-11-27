@@ -249,7 +249,18 @@ export function loadScene(file: string, files: { modelsDir: string; connectorsFi
     unique(scenarios, s.id, scenario, at + ".id");
     scene.scenarios.push({ id: s.id });
     const members = new Map<string, number>();
-    s.members.forEach((w, i) => scene.members.push({ scenario, workload: unique(members, w, ref(works, w, at + ".members." + i), at + ".members." + i) }));
+    s.members.forEach((entry, i) => {
+      const pos = at + ".members." + i;
+      const id = typeof entry === "string" ? entry : entry.workload;
+      const position = typeof entry === "string" ? pos : pos + ".workload";
+      const workload = unique(members, id, ref(works, id, position), position);
+      if (typeof entry === "string") scene.members.push({ scenario, workload });
+      else {
+        const evidence = claim("workload", workload, "scene", "", "priority", { ...entry.priority, condition: s.id },
+          sceneSources, pos + ".priority");
+        scene.members.push({ scenario, workload, priority: entry.priority.value as number, evidence });
+      }
+    });
   });
   return scene;
 }

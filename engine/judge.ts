@@ -1,5 +1,5 @@
 // 연결과 작업의 판정을 만들고 실제 사용한 배선·협상·경쟁 수요를 추론 단계에 연결한다.
-import type { Scene, DomainPlugin, Direction } from "./contract.ts";
+import type { Scene, DomainPlugin, Direction, Choice } from "./contract.ts";
 import { addReason, type Results, type Run } from "./results.ts";
 import type { Flow, Share, Use } from "./allocate.ts";
 import { bestOption } from "./negotiate.ts";
@@ -20,6 +20,9 @@ function physicalReasons(scene: Scene, result: Results, outcome: number, connect
 function linkReason(scene: Scene, result: Results, outcome: number, option: number) {
   const o = result.options[option]!;
   const parents = physicalReasons(scene, result, outcome, o.connection, o.direction);
+  for (const l of result.standingLoads) if (l.kind === "link" && (l.resource === (o.serviceResource ?? o.linkResource) || l.resource === o.poolResource))
+    parents.push(addReason(result,{ outcome, stage: "allocate", rule: l.rule, targetKind: "linkResource", targetRow: l.resource },
+      l.inputs, [], l.domain, l.specs));
   if (o.poolResource !== undefined) {
     const { domain, pool } = result.linkResources[o.poolResource]!;
     parents.push(addReason(result, { outcome, stage: "negotiate", rule: pool!.rule, targetKind: "linkResource", targetRow: o.poolResource },
@@ -36,8 +39,11 @@ function noOptionReason(scene: Scene, result: Results, outcome: number, connecti
     physicalReasons(scene, result, outcome, connection, direction));
 }
 
-export function judgeConnections(scene: Scene, plugins: readonly DomainPlugin[], result: Results) {
+export function judgeConnections(scene: Scene, plugins: readonly DomainPlugin[], result: Results, include: (row: number) => boolean,
+  choices: readonly Choice[] = [], scenario: number | null = null) {
   scene.connections.forEach((_, connection) => {
+    if (!include(connection)) return;
+    const profile = choices.find(c => c.connection === connection)?.profile;
     for (const direction of ["forward", "reverse"] as const) {
       // 같은 영역에서도 독립인 단위와 물리 예산마다 연결 판정을 하나씩 낸다.
       const groups: { domain: string; rows: number[] }[] = [];
@@ -56,17 +62,24 @@ export function judgeConnections(scene: Scene, plugins: readonly DomainPlugin[],
       });
       if (!groups.length) groups.push({ domain: "", rows: [] });
       for (const { domain, rows } of groups) {
-        if (!rows.length) {
+        const eligible = rows.filter(i => !profile || !result.options[i]!.profile || result.options[i]!.profile === profile);
+        if (!eligible.length) {
           const steps = result.physical.filter(s => s.connection === connection && s.direction === direction);
           const link = result.linkResources.find(l => l.connection === connection && l.direction === direction && l.domain === domain);
-          const verdict = link?.absentDomain.length || steps.some(s => s.verdict === "impossible") ? "impossible" : "unknown";
-          const outcome = result.outcomes.push({ subjectKind: "connection", subjectRow: connection, path: null, scenario: null, direction, domain, verdict, mode: "",
+          const verdict = rows.length || link?.absentDomain.length || steps.some(s => s.verdict === "impossible") ? "impossible" : "unknown";
+          const outcome = result.outcomes.push({ subjectKind: "connection", subjectRow: connection, path: null, scenario, direction, domain, verdict, mode: "",
+            ...(rows.length ? { unit: result.options[rows[0]!]!.unit } : {}),
             label: verdict === "impossible" ? "연결 불가" : "협상할 영역 미확인" }) - 1;
-          noOptionReason(scene, result, outcome, connection, direction, domain);
+          if (rows.length && profile) {
+            const parents = rows.map(r => linkReason(scene,result,outcome,r));
+            const c = choices.find(c => c.connection === connection)!;
+            addReason(result,{outcome,stage:"negotiate",rule:"선택한 설정에서 서비스 미지원: " + profile,targetKind:"connection",targetRow:connection},
+              c.inputs,parents,c.domain,c.specs);
+          } else noOptionReason(scene, result, outcome, connection, direction, domain);
           continue;
         }
-        const { row: option, option: o, verdict } = bestOption(result, rows);
-        const outcome = result.outcomes.push({ subjectKind: "connection", subjectRow: connection, path: null, scenario: null, direction, domain, verdict, mode: o.mode, unit: o.unit,
+        const { row: option, option: o, verdict } = bestOption(result, eligible);
+        const outcome = result.outcomes.push({ subjectKind: "connection", subjectRow: connection, path: null, scenario, direction, domain, verdict, mode: o.mode, unit: o.unit,
           ...(o.pool ? { pool: { domain: o.pool.domain, id: o.pool.id } } : {}),
           label: plugins.find(p => p.id === domain)!.explain(verdict, o.mode) }) - 1;
         if (o.unused !== undefined) result.metrics.push({ outcome, kind: "unused", unit: o.unit,
@@ -84,39 +97,46 @@ function useReason(scene: Scene, result: Results, outcome: number, domain: strin
       use.inputs, parents, result.linkResources[link]!.domain, use.specs);
   }
   const r = resourceFacts(scene, use.resource);
+  const loads = result.standingLoads.filter(l => l.kind === "scene" && l.resource === use.resource);
+  parents = [...parents, ...loads.map(l => addReason(result,{ outcome, stage: "allocate", rule: l.rule, targetKind: "resource", targetRow: use.resource },
+    l.inputs, parents, l.domain, l.specs))];
   return addReason(result, { outcome, stage: "allocate", rule: use.rule, targetKind: "resource", targetRow: use.resource },
     [r.capacity, r.policy, ...use.inputs], parents, domain, use.specs);
 }
 
 export function judgeWork(scene: Scene, result: Results, plugin: DomainPlugin, scenario: number, flow: Flow,
-  solo: Share, together: Share, competitors: readonly Flow[], refused: readonly { flow: Flow; solo: Share }[]) {
+  solo: Share, together: Share, competitors: readonly Flow[], refused: readonly { flow: Flow; solo: Share }[], soloPath: number | null) {
   const path = flow.path === null ? null : result.paths[flow.path]!;
   const demand = path ? result.demands[path.demand]! : null;
   const steps = result.steps.filter(s => s.path === flow.path);
   const mode = demand?.mode ?? "";
   const verdict = together.verdict;
   const outcome = result.outcomes.push({ subjectKind: "workload", subjectRow: flow.workload, path: flow.path, direction: null, scenario, domain: plugin.id,
-    verdict, mode, label: plugin.explain(verdict, mode) }) - 1;
+    ...(soloPath !== null && soloPath !== flow.path ? { soloPath } : {}), verdict, mode, label: plugin.explain(verdict, mode) }) - 1;
   const unit = demand?.unit ?? "";
+  const soloUnit = soloPath === null ? unit : result.demands[result.paths[soloPath]!.demand]!.unit;
   function metric(kind: Results["metrics"][number]["kind"], value: number | null, metricUnit = unit) {
     result.metrics.push({ outcome, kind, value, unit: metricUnit, basis: "calculated", low: value, high: value });
   }
   function allocation(run: Run, share: Share) {
-    result.allocations.push({ scenario, workload: flow.workload, run, value: share.value, unit });
+    result.allocations.push({ scenario, workload: flow.workload, run, value: share.value, unit: run === "solo" ? soloUnit : unit });
     for (const row of share.bindings) {
       const link = row >= scene.resources.length;
       result.bindings.push({ scenario, workload: flow.workload, run, resourceKind: link ? "link" : "scene", resource: link ? row - scene.resources.length : row });
     }
-    metric(run, share.value);
+    metric(run, share.value, run === "solo" ? soloUnit : unit);
     if (share.range) {
       const m = result.metrics[result.metrics.length - 1]!;
+      if (share.range.low !== share.range.high) for (const claim of share.range.inputs ?? [])
+        if (scene.claims[claim]?.value === null && !result.rangeInputs.some(x => x.outcome === outcome && x.claim === claim))
+          result.rangeInputs.push({ outcome, claim });
       Object.assign(m, { low: share.range.low, high: share.range.high, range: "conservative" });
     }
   }
   for (const possible of together.range?.possible ?? []) result.possibleVerdicts.push({ outcome, verdict: possible });
   allocation("solo", solo);
   allocation("together", together);
-  const drop = solo.value === null || together.value === null ? null : solo.value - together.value;
+  const drop = soloUnit !== unit || solo.value === null || together.value === null ? null : solo.value - together.value;
   metric("drop", drop);
   metric("dropPercent", drop === null || !solo.value ? null : 100 * drop / solo.value, "%");
   for (const s of steps) if (s.option !== null) {

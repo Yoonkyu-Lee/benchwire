@@ -23,7 +23,7 @@ export interface Scene {
   parts: { connection: number; order: number; item: number; entry: number; exit: number }[];
   workloads: { id: string; domain: string; kind: string; from: number; to: number }[];
   scenarios: { id: string }[];
-  members: { scenario: number; workload: number }[];
+  members: { scenario: number; workload: number; priority?: number; evidence?: number }[];
   claims: Claim[];
   sources: { id: string; title: string; locator: string; retrievedAt: string }[];
   claimSources: { claim: number; source: number }[];

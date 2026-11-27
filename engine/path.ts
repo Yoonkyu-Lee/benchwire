@@ -1,5 +1,5 @@
 // 구간별 운반 서비스가 이어지는 경로 후보를 모두 보존해 단독 배분과 미확인 배선 비교에 쓴다.
-import type { DomainPlugin, Scene, Verdict } from "./contract.ts";
+import type { Choice, DomainPlugin, Scene, Verdict } from "./contract.ts";
 import { bestOption, optionVerdict, verdictOrder } from "./negotiate.ts";
 import { availableOption } from "./pools.ts";
 import { attachmentCandidates, portFacts } from "./scene.ts";
@@ -9,7 +9,7 @@ import { routes, MAX_PATHS, type Arc } from "./route.ts";
 type PathStep = Omit<Results["steps"][number], "path" | "order">;
 interface PathArc extends Arc { steps: PathStep[]; verdict: Verdict; bestCase?: Verdict; truncated: boolean }
 
-function connectionArcs(scene: Scene, result: Results, plugin: DomainPlugin, demandRow: number, carrier: { domain: string; mode: string }): PathArc[] {
+function connectionArcs(scene: Scene, result: Results, plugin: DomainPlugin, demandRow: number, carrier: { domain: string; mode: string }, choices: readonly Choice[]): PathArc[] {
   const arcs: PathArc[] = [];
   const demand = result.demands[demandRow]!;
   const service = { ...demand, mode: carrier.mode };
@@ -17,7 +17,9 @@ function connectionArcs(scene: Scene, result: Results, plugin: DomainPlugin, dem
   result.linkResources.forEach((link, resource) => {
     if (link.pool || link.service || link.domain !== carrier.domain) return;
     const { connection, direction } = link, c = scene.connections[connection]!;
-    const rows = result.options.flatMap((o, i) => o.linkResource === resource ? [i] : []);
+    const profile = choices.find(c => c.connection === connection)?.profile;
+    const all = result.options.flatMap((o,i) => o.linkResource === resource ? [i] : []);
+    const rows = all.filter(i => !profile || !result.options[i]!.profile || result.options[i]!.profile === profile);
     const physical = result.physical.filter(s => s.connection === connection && s.direction === direction);
     const matches = new Map<number, Results["matches"][number]>();
     if (plugin.match) {
@@ -35,7 +37,7 @@ function connectionArcs(scene: Scene, result: Results, plugin: DomainPlugin, dem
       }
     }
     const best = rows.length ? bestOption(result, rows, service, matches) : {
-      row: null, verdict: link.absentDomain.length || physical.some(s => s.verdict === "impossible") ? "impossible" as const : "unknown" as const,
+      row: null, verdict: all.length || link.absentDomain.length || physical.some(s => s.verdict === "impossible") ? "impossible" as const : "unknown" as const,
     };
     const raw = best.row === null ? undefined : result.options[best.row];
     const o = best.row === null ? undefined : availableOption(result, best.row);
@@ -125,12 +127,12 @@ function through(scene: Scene, legs: PathArc[][], stops: number[]) {
 }
 
 export interface RouteInputs { claims: Set<number>; resources: Set<number> }
-export function paths(scene: Scene, plugins: readonly DomainPlugin[], result: Results, routeInputs: RouteInputs[] = []) {
+export function paths(scene: Scene, plugins: readonly DomainPlugin[], result: Results, routeInputs: RouteInputs[] = [], choices: readonly Choice[] = []) {
   const internal: PathArc[] = scene.edges.map((e, row) => ({ from: e.from, to: e.to,
     key: JSON.stringify(["edge", scene.items[e.item]!.id, e.id]), verdict: "ok", truncated: false,
     steps: [{ kind: "edge", row, from: e.from, to: e.to, option: null, direction: "forward" }] }));
   scene.workloads.forEach((w, workload) => {
-    const inputs: RouteInputs = { claims: new Set(), resources: new Set() };
+    const inputs: RouteInputs = routeInputs[workload] ?? { claims: new Set(), resources: new Set() };
     routeInputs[workload] = inputs;
     const plugin = plugins.find(p => p.id === w.domain)!;
     for (const raw of plugin.demand(scene, workload)) {
@@ -147,7 +149,7 @@ export function paths(scene: Scene, plugins: readonly DomainPlugin[], result: Re
         result.paths.push({ workload, demand, verdict: "unknown", key: "", truncated: false });
         continue;
       }
-      const legs = carriers.map(carrier => [...internal, ...connectionArcs(scene, result, plugin, demand, carrier)]);
+      const legs = carriers.map(carrier => [...internal, ...connectionArcs(scene, result, plugin, demand, carrier, choices)]);
       const { found, truncated, disconnected, disconnectedEdges } = through(scene, legs, stops);
       const relevant = new Set(found.filter(route => route.every(a => a.verdict !== "impossible")).flat());
       if (truncated) {
@@ -185,7 +187,13 @@ export function paths(scene: Scene, plugins: readonly DomainPlugin[], result: Re
         const key = JSON.stringify(selected.map(a => a.key));
         const highest = verdictOrder[Math.max(0, ...selected.map(a => verdictOrder.indexOf(a.bestCase ?? a.verdict)))]!;
         const bestCase = verdict === "unknown" && d.requested !== null ? (highest === "ok" && d.preference > 0 ? "conditional" : highest) : verdict;
-        const path = result.paths.push({ workload, demand, verdict, key, bestCase,
+        const conditioned = d.preference > 0 || selected.some(a => a.steps.some(s => {
+          if (s.option === null) return false;
+          const o = result.options[s.option]!;
+          return !!o.condition || o.verdict === "conditional" ||
+            result.matches.some(m => m.option === s.option && m.demand === demand && m.verdict === "conditional");
+        }));
+        const path = result.paths.push({ workload, demand, verdict, key, bestCase, ...(conditioned ? { conditioned } : {}),
           ...(disconnected?.length ? { disconnected } : {}),
           ...(disconnectedEdges?.length ? { disconnectedEdges } : {}),
           truncated: verdict !== "impossible" && (truncated || selected.some(a => a.truncated)) }) - 1;

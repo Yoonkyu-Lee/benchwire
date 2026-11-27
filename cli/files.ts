@@ -43,5 +43,6 @@ export const sceneFile = z.strictObject({
     id, from: localRef, to: localRef, evidence, parts: z.array(z.strictObject({ instanceId: id, entry: id, exit: id })),
   })),
   workloads: z.array(z.strictObject({ id, domain: id, kind: id, from: localRef, to: localRef, request: fields })),
-  scenarios: z.array(z.strictObject({ id, members: z.array(id) })),
+  scenarios: z.array(z.strictObject({ id, members: z.array(z.union([id, z.strictObject({ workload: id, priority: fact.refine(f =>
+    typeof f.value === "number" && Number.isSafeInteger(f.value) && !f.unit && !f.condition, "우선순위에는 단위 없는 정수가 필요합니다") })])) })),
 });

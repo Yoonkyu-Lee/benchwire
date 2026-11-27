@@ -2,6 +2,7 @@
 import type { DomainPlugin, PolicyLimit, Scene } from "./contract.ts";
 import { allocate, allocationGroup, throughputUpper, type Flow } from "./allocate.ts";
 import { checkedQuantity, checkedTrace, type Results } from "./results.ts";
+import { resourceCapacity } from "./standing.ts";
 import { resourceFacts } from "./scene.ts";
 
 export function policyAllocation(scene: Scene, plugins: readonly DomainPlugin[], result: Results, flows: readonly Flow[], assumed: readonly number[] = []) {
@@ -53,7 +54,7 @@ export function policyAllocation(scene: Scene, plugins: readonly DomainPlugin[],
   });
   const unresolved: number[] = [];
   for (const resource of named) {
-    const capacity = scene.claims[resourceFacts(scene, resource).capacity]!.value;
+    const capacity = resourceCapacity(scene, result, resource);
     if (typeof capacity !== "number") continue;
     let required = 0;
     for (const flow of restricted) {

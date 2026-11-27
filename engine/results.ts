@@ -1,5 +1,5 @@
 // 판정 결과와 중간 계산을 번호로 연결해 출력에서 입력 주장까지 되짚는다.
-import type { Demand, Direction, KnownVerdict, Measure, Option, Pool, Step, Trace, Verdict } from "./contract.ts";
+import type { Choice, Demand, Direction, KnownVerdict, Measure, Option, Pool, Step, Trace, Verdict } from "./contract.ts";
 
 export type Run = "solo" | "together";
 export type Target = "demand" | "workload" | "connection" | "edge" | "port" | "resource" | "linkResource";
@@ -8,11 +8,18 @@ export interface PhysicalStep {
   kind: "mate" | "part"; verdict: Verdict; required: string; passages: number[][]; truncated: boolean; inputs: number[];
 }
 export interface Results {
+  reservations: { scenario: number; workload: number }[];
+  choices: (Choice & { scenario: number })[];
+  searches: { scenario: number; examined: number; truncated: boolean }[];
+  standingErrors: { domain: string; item: number; id: string; field: string }[];
+  standingLoads: (Trace & { item: number; id: string; domain: string; amount: number | null; unit: string;
+    kind: "scene" | "link"; resource: number })[];
   physical: PhysicalStep[];
   linkResources: { connection: number; domain: string; direction: Direction; absentDomain: number[]; pool?: Pool; service?: { mode?: string; unit: string; poolResource?: number } }[];
   errors: { domain: string; spec: string; field?: string; resource?: number; stage: "negotiate" | "demand" | "consume"; row: number }[];
   possibleVerdicts: { outcome: number; verdict: Verdict }[];
-  quests: { outcome: number; claim: number; instruction: string }[];
+  quests: { outcome: number; claim: number; instruction: string; impact?: "range" | "verdict" }[];
+  rangeInputs: { outcome: number; claim: number }[];
   wirings: { world: number; claim: number; node: number }[];
   specSources: { domain: string; id: string; title: string; locator: string }[];
   reasonSpecs: { reason: number; source: number }[];
@@ -20,12 +27,12 @@ export interface Results {
   measures: (Measure & { outcome: number; run: Run })[];
   options: (Option & { poolResource?: number; serviceResource?: number; linkResource: number; connection: number; domain: string; direction: Direction })[];
   demands: (Demand & { workload: number })[];
-  paths: { workload: number; demand: number; verdict: Verdict; bestCase?: Verdict; disconnected?: number[]; disconnectedEdges?: number[]; key: string; truncated: boolean }[];
+  paths: { workload: number; demand: number; verdict: Verdict; bestCase?: Verdict; conditioned?: boolean; disconnected?: number[]; disconnectedEdges?: number[]; key: string; truncated: boolean }[];
   matches: (Trace & { demand: number; option: number; verdict: Verdict })[];
   steps: (Step & { carrier?: { domain: string; mode: string }; path: number; order: number })[];
   allocations: { scenario: number; workload: number; run: Run; value: number | null; unit: string }[];
   bindings: { scenario: number; workload: number; run: Run; resourceKind: "scene" | "link"; resource: number }[];
-  outcomes: { subjectKind: "connection" | "workload"; subjectRow: number; path: number | null; direction: Direction | null; scenario: number | null; domain: string; unit?: string; pool?: { domain: string; id: string }; verdict: Verdict; mode: string; label: string }[];
+  outcomes: { subjectKind: "connection" | "workload"; subjectRow: number; path: number | null; soloPath?: number; direction: Direction | null; scenario: number | null; domain: string; unit?: string; pool?: { domain: string; id: string }; verdict: Verdict; mode: string; label: string }[];
   metrics: { outcome: number; kind: "solo" | "together" | "drop" | "dropPercent" | "unused"; unit: string;
     range?: "witnessed" | "conservative"; lowWorld?: number; highWorld?: number;
     value: number | null; low: number | null; high: number | null; basis: "calculated" | "assumed" }[];

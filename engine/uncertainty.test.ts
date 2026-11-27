@@ -1,4 +1,5 @@
 // 미확인 배선·분배 정책의 범위, 가정, 검증 퀘스트를 파일에서 연 합성 장면으로 확인한다.
+import { power } from "../domains/power/power.ts";
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { loadScene } from "../cli/load.ts";
@@ -219,4 +220,27 @@ test("T5 경로 열거가 잘려도 다른 장비 묶음의 부착점 퀘스트�
   const r = evaluate(scene, [trial]), a = output(r,0);
   assert.ok(r.reasons.some(v => v.outcome === a.row && v.rule === "경로 후보 열거 상한"));
   assert.ok(!a.quests.some(q => q.claim === claim));
+});
+
+test("T8 충전 목표가 성립해도 전달 전력과 순충전 범위를 좁히는 케이블 전류를 확인한다", () => {
+  const scene = loadScene("fixtures/power/single-port.json",{ modelsDir: "fixtures/power", connectorsFile: "fixtures/power/connectors.json" },[power]);
+  const currents: number[] = [];
+  scene.claims.forEach((c,i) => {
+    if (c.field === "eMarked") c.value = true;
+    if (c.field === "currentA") { c.value = null; c.confidence = "unknown"; currents.push(i); }
+  });
+  const plugin: typeof power = { ...power, assess: power.assess ?? ((_s,_w,_d,_steps,p) => ({
+    possible: p.low !== null && p.low >= 50 ? ["ok"] : ["conditional","ok"],
+    metrics: [{ kind: "net", unit: "W", low: p.low === null ? null : p.low-20, high: p.high === null ? null : p.high-20 }],
+    rule: "대기 소비 20 W와 목표 30 W", inputs: [], specs: [],
+  })) };
+  const r = evaluate(scene,[plugin]), row = r.outcomes.findIndex(o => o.subjectKind === "workload");
+  assert.equal(r.outcomes[row]!.verdict,"ok");
+  const m = r.metrics.find(m => m.outcome === row && m.kind === "together")!;
+  assert.deepEqual([m.low,m.high],[60,80]);
+  assert.ok(r.measures.some(m => m.outcome === row && m.low === 40 && m.high === 60));
+  assert.ok(r.quests.some(q => q.outcome === row && q.impact === "range" && currents.includes(q.claim)));
+  scene.claims.find(c => c.field === "requestedW")!.value = 50;
+  const fixed = evaluate(scene,[plugin]);
+  assert.equal(fixed.quests.some(q => fixed.outcomes[q.outcome]!.subjectKind === "workload" && currents.includes(q.claim)),false);
 });

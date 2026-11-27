@@ -87,3 +87,21 @@ test("T3 외부 연결 없는 장비에서 역방향 내부 간선의 방향과 
     assert.ok(scene.claimSources.some(s => s.claim === edge.evidence && scene.sources[s.source]!.locator === "fixture:source"));
   }
 });
+
+test("T2 레인 수와 압축 능력이 미확인이어도 4K144 DSC로 가능한 판정에는 무조건 성립이 없다", () => {
+  const scene = fixture(), workload = scene.workloads.findIndex(w => w.id === "dsc");
+  const claims = [["host","lanes"],["native","dscBpp"]].map(([id,field]) => {
+    const port = scene.ports.findIndex(p => scene.items[p.item]!.id === id && p.id === "dp");
+    const iface = scene.interfaces.findIndex(i => i.port === port && i.domain === display.id);
+    const row = effectiveClaim(scene,"interface",iface,display.id,field!)!;
+    Object.assign(scene.claims[row]!,{ value: null, confidence: "unknown" });
+    return row;
+  });
+  const r = evaluate(scene,[display]), row = r.outcomes.findIndex(o => o.subjectKind === "workload" && o.subjectRow === workload);
+  assert.equal(r.outcomes[row]!.verdict,"unknown");
+  assert.deepEqual(r.possibleVerdicts.filter(p => p.outcome === row).map(p => p.verdict).sort(),["conditional","impossible"]);
+  const m = r.metrics.find(m => m.outcome === row && m.kind === "together")!;
+  assert.equal(m.low,0);
+  assert.ok(Math.abs(m.high! - 15.674472) < 1e-9);
+  for (const claim of claims) assert.ok(r.quests.some(q => q.outcome === row && q.claim === claim));
+});

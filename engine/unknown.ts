@@ -24,11 +24,13 @@ function inputs(result: Results, outcome: number) {
   return [...new Set(result.reasonInputs.filter(i => result.reasons[i.reason]!.outcome === outcome).map(i => i.claim))];
 }
 
-function ask(scene: Scene, plugins: readonly DomainPlugin[], result: Results, row: number, claim: number) {
-  if (result.quests.some(q => q.outcome === row && q.claim === claim)) return;
+function ask(scene: Scene, plugins: readonly DomainPlugin[], result: Results, row: number, claim: number,
+  impact: "verdict" | "range" = result.outcomes[row]!.verdict === "unknown" ? "verdict" : "range") {
+  const prior = result.quests.find(q => q.outcome === row && q.claim === claim);
+  if (prior) { if (impact === "verdict") prior.impact = impact; return; }
   const c = scene.claims[claim]!, o = result.outcomes[row]!;
   const plugin = plugins.find(p => p.id === (c.domain || o.domain));
-  result.quests.push({ outcome: row, claim, instruction: plugin?.quest(c.field) ?? (c.field + " 값을 확인하세요.") });
+  result.quests.push({ outcome: row, claim, impact, instruction: plugin?.quest(c.field) ?? (c.field + " 값을 확인하세요.") });
 }
 
 function conservative(result: Results, row: number) {
@@ -49,10 +51,15 @@ function conservative(result: Results, row: number) {
 // 값의 일부만 모르는 기존 결과에는 이미 계산된 값과 정책 가정을 보존한다.
 function completeUnknowns(scene: Scene, plugins: readonly DomainPlugin[], result: Results) {
   result.outcomes.forEach((o, row) => {
+    if (o.verdict !== "unknown") for (const q of result.quests.filter(q => q.outcome === row)) q.impact = "range";
+    for (const input of result.rangeInputs) if (input.outcome === row) ask(scene,plugins,result,row,input.claim);
     if (o.verdict === "unknown") {
       for (const id of inputs(result, row)) if (scene.claims[id]!.value === null) ask(scene, plugins, result, row, id);
       if (!result.possibleVerdicts.some(v => v.outcome === row)) {
-        for (const verdict of ["ok", "conditional", "impossible"] as const) result.possibleVerdicts.push({ outcome: row, verdict });
+        const path = o.path === null ? null : result.paths[o.path]!;
+        const possible = path?.conditioned ? ["conditional","impossible"] as const
+          : path && !result.demands[path.demand]!.elastic ? ["ok","impossible"] as const : ["ok","conditional","impossible"] as const;
+        for (const verdict of possible) result.possibleVerdicts.push({ outcome: row, verdict });
         const demand = o.path === null ? null : result.demands[result.paths[o.path]!.demand]!;
         for (const m of result.metrics.filter(m => m.outcome === row && m.value === null && !m.range)) {
           m.range = "conservative";

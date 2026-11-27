@@ -20,11 +20,19 @@ export function uncertainPreferences(plugins: readonly DomainPlugin[], result: R
     const possible = new Set<Verdict>(result.possibleVerdicts.filter(v => v.outcome === row).map(v => v.verdict));
     if (original[i] !== "unknown") possible.add(original[i]!);
     if (affecting.some(j => j !== i) || !possible.size) {
-      for (const verdict of ["ok","conditional","impossible"] as const) possible.add(verdict);
+      possible.add("impossible");
+      for (const candidate of [chosen[w]!, ...own]) {
+        if (candidate.flow.path === null) continue;
+        const path = result.paths[candidate.flow.path]!;
+        if (!path.conditioned) possible.add("ok");
+        if (path.conditioned || candidate.flow.elastic) possible.add("conditional");
+      }
     }
     for (const c of own) {
       // 상위 모드만 실패하면 이미 성립한 폴백이 선택된다.
-      const alternatives = c.solo.range?.possible ?? (c.preference === 0 ? ["ok","conditional"] as const : ["conditional"] as const);
+      const conditioned = c.preference > 0 || c.flow.path !== null && result.paths[c.flow.path]!.conditioned;
+      const alternatives = c.solo.range?.possible ?? (conditioned ? ["conditional"] as const
+        : c.flow.elastic ? ["ok","conditional"] as const : ["ok"] as const);
       for (const v of alternatives) if (v !== "impossible") possible.add(v);
     }
     const claims = [...new Set(affecting.flatMap(j => [...routes[members[j]!]!.claims]))];

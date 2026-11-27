@@ -733,3 +733,17 @@ test("T10 프로토콜별 스키마는 기본 매개변수와 개인 주장 양�
   f.save();
   assert.throws(() => f.open([plugin]), /scene.json#personal.0.claim.value/);
 });
+
+test("T4 시나리오의 우선순위가 입력 주장과 출처를 통해 고정 예약 근거에 남는다", t => {
+  const f = sample(t);
+  f.saved.scenarios[0]!.members = ["a","b"].map((workload,priority) => ({ workload, priority: { value: priority, unit: "",
+    confidence: "inferred" as const, sources: ["scene"], condition: "" } }));
+  f.save();
+  const trial = trialDomain();
+  const plugin = { ...trial, demand: (...args: Parameters<typeof trial.demand>) => trial.demand(...args).map(d => ({ ...d, requested: 800, elastic: false })) };
+  const { scene, result } = f.open([plugin]);
+  assert.deepEqual(workRows(scene,result).map(w => w.together),[800,0]);
+  const claim = scene.members[0]!.evidence!;
+  assert.ok(scene.claimSources.some(c => c.claim === claim && scene.sources[c.source]!.locator === "fixture:scene"));
+  assert.ok(result.reasonInputs.some(c => c.claim === claim && result.reasons[c.reason]!.rule.includes("우선순위")));
+});

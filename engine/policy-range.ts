@@ -37,8 +37,9 @@ export function uncertainPolicies(scene: Scene, plugins: readonly DomainPlugin[]
     }
     const possible = new Set<Verdict>(["impossible"]);
     if (upper === null || upper > 0) {
-      if (demand.elastic || flow.verdict === "conditional" || flow.verdict === "unknown") possible.add("conditional");
-      if (flow.verdict !== "conditional" && (upper === null || demand.requested === null || upper >= demand.requested)) possible.add("ok");
+      const conditioned = result.paths[flow.path]!.conditioned || flow.verdict === "conditional";
+      if (demand.elastic || conditioned) possible.add("conditional");
+      if (!conditioned && (upper === null || demand.requested === null || upper >= demand.requested)) possible.add("ok");
     }
     o.verdict = possible.size === 1 ? [...possible][0]! : "unknown";
     o.label = plugin.explain(o.verdict, o.mode);
@@ -50,7 +51,7 @@ export function uncertainPolicies(scene: Scene, plugins: readonly DomainPlugin[]
     for (const claim of policies) {
       const resource = scene.resources[scene.claims[claim]!.owner]!;
       const owner = plugins.find(p => p.id === resource.domain)!;
-      result.quests.push({ outcome, claim, instruction: owner.quest("policy") });
+      result.quests.push({ outcome, claim, impact: o.verdict === "unknown" ? "verdict" : "range", instruction: owner.quest("policy") });
     }
   });
 }
