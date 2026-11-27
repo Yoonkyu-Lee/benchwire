@@ -150,7 +150,8 @@ test("T4 USB4 미지원 케이블이나 공통 USB4 모드가 없는 포트는 �
     ]);
     for (const { pool } of pools) {
       assert.equal(pool!.bounds, undefined);
-      for (const input of [cable, ...ends]) {
+      assert.equal(pool!.inputs.includes(cable), allowed === false);
+      for (const input of allowed === false ? [cable, ...ends] : ends) {
         assert.ok(pool!.inputs.includes(input));
         assert.ok(scene.claimSources.some(s => s.claim === input));
       }

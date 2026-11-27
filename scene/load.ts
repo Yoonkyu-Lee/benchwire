@@ -36,10 +36,14 @@ function contextDifference(measured: MeasurementContext, current: MeasurementCon
 function ref<T>(map: Map<string, T>, id: string, at: string): T {
   return map.get(id) ?? fail(at, "찾을 수 없는 참조: " + id);
 }
-function validateFields(schema: InputSchema, fields: Record<string, Pick<Fact, "value" | "unit">>, at: string, personalField?: string) {
+function validateFields(schema: InputSchema, fields: Record<string, Pick<Fact, "value" | "unit">>, at: string,
+  personalField?: string, recovered = false) {
   const result = schema.safeParse(fields);
   if (!result.success) {
-    const issue = result.error.issues[0]!;
+    // 배선 없이 복원한 개인 측정은 실제로 측정한 필드와 단위만 확인한다.
+    const issue = result.error.issues.find(issue => !recovered || issue.path.length !== 1 ||
+      Object.hasOwn(fields, issue.path[0]!) || !("code" in issue) || issue.code !== "invalid_type");
+    if (!issue) return;
     const path = personalField === undefined ? issue.path : issue.path[0] === personalField ? issue.path.slice(1) : [];
     fail([at, ...path].join("."), issue.message);
   }
@@ -57,13 +61,13 @@ type ModelAttributes = Pick<z.input<typeof modelFile>, "kind" | "ports" | "attri
 type PortInterface = Model["ports"][number]["interfaces"][number];
 
 export function missingModelAttributes(model: ModelAttributes, plugin: DomainPlugin,
-  ends?: readonly [readonly PortInterface[], readonly PortInterface[]], measured = false) {
+  ends?: readonly [readonly PortInterface[], readonly PortInterface[]]) {
   if (!plugin.requiredAttributes) return [];
   const protocols = new Set(model.ports.flatMap(p => p.interfaces.filter(i => i.domain === plugin.id).map(i => i.protocol)));
   const linkedProtocols = new Set(ends?.[0].flatMap(i => i.domain === plugin.id &&
     ends[1].some(other => other.domain === i.domain && other.protocol === i.protocol) ? [i.protocol] : []));
   const attributes = Object.hasOwn(model.attributes ?? {}, plugin.id) ? model.attributes![plugin.id] : undefined;
-  const required = plugin.requiredAttributes({ kind: model.kind, protocols, linkedProtocols, hasAttributes: attributes !== undefined || measured });
+  const required = plugin.requiredAttributes({ kind: model.kind, protocols, linkedProtocols, hasAttributes: attributes !== undefined });
   return Object.entries(required ?? {}).filter(([field]) => !Object.hasOwn(attributes ?? {}, field));
 }
 
@@ -123,10 +127,10 @@ export function loadSceneDocuments(document: unknown, library: { connectors: unk
   }
   function fields(ownerKind: Claim["ownerKind"], owner: number, scope: Claim["scope"], domain: string,
     values: Record<string, Fact>, schema: InputSchema, citations: Map<string, number>, at: string,
-    generated?: { values: Record<string, Fact>; citations: Map<string, number> }) {
+    generated?: { values: Record<string, Fact>; citations: Map<string, number>; recovered: boolean }) {
     const entries = Object.entries({ ...generated?.values, ...values });
     const base = Object.fromEntries(entries.map(([key, f]) => [key, { value: f.value, unit: f.unit }]));
-    validateFields(schema, base, at);
+    validateFields(schema, base, at, undefined, generated?.recovered);
     for (const [key, fact] of entries) {
       const where = at + "." + key;
       fact.conflicts?.forEach((c,i) => validateFields(schema, { ...base, [key]: { value: c.value, unit: fact.unit } },
@@ -247,7 +251,8 @@ export function loadSceneDocuments(document: unknown, library: { connectors: unk
   const requiredDomains = plugins.filter(p => p.requiredAttributes).map(p => p.id);
   const linkByPart = new Map(saved.connections.flatMap(link => link.parts.map(part => [part.instanceId, link] as const)));
   // 연결을 옮긴 뒤에도 기존 개인 검증은 같은 모델 속성을 참조한다.
-  const measurements = new Set(saved.personal.filter(p => p.ownerKind === "item").map(p => JSON.stringify([p.instanceId, p.domain])));
+  const measurements = Map.groupBy(saved.personal.filter(p => p.ownerKind === "item"), p => p.instanceId);
+  const recoveredAttributes = new Set<string>();
   function portInterfaces(end: typeof saved.connections[number]["from"]) {
     const owner = instances.get(end.instanceId);
     if (!owner) return [];
@@ -261,20 +266,26 @@ export function loadSceneDocuments(document: unknown, library: { connectors: unk
     const at = names.model(key) + "#attributes";
     const link = linkByPart.get(instanceId);
     const ends = link && [portInterfaces(link.from), portInterfaces(link.to)] as const;
-    const groups = new Set([...Object.keys(model.attributes), ...requiredDomains]);
+    const measured = Map.groupBy(measurements.get(instanceId) ?? [], p => p.domain);
+    const groups = new Set([...Object.keys(model.attributes), ...requiredDomains, ...measured.keys()]);
     for (const domain of groups) {
       const where = at + "." + domain;
       const plugin = ref(domains, domain, where);
-      const missing = missingModelAttributes(model, plugin, ends, measurements.has(JSON.stringify([instanceId, domain])));
       const values = Object.hasOwn(model.attributes, domain) ? model.attributes[domain] : undefined;
-      if (!values && !missing.length) continue;
+      const missing = new Map(missingModelAttributes(model, plugin, ends));
+      const recovered = !values && missing.size === 0;
+      for (const { field, claim: { unit } } of measured.get(domain) ?? []) {
+        if (!Object.hasOwn(values ?? {}, field) && !missing.has(field)) missing.set(field, unit);
+      }
+      if (!values && missing.size === 0) continue;
       let generated;
-      if (missing.length) {
+      if (missing.size) {
         const id = "missing-model-value";
         pinned.missing ??= sources([{ id, title: "모델에 값 없음", locator: at, retrievedAt: "" }], at);
-        const unknowns: Record<string, Fact> = Object.fromEntries(missing.map(([field, unit]) =>
+        const unknowns: Record<string, Fact> = Object.fromEntries([...missing].map(([field, unit]) =>
           [field, { value: null, unit, confidence: "unknown", condition: "", sources: [id] }]));
-        generated = { values: unknowns, citations: pinned.missing };
+        if (recovered) recoveredAttributes.add(JSON.stringify([item, domain]));
+        generated = { values: unknowns, citations: pinned.missing, recovered };
       }
       fields("item", item, "model", domain, values ?? {}, plugin.attributes, citations, where, generated);
     }
@@ -320,7 +331,9 @@ export function loadSceneDocuments(document: unknown, library: { connectors: unk
         (!c.condition || c.condition === p.claim.condition));
       const values = Object.fromEntries(group.map(c => [c.field, { value: c.value, unit: c.unit }]));
       const schema = ownerKind === "item" ? plugin.attributes : interfaceSchema(plugin, scene.interfaces[owner]!.protocol);
-      checkValues(p.claim, at + ".claim", (sample,where) => validateFields(schema, { ...values, [field]: {value:sample.value,unit:sample.unit} }, where, field));
+      const recovered = ownerKind === "item" && recoveredAttributes.has(JSON.stringify([owner, domain]));
+      checkValues(p.claim, at + ".claim", (sample,where) =>
+        validateFields(schema, { ...values, [field]: { value: sample.value, unit: sample.unit } }, where, field, recovered));
     }
   });
   function endpoint(r: { instanceId: string; id: string }, kind: "nodes" | "ports", at: string) {

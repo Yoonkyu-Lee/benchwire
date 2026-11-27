@@ -36,7 +36,8 @@ for (const { dir, modelKey, domain, workload, scenario, expected, fields } of [
     assert.ok(row >= 0, workload + " / " + scenario);
     const quests = result.quests.filter(q => q.outcome === row && scene.claims[q.claim]!.domain === domain);
     const metric = result.metrics.find(m => m.outcome === row && m.kind === "together")!;
-    return { scene, verdict: result.outcomes[row]!.verdict, quests, metric };
+    const citations = result.reasonInputs.filter(i => result.reasons[i.reason]!.outcome === row);
+    return { scene, verdict: result.outcomes[row]!.verdict, quests, metric, citations };
   }
 
   delete model.attributes[domain];
@@ -57,6 +58,14 @@ for (const { dir, modelKey, domain, workload, scenario, expected, fields } of [
   const complete = run();
   assert.equal(complete.verdict, expected);
   assert.deepEqual(complete.quests, []);
+  if (domain === "data") {
+    assert.equal(complete.metric.value, 100);
+    assert.ok(complete.citations.some(({ claim }) => {
+      const c = complete.scene.claims[claim]!;
+      return c.field === "cableUsb4" && c.value === true && complete.scene.claimSources.some(row =>
+        row.claim === claim && complete.scene.sources[row.source]!.locator === "fixture:t4/usb4-cable");
+    }));
+  }
 });
 
 test("이더넷 속성 일부가 빠지면 기존 값과 검증 경계를 지킨다", () => {
@@ -89,5 +98,40 @@ test("인터페이스가 없는 USB 케이블의 개인 검증은 연결을 빼�
   document.personal.push({ instanceId: "cable", ownerKind: "item", ownerId: "cable", domain: "data", field: "cableDataGbps",
     claim: { value: 5, unit: "Gbps", confidence: "user_verified", condition: "", sources: ["scene"] } });
   document.connections.length = 0;
-  assert.equal(fields(load()).find(c => c.scope === "personal")?.value, 5);
+  assert.deepEqual(fields(load()).map(c => [c.field, c.scope, c.value]), [
+    ["cableDataGbps", "model", null], ["cableDataGbps", "personal", 5],
+  ]);
+});
+
+test("양 끝이 일반 USB만 지원하면 벌크 근거와 퀘스트에 USB4 지원을 넣지 않는다", () => {
+  const { document, library } = fixture("data");
+  const endpoint = library.models.get("usb-endpoint@1")!.ports[0]!;
+  endpoint.interfaces = endpoint.interfaces.filter(i => i.protocol === "USB");
+  const cable = library.models.get("usb-cable@1")!;
+  const known = cable.attributes.data!;
+  function run() {
+    const scene = loadSceneDocuments(document, library, plugins);
+    const result = evaluate(scene, plugins);
+    assert.deepEqual(result.errors, []);
+    const row = result.outcomes.findIndex(o => o.subjectKind === "workload" && o.domain === "data");
+    const metric = result.metrics.find(m => m.outcome === row && m.kind === "together")!;
+    const fields = (rows: readonly { claim: number }[]) => rows.map(c => scene.claims[c.claim]!.field);
+    return {
+      verdict: result.outcomes[row]!.verdict, metric,
+      reasonFields: fields(result.reasonInputs.filter(i => result.reasons[i.reason]!.outcome === row)),
+      questFields: fields(result.quests.filter(q => q.outcome === row)),
+    };
+  }
+  delete cable.attributes.data;
+  const missing = run();
+  assert.deepEqual([missing.verdict, missing.metric.low, missing.metric.high], ["unknown", 0, 500]);
+  assert.deepEqual(missing.questFields, ["cableDataGbps"]);
+  assert.ok(missing.reasonFields.includes("cableDataGbps"));
+  assert.ok(!missing.reasonFields.includes("cableUsb4"));
+
+  cable.attributes.data = known;
+  const complete = run();
+  assert.deepEqual([complete.verdict, complete.metric.value], ["conditional", 53.248]);
+  assert.deepEqual(complete.questFields, []);
+  assert.ok(complete.reasonFields.includes("cableDataGbps"));
 });

@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { test, type TestContext } from "node:test";
+import { z } from "zod";
 import { evaluate } from "../engine/evaluate.ts";
 import { effectiveClaim, type DomainPlugin, type Scene } from "../engine/contract.ts";
 import type { Results } from "../engine/results.ts";
@@ -774,9 +775,12 @@ test("T10 새 영역이 어댑터 필수 속성을 선언하면 로더부터 검
   s.saved.connections[0]!.parts.push({ instanceId: "pass", entry: "entry", exit: "exit" });
   s.save();
   const base = trialDomain();
+  const rate = z.strictObject({ value: z.number().nonnegative().nullable(), unit: z.literal("회/s") });
   const plugin: DomainPlugin = {
     ...base,
-    requiredAttributes: ({ kind, protocols }) => kind === "adapter" && protocols.has("pulse") ? { "budget:pass": "회/s" } : undefined,
+    attributes: z.strictObject({ "budget:pass": rate, "budget:idle": rate }),
+    requiredAttributes: ({ kind, linkedProtocols }) =>
+      kind === "adapter" && linkedProtocols.has("pulse") ? { "budget:pass": "회/s", "budget:idle": "회/s" } : undefined,
     negotiate(link) {
       const part = link.scene.parts.find(p => p.connection === link.connection);
       const row = part && effectiveClaim(link.scene, "item", part.item, base.id, "budget:pass");
@@ -793,12 +797,42 @@ test("T10 새 영역이 어댑터 필수 속성을 선언하면 로더부터 검
   assert.ok(result.quests.some(q => q.claim === row && result.outcomes[q.outcome]!.verdict === "unknown"));
   assert.equal(scene.sources[scene.claimSources.find(c => c.claim === row)!.source]!.title, "모델에 값 없음");
 
-  s.adapter.attributes.trial = { "budget:pass": { value: 1200, unit: "회/s", condition: "", confidence: "inferred", sources: ["adapter"] } };
+  const knownRate = { value: 1200, unit: "회/s", condition: "", confidence: "inferred", sources: ["adapter"] } as const;
+  s.adapter.attributes.trial = {
+    "budget:pass": { ...knownRate, sources: ["adapter"] },
+    "budget:idle": { ...knownRate, sources: ["adapter"] },
+  };
   s.save();
   const known = s.open([plugin]);
   assert.ok(known.result.outcomes.some(o => o.subjectKind === "connection" && o.verdict === "ok"));
   assert.ok(!known.result.quests.some(q => known.scene.claims[q.claim]!.field === "budget:pass"));
+
+  delete s.adapter.attributes.trial;
+  const personal: typeof s.saved.personal[number] = { instanceId: "pass", ownerKind: "item", ownerId: "pass", domain: plugin.id,
+    field: "budget:pass", claim: { value: 1100, unit: "회/s", condition: "", confidence: "user_verified", sources: ["scene"] } };
+  s.saved.personal.push(personal);
+  s.save();
+  assert.ok(s.open([plugin]).scene.claims.some(c => c.field === personal.field && c.scope === "personal" && c.value === 1100));
+  s.saved.connections[0]!.parts.length = 0;
+  s.save();
+  const disconnected = s.open([plugin]).scene;
+  const claims = disconnected.claims.filter(c => c.ownerKind === "item" && c.domain === plugin.id);
+  assert.deepEqual(claims.map(c => [c.field, c.scope, c.value, c.unit]), [
+    [personal.field, "model", null, "회/s"], [personal.field, "personal", 1100, "회/s"],
+  ]);
+  assert.equal(disconnected.sources[disconnected.claimSources.find(c => c.claim === disconnected.claims.indexOf(claims[0]!))!.source]!.title,
+    "모델에 값 없음");
+  s.saved.personal[0] = { ...personal, field: "not-in-schema" };
+  s.save();
+  assert.throws(() => s.open([plugin]), /attributes\.trial.*not-in-schema/);
+  s.saved.personal[0] = { ...personal, claim: { ...personal.claim, unit: "W" } };
+  s.save();
+  assert.throws(() => s.open([plugin]), /attributes\.trial\.budget:pass\.unit/);
+  s.saved.personal[0] = { ...personal, claim: { ...personal.claim, value: -1 } };
+  s.save();
+  assert.throws(() => s.open([plugin]), /personal\.0\.claim\.value/);
 });
+
 test("T10 메모리 문서와 고정 판본 파일은 같은 장면·근거·제품 영역 판정을 낸다", () => {
   const dir = "fixtures/network", file = join(dir,"scene.json");
   const doc = (name: string): unknown => JSON.parse(readFileSync(name,"utf8"));

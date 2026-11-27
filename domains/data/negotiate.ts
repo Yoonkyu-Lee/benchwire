@@ -63,13 +63,12 @@ export function usbServices({ scene, connection, ports, laneProfiles }: Link): {
   const fabricModes = modes(fabricEnds, "modes");
   const parts = scene.parts.filter(part => part.connection === connection);
   const cableRates = parts.map(part => read("item", part.item, "cableDataGbps") as number | null);
-  const fabricRates = parts.flatMap((part, i) => {
+  const fabricCandidate = modeRange(USB4_LINK_MODES, fabricModes, cableRates);
+  const fabric = fabricCandidate.possible ? modeRange(USB4_LINK_MODES, fabricModes, parts.flatMap((part, i) => {
     const rating = cableRates[i]!;
-    if (rating === USB_2_HIGH_SPEED_SIGNAL_GBPS) return [0];
     const allowed = read("item", part.item, "cableUsb4");
     return allowed === false ? [0] : allowed === true ? [rating] : [rating, null];
-  });
-  const fabric = modeRange(USB4_LINK_MODES, fabricModes, fabricRates);
+  })) : fabricCandidate;
   const caps = fabric.possible ? fabricEnds.map(row => read("interface", row, "tunnelGbps") as number | null) : [];
   const tunnelHigh = Math.min(fabric.possible?.payloadGbps ?? 0, ...caps.map(cap => cap ?? Infinity));
   const known = tunnelHigh === 0 || fabric.possible === fabric.confirmed && !caps.includes(null);
