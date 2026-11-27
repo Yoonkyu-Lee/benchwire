@@ -45,7 +45,40 @@ export function allocationGroup(flows: readonly Flow[], start: Flow): Flow[] {
   return [...group];
 }
 
+// 같은 단위의 실제 처리량이 같은 속도로 자라도록 선택 경로가 선언한 단위 환산을 잇는다.
+function rateUnits(result: Results, flows: readonly Flow[]) {
+  const links = new Map<string, { unit: string; factor: number }[]>();
+  function link(from: string, unit: string, factor: number) {
+    const next = links.get(from) ?? [];
+    next.push({unit, factor});
+    links.set(from,next);
+  }
+  const units = flows.map(f => f.path === null ? "" : result.demands[result.paths[f.path]!.demand]!.unit);
+  for (const [i, f] of flows.entries()) {
+    if (!f.elastic || f.path === null) continue;
+    for (const s of result.steps) {
+      const c = s.carrier?.conversion;
+      if (s.path !== f.path || !c) continue;
+      link(units[i]!,c.unit,c.perUnit);
+      link(c.unit,units[i]!,1 / c.perUnit);
+    }
+  }
+  const scale = new Map<string,{base:string; weight:number}>();
+  for (const base of units) {
+    if (scale.has(base)) continue;
+    const pending = new Set([base]);
+    scale.set(base,{base,weight:1});
+    for (const unit of pending) for (const edge of links.get(unit) ?? []) {
+      if (scale.has(edge.unit)) continue;
+      scale.set(edge.unit,{base,weight:scale.get(unit)!.weight * edge.factor});
+      pending.add(edge.unit);
+    }
+  }
+  return units.map(unit => scale.get(unit)!);
+}
+
 function fill(scene: Scene, result: Results, flows: readonly Flow[], fair: ReadonlySet<number>) {
+  const rates = rateUnits(result,flows);
   const shares = flows.map((f): Share => ({ workload: f.workload, value: 0, verdict: f.verdict, bindings: [] }));
   const active = new Set<number>(), uncertain = new Set<number>(), overbooked = new Set<number>();
   const pools = new Map<number, { capacity: number | null; policy: unknown; unit: string; reserved: number;
@@ -88,8 +121,7 @@ function fill(scene: Scene, result: Results, flows: readonly Flow[], fair: Reado
     for (const i of p.coefficients.keys()) if (!active.has(i)) p.coefficients.delete(i);
     const users = new Set([...p.fixed.keys(), ...p.coefficients.keys()]);
     if (result.linkResources[row - scene.resources.length]?.pool && p.coefficients.size > 1) {
-      const elastic = [...p.coefficients.keys()].map(i => flows[i]!);
-      const units = new Set(elastic.map(f => result.demands[result.paths[f.path!]!.demand]!.unit));
+      const units = new Set([...p.coefficients.keys()].map(i => rates[i]!.base));
       if (units.size > 1) {
         for (const i of p.coefficients.keys()) {
           uncertain.add(i);
@@ -117,19 +149,19 @@ function fill(scene: Scene, result: Results, flows: readonly Flow[], fair: Reado
     }
   }
   while (active.size) {
-    const demandEvents = [...active].map(i => ({ i, delta: Math.max(0, flows[i]!.cap! - shares[i]!.value!) }));
+    const demandEvents = [...active].map(i => ({ i, delta: Math.max(0, flows[i]!.cap! - shares[i]!.value!) / rates[i]!.weight }));
     const capacityEvents: { row: number; delta: number; users: number[] }[] = [];
     for (const [row, p] of pools) {
       let remaining = (p.capacity ?? 0) - p.reserved, slope = 0;
       const users: number[] = [];
       for (const [i, coefficient] of p.coefficients) {
         remaining -= coefficient * (shares[i]!.value ?? 0);
-        if (active.has(i)) { slope += coefficient; users.push(i); }
+        if (active.has(i)) { slope += coefficient * rates[i]!.weight; users.push(i); }
       }
       if (slope > 0) capacityEvents.push({ row, delta: Math.max(0, remaining / slope), users });
     }
     const delta = Math.min(...demandEvents.map(e => e.delta), ...capacityEvents.map(e => e.delta));
-    for (const i of active) shares[i]!.value = Math.min(flows[i]!.cap!, shares[i]!.value! + delta);
+    for (const i of active) shares[i]!.value = Math.min(flows[i]!.cap!, shares[i]!.value! + delta * rates[i]!.weight);
     for (const event of capacityEvents) if (tied(event.delta, delta)) for (const i of event.users) {
       shares[i]!.bindings.push(event.row);
       active.delete(i);
@@ -214,6 +246,7 @@ function allocateKnown(scene: Scene, result: Results, flows: readonly Flow[], fa
 // 다른 작업이 먼저 멈추지 않아도 자기 자원들 중 첫 포화 시점까지는 모두 같은 처리량으로 자란다.
 function guaranteedFloor(scene: Scene, lower: Results, flow: Flow, group: Flow[], fair: ReadonlySet<number>) {
   if (group.some(f => (f.bestCase ?? f.verdict) === "unknown" || f.cap === null)) return 0;
+  const rates = rateUnits(lower,group), weight = rates[group.findIndex(f => f.workload === flow.workload)]!.weight;
   let rate = flow.cap ?? 0;
   for (const row of new Set(flow.uses.map(u => u.resource))) {
     const uses = group.flatMap(f => f.uses.filter(u => u.resource === row));
@@ -230,8 +263,11 @@ function guaranteedFloor(scene: Scene, lower: Results, flow: Flow, group: Flow[]
     }
     const remaining = capacity - uses.reduce((n,u) => n + u.fixed, 0);
     if (remaining < 0) return 0;
-    if (flow.uses.some(u => u.resource === row && u.coefficient > 0))
-      rate = Math.min(rate, remaining / uses.reduce((n,u) => n + u.coefficient, 0));
+    if (flow.uses.some(u => u.resource === row && u.coefficient > 0)) {
+      const slope = group.reduce((sum,f,i) => sum + f.uses.filter(u => u.resource === row)
+        .reduce((n,u) => n + u.coefficient * rates[i]!.weight,0),0);
+      rate = Math.min(rate,remaining * weight / slope);
+    }
   }
   return flow.elastic || rate === flow.cap ? rate : 0;
 }
@@ -260,7 +296,7 @@ export function allocate(scene: Scene, result: Results, flows: readonly Flow[], 
     return allocateKnown(scene, result, flows, fair);
   const at = (side: "low" | "high"): Results => ({ ...result,
     standingLoads: result.standingLoads.map(l => l.kind === "scene" && l.amount === null && reserved.has(l.resource)
-      ? { ...l, amount: side === "low" ? reserved.get(l.resource)! : 0 } : l),
+      ? { ...l, amount: side === "low" ? l.bounds?.high ?? reserved.get(l.resource)! : l.bounds?.low ?? 0 } : l),
     options: result.options.map(o => o.bounds ? { ...o, limit: o.bounds[side] } : o),
     linkResources: result.linkResources.map(r => r.pool?.bounds ? { ...r, pool: { ...r.pool, limit: r.pool.bounds[side] } } : r) });
   const lower = at("low"), upper = at("high");

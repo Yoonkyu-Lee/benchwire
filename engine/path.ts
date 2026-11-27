@@ -1,5 +1,5 @@
 // 구간별 운반 서비스가 이어지는 경로 후보를 모두 보존해 단독 배분과 미확인 배선 비교에 쓴다.
-import type { Choice, DomainPlugin, Scene, Verdict } from "./contract.ts";
+import type { Carrier, Choice, DomainPlugin, Scene, Verdict } from "./contract.ts";
 import { bestOption, optionVerdict, verdictOrder } from "./negotiate.ts";
 import { availableOption } from "./pools.ts";
 import { attachmentCandidates, portFacts } from "./scene.ts";
@@ -9,10 +9,11 @@ import { routes, MAX_PATHS, type Arc } from "./route.ts";
 type PathStep = Omit<Results["steps"][number], "path" | "order">;
 interface PathArc extends Arc { steps: PathStep[]; verdict: Verdict; bestCase?: Verdict; truncated: boolean }
 
-function connectionArcs(scene: Scene, result: Results, plugin: DomainPlugin, demandRow: number, carrier: { domain: string; mode: string }, choices: readonly Choice[]): PathArc[] {
+function connectionArcs(scene: Scene, result: Results, plugin: DomainPlugin, demandRow: number, carrier: Carrier, choices: readonly Choice[]): PathArc[] {
   const arcs: PathArc[] = [];
   const demand = result.demands[demandRow]!;
-  const service = { ...demand, mode: carrier.mode };
+  const service = { ...demand, mode: carrier.mode, unit: carrier.conversion?.unit ?? demand.unit,
+    requested: demand.requested === null ? null : demand.requested * (carrier.conversion?.perUnit ?? 1) };
   const pending = attachmentCandidates(scene, demand.via);
   result.linkResources.forEach((link, resource) => {
     if (link.pool || link.service || link.domain !== carrier.domain) return;
@@ -26,7 +27,7 @@ function connectionArcs(scene: Scene, result: Results, plugin: DomainPlugin, dem
       const ports = physical.filter(p => p.kind === "mate").flatMap(p => [p.entry, p.exit]);
       for (const row of rows) {
         const option = result.options[row]!;
-        if (option.mode !== carrier.mode || option.unit !== demand.unit) continue;
+        if (option.mode !== carrier.mode || option.unit !== service.unit) continue;
         let match = result.matches.find(m => m.demand === demandRow && m.option === row);
         if (!match) {
           const raw = plugin.match({ scene, connection, direction, ports }, option, demand, demand.workload);
@@ -141,9 +142,11 @@ export function paths(scene: Scene, plugins: readonly DomainPlugin[], result: Re
       const d = { ...trace, requested };
       const demand = result.demands.push({ ...d, workload }) - 1;
       const stops = [w.from, ...d.via, w.to];
-      const carriers = d.carriers ?? stops.slice(1).map(() => ({ domain: w.domain, mode: d.mode }));
+      const carriers: readonly Carrier[] = d.carriers ?? stops.slice(1).map(() => ({ domain: w.domain, mode: d.mode }));
       const invalid = d.via.some(node => !Number.isInteger(node) || !scene.nodes[node]) ? "via"
-        : carriers.length !== stops.length - 1 || carriers.some(c => !plugins.some(p => p.id === c.domain) || !c.mode) ? "carriers" : null;
+        : carriers.length !== stops.length - 1 || carriers.some(c => !plugins.some(p => p.id === c.domain) || !c.mode ||
+          c.conversion && (!c.conversion.unit || !Number.isFinite(c.conversion.perUnit) || !Number.isFinite(1 / c.conversion.perUnit) || c.conversion.perUnit <= 0 ||
+            requested !== null && !Number.isFinite(requested * c.conversion.perUnit))) ? "carriers" : null;
       if (invalid) {
         result.errors.push({ domain: plugin.id, stage: "demand", row: workload, field: invalid, spec: "" });
         result.paths.push({ workload, demand, verdict: "unknown", key: "", truncated: false });

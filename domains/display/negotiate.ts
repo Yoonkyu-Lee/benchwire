@@ -139,7 +139,7 @@ export function negotiateDisplay({ scene, connection, ports }: Link): DisplayOpt
       const pins = [pinAt(claims[0]), pinAt(claims[1])] as const;
       const [source, sink] = pins;
       const pin = source ?? sink;
-      if (pin === null || !profile.pins.includes(pin) || source !== null && sink !== null && source !== sink) return [];
+      if (pin !== null && !profile.pins.includes(pin) || source !== null && sink !== null && source !== sink) return [];
       return optionsFor(profile.id, pins, claims.filter(row => row !== undefined));
     });
     if (options.length) return options;

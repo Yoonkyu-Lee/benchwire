@@ -152,12 +152,13 @@ function altModePins(scene: Link["scene"], ports: number[]) {
   const pairs = interfaces(ports[0]).flatMap(a => ends.flatMap(b => supports(a.role, "source") && supports(b.role, "sink") ||
     supports(a.role, "sink") && supports(b.role, "source") ? [[a.row, b.row]] : []));
   function claims(profile: string, allowed: readonly string[]) {
-    return pairs.map(pair => pair.map(row => effectiveClaim(scene, "interface", row, "display", "pin", profile)))
-      .find(rows => {
+    const matches = pairs.map(pair => pair.map(row => effectiveClaim(scene, "interface", row, "display", "pin", profile)))
+      .filter(rows => {
         const [a, b] = rows.map(row => row === undefined ? null : scene.claims[row]!.value as string | null);
         const pin = a ?? b;
-        return !!pin && allowed.includes(pin) && (a === null || b === null || a === b);
+        return pin == null || allowed.includes(pin) && (a === null || b === null || a === b);
       });
+    return matches.find(rows => rows.every(row => row !== undefined && scene.claims[row]!.value !== null)) ?? matches[0];
   }
 
   const d = claims("dp-2lane", ["D"]);

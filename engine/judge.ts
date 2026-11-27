@@ -71,6 +71,15 @@ export function judgeConnections(scene: Scene, plugins: readonly DomainPlugin[],
       if (!groups.length) groups.push({ domain: "", rows: [] });
       for (const { domain, rows } of groups) {
         const eligible = rows.filter(i => !profile || !result.options[i]!.profile || result.options[i]!.profile === profile);
+        if (!profile && rows.some(i => result.options[i]!.profile && result.options[i]!.verdict !== "impossible")) {
+          const first = result.options[rows[0]!]!;
+          const outcome = result.outcomes.push({ subjectKind:"connection", subjectRow:connection, scenario, direction, domain,
+            path:null, verdict:"unknown", mode:"", unit:first.unit, label:"연결 설정 미정",
+            ...(first.pool ? {pool:{domain:first.pool.domain,id:first.pool.id}} : {}) }) - 1;
+          const parents = rows.map(i => linkReason(scene,result,outcome,i));
+          addReason(result,{outcome,stage:"negotiate",rule:"활성 요청에서 연결 설정을 정하지 않음",targetKind:"connection",targetRow:connection},[],parents);
+          continue;
+        }
         if (!eligible.length) {
           const steps = result.physical.filter(s => s.connection === connection && s.direction === direction);
           const link = result.linkResources.find(l => l.connection === connection && l.direction === direction && l.domain === domain);

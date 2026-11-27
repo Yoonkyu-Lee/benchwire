@@ -25,23 +25,22 @@ export function standingLoads(scene: Scene): StandingLoad[] {
       const sourceItem = scene.ports[from]!.item;
       const attachment = effectiveClaim(scene, "port", from, "", "attachment")!;
       const start = scene.claims[attachment]!.reference;
-      if (start != null) {
-        // 출력 노드에서 거슬러 올라가 실제로 그 포트에 공급하는 내부 엣지의 자원만 차감한다.
-        inputs.push(attachment);
-        const upstream = new Set([start]);
-        for (const node of upstream) scene.edges.forEach((edge, row) => {
-          if (edge.item !== sourceItem || edge.to !== node) return;
-          upstream.add(edge.from);
-          inputs.push(edge.evidence);
-          for (const use of scene.resourceUses) {
-            if (use.edge !== row) continue;
-            const resource = scene.resources[use.resource]!;
-            if (resource.domain !== POWER || resource.unit !== POWER_UNIT) continue;
-            if (!targets.some(t => "resource" in t && t.resource === use.resource)) targets.push({ resource: use.resource });
-            inputs.push(use.evidence);
-          }
-        });
-      }
+      inputs.push(attachment);
+      // 부착점이 미확인이면 이 실물의 후보 노드마다 연결될 수 있는 자원을 보존한다.
+      const upstream = new Set(start == null ? scene.nodes.flatMap((node, i) => node.item === sourceItem ? [i] : []) : [start]);
+      for (const node of upstream) scene.edges.forEach((edge, row) => {
+        if (edge.item !== sourceItem || edge.to !== node) return;
+        upstream.add(edge.from);
+        inputs.push(edge.evidence);
+        for (const use of scene.resourceUses) {
+          if (use.edge !== row) continue;
+          const resource = scene.resources[use.resource]!;
+          if (resource.domain !== POWER || resource.unit !== POWER_UNIT) continue;
+          if (!targets.some(t => "resource" in t && t.resource === use.resource))
+            targets.push({ resource: use.resource, ...(start == null ? { possible: true } : {}) });
+          inputs.push(use.evidence);
+        }
+      });
 
       const amount = scene.claims[reserve]!.value as number | null;
       loads.push({ item: scene.ports[to]!.item, id: "reserveW:" + scene.ports[to]!.id, amount, unit: POWER_UNIT, targets,

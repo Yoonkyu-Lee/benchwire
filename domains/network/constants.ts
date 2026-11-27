@@ -1,5 +1,8 @@
 // network 영역이 쓰는 이더넷 PHY 속도, 구리 채널 도달 거리, 프레임과 PoE 규격값을 둔다.
 
+// IEC 80000-13의 옥텟 한 개는 8 bit다. 두 전송률 모두 십진 메가 단위를 쓴다.
+export const BITS_PER_BYTE = 8;
+
 // 명목 MAC 속도는 한 방향 기준이다.
 // 출처: IEEE 802.3 개정 802.3i·u·ab·bz·an, Clause 14·25·40·126·55 (신뢰도: official)
 export const ETHERNET_BASE_T_RATES = [

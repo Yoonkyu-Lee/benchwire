@@ -38,10 +38,11 @@ function candidatesFor(scene: Scene, plugins: readonly DomainPlugin[], result: R
         .filter(u => u.coefficient > 0 || u.fixed > 0 || u.unknown);
       for (const s of steps) if (s.option !== null && p.verdict !== "impossible") {
         const o = result.options[s.option]!;
-        uses.push({ resource: scene.resources.length + (o.serviceResource ?? o.linkResource), option: s.option, coefficient: d.elastic ? 1 : 0,
-          fixed: d.elastic ? 0 : d.requested ?? 0, rule: "같은 방향의 링크 한도", inputs: o.inputs, specs: o.specs });
+        const rate = s.carrier?.conversion?.perUnit ?? 1;
+        uses.push({ resource: scene.resources.length + (o.serviceResource ?? o.linkResource), option: s.option, coefficient: d.elastic ? rate : 0,
+          fixed: d.elastic ? 0 : (d.requested ?? 0) * rate, rule: "같은 방향의 링크 한도", inputs: o.inputs, specs: o.specs });
         if (o.poolResource !== undefined) {
-          const pool = result.linkResources[o.poolResource]!.pool!, scale = o.pool!.perUnit;
+          const pool = result.linkResources[o.poolResource]!.pool!, scale = rate * o.pool!.perUnit;
           uses.push({ resource: scene.resources.length + o.poolResource, option: s.option, pool: o.poolResource,
             coefficient: d.elastic ? scale : 0, fixed: d.elastic ? 0 : (d.requested ?? 0) * scale,
             rule: pool.rule, inputs: pool.inputs, specs: pool.specs });
@@ -54,7 +55,7 @@ function candidatesFor(scene: Scene, plugins: readonly DomainPlugin[], result: R
       if (p.verdict === "impossible") {
         for (const step of steps) if (step.option !== null) {
           const o = result.options[step.option]!;
-          if (o.verdict === "impossible" || o.unit !== d.unit || o.mode !== (step.carrier?.mode ?? d.mode)) continue;
+          if (o.verdict === "impossible" || o.unit !== (step.carrier?.conversion?.unit ?? d.unit) || o.mode !== (step.carrier?.mode ?? d.mode)) continue;
           if (o.limit === 0) solo.bindings.push(scene.resources.length + (o.serviceResource ?? o.linkResource));
           if (o.poolResource !== undefined) {
             const pool = result.linkResources[o.poolResource]!.pool!;
@@ -89,16 +90,16 @@ function candidatesFor(scene: Scene, plugins: readonly DomainPlugin[], result: R
   });
 }
 
-function prepare(scene: Scene, plugins: readonly DomainPlugin[], locked?: Plan[], modeLock?: number) {
+function prepare(scene: Scene, plugins: readonly DomainPlugin[], locked?: (Plan | undefined)[], modeLock?: number) {
   const result: Results = { physical: [], options: [], demands: [], paths: [], steps: [], resourceUsage: [], allocations: [], bindings: [], outcomes: [],
-    reservations: [], choices: [], searches: [], standingErrors: [], standingLoads: [], matches: [], assessments: [], measures: [], possibleVerdicts: [], quests: [], rangeInputs: [], wirings: [],
+    reservations: [], choices: [], searches: [], standingErrors: [], standingLoads: [], matches: [], assessments: [], measures: [], possibleVerdicts: [], quests: [], rangeInputs: [], wirings: [], profileWorlds: [],
     metrics: [], reasons: [], reasonInputs: [], reasonParents: [], reasonSpecs: [], needs: [], errors: [], linkResources: [],
     specSources: plugins.flatMap(p => p.sources.map(s => ({ ...s, domain: p.id }))) };
   negotiate(scene, plugins, result);
   const gross = { options: result.options.map(o => o.limit), pools: result.linkResources.map(l => l.pool?.limit ?? null) };
   reserveStanding(scene,plugins,result);
   const possibleLinks = scene.workloads.map(() => new Set<number>());
-  if (!locked && result.options.some(o => o.profile)) {
+  if ((!locked || locked.some(p => !p)) && result.options.some(o => o.profile)) {
     const discovery: Results = { ...result, paths: [], steps: [], demands: [], matches: [] };
     const routeInputs: RouteInputs[] = [];
     paths(scene,plugins,discovery,routeInputs);
@@ -193,14 +194,15 @@ function evaluatePlans(scene: Scene, plugins: readonly DomainPlugin[], scenario?
   return selections.map((selected,i) => {
     const tables = i === selections.length-1 ? prepared.result : structuredClone(prepared.result);
     const result = render(scene,plugins,tables,routes,selected,prepared.gross);
-    resolveUnknowns(scene,plugins,result,(world,domains) => {
+    resolveUnknowns(scene,plugins,result,(world,domains,profileChanged) => {
       const modeLock = i > 0 && scenario !== undefined && scenarios[scenario]!.some(p => p !== selected[scenario] &&
         p.choices === selected[scenario]!.choices) ? scenario : undefined;
-      const next = prepare(world,domains,selected,modeLock);
+      const locks = profileChanged ? (i === 0 ? undefined : selected.map((p,j) => j === scenario ? p : undefined)) : selected;
+      const next = prepare(world,domains,locks,modeLock);
       const plans = next.scenarios.map(list => list[0]!);
       return render(world,domains,next.result,next.routes,plans,next.gross);
     },routes);
-    return { choices: scenario === undefined ? [] : selected[scenario]!.choices, result };
+    return { choices: scenario === undefined ? [] : result.choices.filter(c => c.scenario === scenario).map(({scenario: _scenario,...choice}) => choice), result };
   });
 }
 

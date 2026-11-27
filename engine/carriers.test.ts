@@ -287,3 +287,13 @@ test("T8 전달 범위가 충전 경계를 가로지르면 assess의 두 판정�
   assert.equal(r.outcomes[outcome]!.verdict, "unknown");
   assert.deepEqual(r.measures.filter(m => m.outcome === outcome).map(m => [m.low,m.high]), [[-10,10],[-10,10]]);
 });
+
+test("T4 역환산을 유한하게 표현할 수 없는 운반 단위는 계약 오류와 미확인으로 남는다", () => {
+  const {client, run} = setup([100]);
+  const demand = client.demand;
+  client.demand = (scene,work) => demand(scene,work).map(d => ({...d,
+    carriers:[{domain:"trial",mode:"bulk",conversion:{unit:"MB/s",perUnit:Number.MIN_VALUE}}]}));
+  const {r,row} = run();
+  assert.ok(r.errors.some(e => e.stage === "demand" && e.field === "carriers"));
+  assert.equal(r.outcomes[row(0)]!.verdict,"unknown");
+});

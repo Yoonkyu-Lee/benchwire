@@ -98,10 +98,13 @@ export function planModes(scene: Scene, plugins: readonly DomainPlugin[], r: Res
     });
     const score: number[] = [];
     const success = (s: Share) => s.verdict === "ok" || s.verdict === "conditional";
-    for (const rank of ranks) {
-      const tier = goals.flatMap((s,i) => members[i]!.priority === rank && success(s) ? [i] : []);
-      score.push(tier.length, -tier.reduce((n,i) => n + picked[i]!.preference,0), tier.filter(i => goals[i]!.verdict === "ok").length);
+    function scoreTier(indices: number[]) {
+      const served = indices.filter(i => success(goals[i]!));
+      score.push(served.length, -served.reduce((sum,i) => sum + picked[i]!.preference,0),
+        served.filter(i => goals[i]!.verdict === "ok").length);
     }
+    for (const rank of ranks) scoreTier(members.flatMap((m,i) => m.priority === rank ? [i] : []));
+    scoreTier(active.flatMap((f,i) => f.elastic ? [] : [i]));
     score.push(goals.filter(success).length, goals.filter(s => s.verdict === "ok").length,
       -picked.reduce((n,c) => n + c.preference,0), goals.filter(s => s.verdict === "unknown").length,
       together.reduce((n,s,i) => n + (active[i]!.elastic && active[i]!.cap ? (s.value ?? 0) / active[i]!.cap! : 0),0));
@@ -141,8 +144,7 @@ export function reservationAlternatives(scene: Scene, plugins: readonly DomainPl
     const signature = JSON.stringify(together.map(s => [s.verdict,s.value]));
     if (alternatives.some(p => p.signature === signature)) continue;
     const advances = first.map(i => flows[i]!.workload);
-    alternatives.push({ ...plan, active: flows, together, signature, advances,
-      key: JSON.stringify([plan.key,advances.map(w => scene.workloads[w]!.id)]) });
+    alternatives.push({ ...plan, active: flows, together, signature, advances });
   }
   return alternatives;
 }

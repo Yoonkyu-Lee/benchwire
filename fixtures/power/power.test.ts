@@ -335,3 +335,30 @@ test("T8 순충전 범위는 0과 목표를 포함해 분류하고 생략한 목
   assert.deepEqual(assessCharge({ low: 10, high: 20 }, null).possible, ["ok", "impossible"]);
   assert.deepEqual(assessCharge({ low: 0, high: 0 }, 0, null).possible, ["ok", "conditional"]);
 });
+
+for (const state of ["5 W","한도 미확인","부착점 미확인","커넥터 미확인"]) test("T8 직결 출력에 반영하는 패스스루 입력 조건 · " + state, () => {
+  const s = read("passthrough");
+  s.claims[effectiveClaim(s,"resource",0,"power","capacity")!]!.value = 45;
+  s.connections.find(c => c.id === "down")!.from = s.ports.findIndex(p => p.item === 0 && p.id === "b");
+  const budget = s.claims[effectiveClaim(s,"item",0,"power","budget:a:a")!]!;
+  const a = s.claims.push({...budget,field:"budget:a+b:a",value:state === "5 W" ? 5 : state === "한도 미확인" ? null : 60})-1;
+  s.claims.push({...budget,field:"budget:a+b:b"});
+  const attachment = effectiveClaim(s,"port",s.connections[0]!.from,"","attachment")!;
+  const connector = effectiveClaim(s,"port",s.connections[0]!.from,"","connector")!;
+  const uncertain = state === "부착점 미확인" ? attachment : state === "커넥터 미확인" ? connector : a;
+  if (uncertain !== a) Object.assign(s.claims[uncertain]!,{value:null,reference:null,confidence:"unknown"});
+  const {result,work} = analyze(s), w = work("solo","primary"), m = w.metric("together");
+  assert.deepEqual([m.value,m.low,m.high],state === "5 W" ? [40,40,40] : [null,35,45]);
+  if (state !== "5 W") assert.ok(result.quests.some(q => q.outcome === w.outcome && q.claim === uncertain));
+  else assert.ok(w.claims.includes(a));
+});
+
+test("T8 입력 조합 한도가 0–60 W면 자체 소비 10 W 뒤의 입력은 0–50 W다", () => {
+  const s = read("passthrough");
+  const limit = effectiveClaim(s,"item",0,"power","budget:a:a")!;
+  Object.assign(s.claims[limit]!,{value:null,confidence:"unknown"});
+  const {result} = analyze(s);
+  const input = result.options.find(o => o.connection === 0 && o.direction === "forward" && o.unit === "W")!;
+  assert.deepEqual(input.bounds,{low:0,high:50});
+  assert.ok(input.inputs.includes(limit));
+});

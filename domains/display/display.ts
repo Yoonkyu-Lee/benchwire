@@ -1,5 +1,6 @@
 // display 영역의 스키마, 영상 협상, 작업 수요와 내부 자원 예약을 엔진 계약에 붙인다.
 import type { Consumption, DomainPlugin, Verdict } from "../../engine/contract.ts";
+import { DP_ALT_MODE_PIN_ASSIGNMENTS } from "./constants.ts";
 import { displayDemand, VIDEO_UNIT } from "./demand.ts";
 import { DSC_MODE, matchDisplay } from "./dsc.ts";
 import { attributes, params, paramsFor, request } from "./input.ts";
@@ -11,6 +12,12 @@ const STREAM_UNIT = "streams";
 
 export const display: DomainPlugin = {
   id: "display", sources, params, paramsFor, attributes, request, resourceUnits: [VIDEO_UNIT, STREAM_UNIT],
+  profileValues(claim) {
+    if (claim.ownerKind !== "interface" || claim.field !== "pin") return [];
+    // D 설정에서 D 이외의 값은 모두 같은 거절이다. 기본 핀은 다른 끝과 값 자체가 일치해야 한다.
+    if (claim.condition === "dp-2lane") return ["D","C"];
+    return DP_ALT_MODE_PIN_ASSIGNMENTS.map(row => row.pin);
+  },
   negotiate: negotiateDisplay, demand: displayDemand, match: matchDisplay,
   consume(scene, _workload, steps) {
     const streams = new Map<number, number[]>();

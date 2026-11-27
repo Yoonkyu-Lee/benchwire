@@ -1,6 +1,6 @@
 // 이더넷과 PoE의 협상·수요·공유 자원 소비를 네트워크 영역으로 등록한다.
-import type { DomainPlugin, Verdict } from "../../engine/contract.ts";
-import { MAC_PAYLOAD_FRACTION } from "./constants.ts";
+import { effectiveClaim, type Demand, type DomainPlugin, type Verdict } from "../../engine/contract.ts";
+import { BITS_PER_BYTE, MAC_PAYLOAD_FRACTION } from "./constants.ts";
 import { negotiateEthernet } from "./ethernet.ts";
 import { readNetworkClaim } from "./evidence.ts";
 import {
@@ -24,8 +24,21 @@ export const network: DomainPlugin = {
     const inputs: number[] = [];
     const power = scene.claims.some(c => c.ownerKind === "workload" && c.owner === workload && c.domain === NETWORK && c.field === "watts");
     const requested = readNetworkClaim(scene, inputs, "workload", workload, power ? "watts" : "throughput") as number | null;
-    return [{ mode: power ? POE : MAC, unit: power ? WATTS : MBPS, elastic: !power, preference: 0, via: [], requested,
-      rule: power ? "수전 포트의 고정 전력 요청" : "태그 없는 MTU 1500 MAC 페이로드 요청", inputs, specs: power ? [] : [FRAMING] }];
+    const direct: Demand = { mode: power ? POE : MAC, unit: power ? WATTS : MBPS, elastic: !power, preference: 0, via: [], requested,
+      rule: power ? "수전 포트의 고정 전력 요청" : "태그 없는 MTU 1500 MAC 페이로드 요청", inputs, specs: power ? [] : [FRAMING] };
+    if (power) return [direct];
+    const w = scene.workloads[workload]!, demands = [direct];
+    const ethernet = {domain:NETWORK, mode:MAC};
+    const pcie = {domain:"data", mode:"pcie-tunnel", conversion:{unit:"MB/s",perUnit:1 / BITS_PER_BYTE}};
+    for (const iface of scene.interfaces) {
+      if (iface.domain !== NETWORK || iface.protocol !== ETHERNET) continue;
+      const attachment = effectiveClaim(scene,"port",iface.port,"","attachment")!;
+      const node = scene.claims[attachment]!.reference;
+      if (node == null || scene.nodes[node]!.kind !== "pcie-nic" || w.from === node || w.to === node) continue;
+      for (const carriers of [[pcie,ethernet],[ethernet,pcie]]) demands.push({...direct, via:[node], carriers,
+        inputs:[...inputs,iface.evidence,attachment], rule:"PCIe NIC 경유 MAC 페이로드 · 8 Mbps당 터널 1 MB/s"});
+    }
+    return demands;
   },
   consume(scene, _workload, steps, demand, options) {
     if (demand.mode === POE) {

@@ -156,3 +156,63 @@ test("T2 두 방향에서 핀 D는 USB 3.x 한 레인만 남기고 USB 전용은
     assert.ok(options[2]!.inputs.some(row => scene.claims[row]!.field === "pin" && scene.claims[row]!.value === "D"));
   }
 });
+
+test("T2 우선순위 생략 시 고정 영상 요청을 먼저 세우고 명시적인 허브 우선은 그보다 앞선다", () => {
+  const s = fixture("scene");
+  for (const m of s.members) { delete m.priority; delete m.evidence; }
+  const profiles = evaluateVariants(s,plugins,0);
+  assert.equal(profiles[0]!.choices[0]!.profile,"dp-4lane");
+  assert.ok(profiles.some(v => v.choices[0]?.profile === "dp-2lane"));
+  const base = inspect(s,profiles[0]!.result);
+  assert.equal(base.work("video").metric.value,15.674472);
+  assert.equal(base.work("hub").metric.value,53.248);
+  s.members.find(m => s.workloads[m.workload]!.id === "hub")!.priority = 0;
+  assert.equal(evaluateVariants(s,plugins,0)[0]!.choices[0]!.profile,"dp-2lane");
+});
+
+for (const both of [false,true]) test("T2 핀 C " + (both ? "양쪽" : "한쪽") + " 미확인 시 핀 D 폴백과 허브 범위를 함께 설명한다", () => {
+  const s = fixture("scene");
+  const pins = s.claims.flatMap((c,i) => c.field === "pin" && c.value === "C" ? [i] : []).slice(0,both ? 2 : 1);
+  for (const i of pins) Object.assign(s.claims[i]!,{value:null, confidence:"unknown"});
+  const r = evaluate(s,plugins);
+  for (const [id,low,high,possible] of [
+    ["video",12.542736,15.674472,["conditional"]],["hub",53.248,400,["conditional","ok"]],
+  ] as const) {
+    const row = r.outcomes.findIndex(o => o.subjectKind === "workload" && s.workloads[o.subjectRow]!.id === id);
+    const m = r.metrics.find(m => m.outcome === row && m.kind === "together")!;
+    assert.deepEqual([m.value,m.low,m.high],[null,low,high]);
+    for (const world of [m.lowWorld,m.highWorld]) {
+      assert.ok(world !== undefined);
+      assert.ok(pins.every(pin => r.profileWorlds.some(v => v.world === world && v.claim === pin)));
+    }
+    assert.deepEqual(r.possibleVerdicts.filter(v => v.outcome === row).map(v => v.verdict).sort(),possible);
+    for (const pin of pins) assert.ok(r.quests.some(q => q.outcome === row && q.claim === pin && q.impact === (id === "hub" ? "verdict" : "range")));
+  }
+  assert.equal(r.choices.length,0);
+});
+
+test("T2 작업이 없는 연결은 상호 배타적인 핀 배정을 동시에 확정하지 않는다", () => {
+  const s = fixture("scene");
+  s.members = [];
+  const r = evaluate(s,plugins);
+  const unset = r.outcomes.filter(o => o.subjectKind === "connection" && o.direction === "forward" && o.label.includes("설정 미정"));
+  assert.ok(unset.length >= 2);
+  assert.ok(unset.every(o => o.verdict === "unknown" && o.option === undefined));
+  assert.ok(unset.every(o => r.reasons.some(reason => reason.outcome === r.outcomes.indexOf(o) && reason.stage === "negotiate")));
+  s.claims.find(c => c.field === "pin" && c.value === "C")!.value = null;
+  const pending = evaluate(s,plugins);
+  assert.ok(pending.outcomes.some(o => o.subjectKind === "connection" && o.domain === "display" && o.label.includes("설정 미정")));
+});
+
+test("T2 양 끝의 기본 핀과 대안 핀이 모두 미확인이어도 허브 범위와 확인할 핀이 남는다", () => {
+  const s = fixture("scene");
+  const pins = s.claims.flatMap((c,i) => c.field === "pin" && (c.value === "C" || c.value === "D") ? [i] : []);
+  for (const pin of pins) Object.assign(s.claims[pin]!,{value:null,confidence:"unknown"});
+  const r = evaluate(s,plugins);
+  const hub = r.outcomes.findIndex(o => o.subjectKind === "workload" && s.workloads[o.subjectRow]!.id === "hub");
+  const m = r.metrics.find(m => m.outcome === hub && m.kind === "together")!;
+  assert.deepEqual([m.value,m.low,m.high],[null,53.248,400]);
+  assert.ok(r.quests.some(q => q.outcome === hub && pins.includes(q.claim)));
+  assert.deepEqual(r.choices,[]);
+  assert.ok(r.outcomes.some(o => o.subjectKind === "connection" && o.scenario === 0 && o.domain === "display"));
+});

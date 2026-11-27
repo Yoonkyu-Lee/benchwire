@@ -1,5 +1,5 @@
 // 판정 결과와 중간 계산을 번호로 연결해 출력에서 입력 주장까지 되짚는다.
-import type { Choice, Demand, Direction, KnownVerdict, Measure, Option, Pool, Step, Trace, Verdict } from "./contract.ts";
+import type { Carrier, Choice, Demand, Direction, KnownVerdict, Measure, Option, Pool, Step, Trace, Verdict } from "./contract.ts";
 
 export type Run = "solo" | "together";
 export type Target = "demand" | "workload" | "connection" | "edge" | "port" | "resource" | "linkResource";
@@ -12,7 +12,7 @@ export interface Results {
   choices: (Choice & { scenario: number })[];
   searches: { scenario: number; examined: number; truncated: boolean }[];
   standingErrors: { domain: string; item: number; id: string; field: string }[];
-  standingLoads: (Trace & { item: number; id: string; domain: string; amount: number | null; unit: string;
+  standingLoads: (Trace & { item: number; id: string; domain: string; amount: number | null; bounds?: { low: number; high: number }; unit: string;
     kind: "scene" | "link"; resource: number })[];
   physical: PhysicalStep[];
   linkResources: { connection: number; domain: string; direction: Direction; absentDomain: number[]; pool?: Pool; service?: { mode?: string; unit: string; poolResource?: number } }[];
@@ -20,6 +20,7 @@ export interface Results {
   possibleVerdicts: { outcome: number; verdict: Verdict }[];
   quests: { outcome: number; claim: number; instruction: string; impact?: "range" | "verdict" }[];
   rangeInputs: { outcome: number; claim: number }[];
+  profileWorlds: { world: number; claim: number; value: string | number | boolean }[];
   wirings: { world: number; claim: number; node: number }[];
   specSources: { domain: string; id: string; title: string; locator: string }[];
   reasonSpecs: { reason: number; source: number }[];
@@ -29,7 +30,7 @@ export interface Results {
   demands: (Demand & { workload: number })[];
   paths: { workload: number; demand: number; verdict: Verdict; bestCase?: Verdict; conditioned?: boolean; disconnected?: number[]; disconnectedEdges?: number[]; key: string; truncated: boolean }[];
   matches: (Trace & { demand: number; option: number; verdict: Verdict })[];
-  steps: (Step & { carrier?: { domain: string; mode: string }; path: number; order: number })[];
+  steps: (Step & { carrier?: Carrier; path: number; order: number })[];
   resourceUsage: { scenario: number; resourceKind: "scene" | "link"; resource: number; unit: string;
     used: number | null; capacity: number | null; basis: "calculated" | "assumed"; reasonRows: number[] }[];
   allocations: { scenario: number; workload: number; run: Run; value: number | null; unit: string }[];

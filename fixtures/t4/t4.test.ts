@@ -205,3 +205,37 @@ test("T4 스트림 예산 한 자리로는 두 영상의 동시 예약을 만족
   }).sort();
   assert.deepEqual(reservations, ["video-a", "video-b"]);
 });
+
+test("T4 호스트의 800 Mbps 작업 하나가 PCIe와 이더넷을 거쳐 두 예산을 소비한다", () => {
+  const s = fixture("scene");
+  const ethernet = s.workloads.find(w => w.id === "ethernet")!;
+  ethernet.from = s.workloads.find(w => w.id === "nic-pcie")!.from;
+  const result = evaluate(s,plugins);
+  const row = result.outcomes.findIndex(o => o.subjectKind === "workload" && o.scenario === 0 && s.workloads[o.subjectRow] === ethernet);
+  const m = result.metrics.find(m => m.outcome === row && m.kind === "together")!;
+  assert.deepEqual([result.outcomes[row]!.verdict,m.value,m.unit],["ok",800,"Mbps"]);
+  const hops = result.steps.filter(step => step.path === result.outcomes[row]!.path && step.option !== null)
+    .map(step => result.options[step.option!]!);
+  assert.deepEqual(hops.map(o => [o.mode,o.unit]),[["pcie-tunnel","MB/s"],["mac","Mbps"]]);
+  assert.ok(hops[1]!.limit! > 975 && hops[1]!.limit! < 976);
+  assert.ok(hops.every(o => o.inputs.some(claim => result.reasonInputs.some(i => i.claim === claim && result.reasons[i.reason]!.outcome === row))));
+  const pcie = result.resourceUsage.find(u => u.scenario === 0 && u.resourceKind === "link" &&
+    result.linkResources[u.resource]!.direction === "forward" && result.linkResources[u.resource]!.service?.mode === "pcie-tunnel")!;
+  assert.equal(pcie.used,200);
+});
+
+test("T4 혼잡한 PCIe 예산의 0.8 Gbps를 50 MB/s와 400 Mbps로 나눈다", () => {
+  const s = fixture("scene");
+  const ethernet = s.workloads.findIndex(w => w.id === "ethernet"), pcie = s.workloads.findIndex(w => w.id === "nic-pcie");
+  s.workloads[ethernet]!.from = s.workloads[pcie]!.from;
+  s.members = [ethernet,pcie].map(workload => ({workload,scenario:0}));
+  for (const c of s.claims) if (c.field === "tunnelGbps") c.value = 0.8;
+  const {work,result} = inspect(s);
+  assert.deepEqual([work("one-video","nic-pcie").together.value,work("one-video","ethernet").together.value],[50,400]);
+  assert.deepEqual(result.errors,[]);
+  const w = s.workloads[ethernet]!;
+  [w.from,w.to] = [w.to,w.from];
+  const reverse = inspect(s).work("one-video","ethernet");
+  assert.equal(reverse.together.value,800);
+  assert.deepEqual(reverse.links.map(l => l.option.mode),["mac","pcie-tunnel"]);
+});

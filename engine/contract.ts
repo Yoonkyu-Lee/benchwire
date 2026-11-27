@@ -1,5 +1,5 @@
 // 영역은 저장 입력의 모양과 협상·수요·소비 규칙을 선언하고 계산에 읽은 주장 번호를 돌려준다.
-import type { Scene } from "./scene.ts";
+import type { Claim, Scene, Value } from "./scene.ts";
 export { effectiveClaim } from "./scene.ts";
 export type { Scene, Claim, Value } from "./scene.ts";
 
@@ -10,7 +10,7 @@ export type KnownVerdict = Exclude<Verdict, "unknown">;
 export interface Interval { low: number | null; high: number | null }
 export interface Measure extends Interval { kind: string; unit: string }
 export interface Choice extends Trace { connection: number; profile: string; domain: string }
-export type LoadTarget = { resource: number } | { connection: number; direction: Direction; domain: string; mode: string };
+export type LoadTarget = { resource: number; possible?: boolean } | { connection: number; direction: Direction; domain: string; mode: string };
 export interface StandingLoad extends Trace {
   item: number; id: string; amount: number | null; unit: string; targets: readonly LoadTarget[];
 }
@@ -30,9 +30,14 @@ export interface Option extends Trace {
   // limit가 null일 때 같은 단위의 유한한 0 ≤ low ≤ high를 준다. low는 해당 모드에서 보장한 한도다.
   bounds?: { low: number; high: number };
 }
+export interface Carrier {
+  domain: string; mode: string;
+  // 작업의 수요 한 단위가 쓰는 운반 서비스의 단위와 양이다. 생략하면 같은 단위다.
+  conversion?: { unit: string; perUnit: number };
+}
 export interface Demand extends Trace {
   // 출발·경유·도착 노드 사이의 구간마다 사용할 운반 서비스다.
-  carriers?: readonly { domain: string; mode: string }[];
+  carriers?: readonly Carrier[];
   mode: string; preference: number; elastic: boolean; via: number[]; requested: number | null; unit: string;
 }
 export interface Step { kind: "edge" | "connection"; row: number; from: number; to: number; direction: Direction; option: number | null }
@@ -46,6 +51,8 @@ export interface PolicyContext {
 // limit는 해당 자원 단위의 작업별 사용 상한이다. 적용할 표가 없으면 null을 돌려준다.
 export interface PolicyLimit extends Trace { workload: number; limit: number }
 export interface DomainPlugin {
+  // 연결 설정을 바꿀 수 있는 미확인 주장에 대해 가능한 이산 값을 준다.
+  profileValues?(claim: Claim): readonly Exclude<Value, null>[];
   standingLoads?(scene: Scene): readonly StandingLoad[];
   pools?(link: Link): readonly Pool[];
   match?(link: Link, option: Option, demand: Demand, workload: number): Trace & { verdict: Verdict };
