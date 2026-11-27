@@ -15,6 +15,7 @@ import { mountGoals } from "./goals.ts";
 import { INVENTORY_DRAG, MODEL_DRAG, mountInventory } from "./inventory.ts";
 import { mountLayers } from "./layers.ts";
 import { mountQuests } from "./quests.ts";
+import { mountRecommendations } from "./recommend-view.ts";
 import { resultView, type ResultView } from "./results.ts";
 import { mountScenario } from "./scenario.ts";
 import { mountSwap } from "./swap-view.ts";
@@ -118,6 +119,7 @@ export function mountWorkbench(root: HTMLElement, initial: SceneDocument, librar
     selectResource(row) { panel.choose({ kind: "resource", row }); },
   });
   const makeInventory = () => mountInventory(inventoryRoot, library, {
+    recommend:list=>recommendations(list),
     add(item) {
       edit({ kind: "add-item", item, position: canvas.emptyPosition(models.get(modelKey(item))!) });
     },
@@ -218,6 +220,11 @@ export function mountWorkbench(root: HTMLElement, initial: SceneDocument, librar
     canvas.setReduced(reducedMotion);
   };
   const compareSlot = options.onSaveCopy && mountSwap(root, documents, options.onSaveCopy);
+  const recommendations=mountRecommendations(documents,()=>{
+    const id=readScenario();
+    return assessment && evaluated===assessment && primary
+      ? {doc:scene,before:{scene:assessment.scene,result:primary},scenario:id,library} : undefined;
+  },edit=>compareSlot?.(scene,edit.target,edit.model,readScenario(),edit));
   function dropTarget(target: EventTarget | null) {
     return target instanceof Element ? target.closest<SVGGElement>("[data-instance]")?.dataset.instance : undefined;
   }
@@ -299,7 +306,10 @@ export function mountWorkbench(root: HTMLElement, initial: SceneDocument, librar
     display.setAttribute("data-assessing", "");
     progress.textContent = "판정 계산 중…";
     if (geometryChanged) render();
-    else updateScenario();
+    else {
+      updateScenario();
+      inventory(scene, cable?.instanceId, measured);
+    }
     void evaluateInWorker(root, { kind: "primary", document: scene, documents }).then(reply => {
       if (!reply || assessment !== loaded || !root.contains(display)) return;
       canvas.afterGesture(() => {

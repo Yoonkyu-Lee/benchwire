@@ -1,0 +1,107 @@
+// 추천한 단일 편집을 실제로 적용한 장면의 목표, 동시 부하, 순위를 검증한다.
+import assert from "node:assert/strict";
+import {test} from "node:test";
+import {resolve} from "node:path";
+import {openLibrary} from "../server/library.ts";
+import {plugins} from "../domains/registry.ts";
+import {loadSceneDocuments} from "../scene/load.ts";
+import {evaluate} from "../engine/evaluate.ts";
+import {modelKey,type SceneDocument,type Model} from "./document.ts";
+import {recommendationEdits,reviewRecommendation,rankRecommendations} from "./recommend.ts";
+
+const library=openLibrary(resolve(),resolve("work","추천-시험"));
+const {models,connectors}=library.describe();
+const model=(id:string)=>models.find(m=>m.modelId===id)!;
+function setup(additional:Model[]) {
+  const doc=JSON.parse(library.readScene("network")!.text) as SceneDocument;
+  const documents={models:new Map([...models,...additional].map(m=>[modelKey(m),m])),connectors};
+  const scenario=doc.scenarios.find(s=>s.members.includes("lan-a") && s.members.includes("lan-b"))!;
+  scenario.goals=[{id:"전송 A",kind:"metric",metric:"delivery",unit:"Mbps",minimum:800,run:"together",workloads:["lan-a"]},
+    {id:"전송 B 유지",kind:"metric",metric:"delivery",unit:"Mbps",minimum:500,run:"together",workloads:["lan-b"]}];
+  function snapshot(d:SceneDocument) {
+    const scene=loadSceneDocuments(d,documents,plugins);
+    return {scene,result:evaluate(scene,plugins)};
+  }
+  const owned={instanceId:"spare",state:"owned" as const,modelId:additional[0]!.modelId,revision:additional[0]!.revision};
+  const stock={models:additional,inventory:[owned],connectors};
+  const edits=()=>recommendationEdits(doc,documents,stock,snapshot(doc),scenario.id);
+  return {doc,documents,stock,scenario,snapshot,edits};
+}
+test("T5 병목 교체 사본에서 수치 목표를 달성하고 기존 목표를 깨는 후보는 뒤로 간다",()=>{
+  const fast=structuredClone(model("network-router"));fast.revision="fast";
+  fast.resources.forEach(r=>r.capacity.value=3000);
+  const slow=structuredClone(fast);slow.revision="one-port";
+  slow.ports.find(p=>p.id==="lan-b")!.interfaces[0]!.params.baseTModes!.value="100BASE-TX";
+  const f=setup([fast,slow]), before=f.snapshot(f.doc), plan=f.edits();
+  const cards=plan.edits.flatMap(edit=>{
+    const after=f.snapshot(edit.document);
+    const card=reviewRecommendation(before,after,edit,f.scenario.id);
+    if (!card) return [];
+    assert.deepEqual(after.result,f.snapshot(structuredClone(edit.document)).result);
+    assert.deepEqual(card.solved,["전송 A"]);
+    return [card];
+  }).sort(rankRecommendations);
+  assert.deepEqual(cards.map(c=>[c.edit.model.revision,c.lost]),[["fast",[]],["one-port",["전송 B 유지"]]]);
+  assert.equal(cards[0]!.edit.item.state,"owned");
+  const bad=structuredClone(cards[0]!.edit.document);
+  bad.scenarios.find(s=>s.id===f.scenario.id)!.members=["lan-a"];
+  bad.scenarios.find(s=>s.id===f.scenario.id)!.goals!.pop();
+  assert.equal(reviewRecommendation(before,f.snapshot(bad),cards[0]!.edit,f.scenario.id),null);
+});
+
+test("T5 충돌 후보 중 하나에서만 목표가 성립하면 같은 세계의 확인 조건을 붙인다",()=>{
+  const change=structuredClone(model("network-router"));change.revision="conflicted";
+  change.resources.forEach(r=>r.capacity.value=3000);
+  change.resources.find(r=>r.id==="uplink")!.capacity.conflicts=[{value:1000,confidence:"review",sources:[change.sources[0]!.id]}];
+  const f=setup([change]), edit=f.edits().edits.find(e=>e.target==="router")!;
+  const after=f.snapshot(edit.document);
+  const card=reviewRecommendation(f.snapshot(f.doc),after,edit,f.scenario.id);
+  assert.deepEqual(card?.solved,[]);
+  assert.equal(card.conditional[0]?.goal,"전송 A");
+  assert.ok(card.conditional[0]!.checks.some(s=>s.includes("3000")));
+  const row=after.result.goals.findIndex(goal=>goal.id==="전송 A" && after.scene.scenarios[goal.scenario]!.id===f.scenario.id);
+  const proof=after.result.goalSuccesses?.find(success=>success.goal===row);
+  assert.ok(proof);
+  const budget=proof.assignments.find(a=>after.scene.claims[a.claim]!.field==="capacity");
+  assert.equal(budget?.value,3000);
+  const capacity=change.resources.find(r=>r.id==="uplink")!.capacity;
+  capacity.value=budget.value;
+  delete capacity.conflicts;
+  assert.equal(f.snapshot(edit.document).result.goals[row]!.verdict,"ok");
+  capacity.value=1000;
+  assert.equal(f.snapshot(edit.document).result.goals[row]!.verdict,"impossible");
+});
+test("T5 결합 실패에 어댑터 하나를 끼우며 중복을 빼고 여덟 편집만 평가한다",()=>{
+  const adapters=Array.from({length:12},(_,i)=>({...model("network-copper"),kind:"adapter" as const,revision:"adapter-"+i}));
+  const f=setup(adapters);
+  f.scenario.goals![0]={id:"연결 회복",kind:"metric",metric:"delivery",unit:"Mbps",minimum:500,run:"together",workloads:["lan-a"]};
+  const link=f.doc.connections.find(c=>c.id==="lan-a")!;
+  link.parts=[];
+  const plan=f.edits();
+  assert.ok(plan.total>=12);assert.equal(plan.edits.length,8);
+  const inserted=plan.edits.find(e=>e.kind==="insert" && e.item.state==="owned")!;
+  assert.ok(inserted);
+  const parts=inserted.document.connections.find(c=>c.id===link.id)!.parts;
+  assert.equal(parts.length,1);assert.equal(parts[0]!.instanceId,inserted.item.instanceId);
+  assert.deepEqual(reviewRecommendation(f.snapshot(f.doc),f.snapshot(inserted.document),inserted,f.scenario.id)?.solved,["연결 회복"]);
+});
+
+
+test("T5 검산을 끝내지 못한 추천은 해당 목표와 사유를 남긴다", () => {
+  const change = structuredClone(model("network-router"));
+  change.revision = "open-modes";
+  change.resources.forEach(r => r.capacity.value = 3000);
+  const modes = change.ports.find(p => p.id === "lan-a")!.interfaces[0]!.params.baseTModes!;
+  Object.assign(modes, { value: null, confidence: "unknown" });
+  const f = setup([change]), edit = f.edits().edits.find(e => e.target === "router")!;
+  const before = f.snapshot(f.doc), after = f.snapshot(edit.document);
+  const goal = after.result.goals.find(g => g.id === "전송 A")!;
+  assert.equal(goal.verdict, "unknown");
+  assert.ok(goal.truncated);
+  assert.ok(goal.openClaims?.some(row => after.scene.claims[row]!.field === "baseTModes"));
+  const card = reviewRecommendation(before, after, edit, f.scenario.id);
+  assert.ok(card);
+  assert.deepEqual(card.solved, []);
+  assert.deepEqual(card.conditional, []);
+  assert.deepEqual(card.incomplete, ["전송 A"]);
+});

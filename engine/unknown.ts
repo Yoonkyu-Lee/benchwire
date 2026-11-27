@@ -309,6 +309,12 @@ function mergeGoalWorld(result: Results, sample: Results, scenarios: ReadonlySet
     if (first) { delete g.limitClaims; delete g.openClaims; }
     if (observed.limitClaims) g.limitClaims=[...new Set([...(g.limitClaims ?? []),...observed.limitClaims])];
     if (observed.openClaims?.length) g.openClaims=[...new Set([...(g.openClaims ?? []),...observed.openClaims])];
+    const success = sample.goalSuccesses?.find(w => w.goal === i);
+    if (!observed.truncated && (observed.verdict === "ok" || success) && !result.goalSuccesses?.some(w => w.goal === i)) {
+      const assignments = assigned.map(v => ({ claim: v.claim, value: readClaim(scene, v.claim).value! }));
+      assignments.push(...(success?.assignments ?? []).filter(a => !assignments.some(b => b.claim === a.claim)));
+      (result.goalSuccesses ??= []).push({ goal: i, assignments });
+    }
     const witnesses = result.goalWitnesses.filter(w => w.goal === i);
     if (witnesses.length < 2 && !observed.truncated) {
       const nested = sample.goalWitnesses.filter(w => w.goal === i);

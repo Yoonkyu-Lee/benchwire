@@ -1,5 +1,6 @@
 // 슬롯 사본의 위치를 확인하고 기술·비용·목표를 비교한 뒤 별도 장면으로 저장한다.
-import type { Snapshot } from "../engine/compare.ts";
+import { compare, type Snapshot } from "../engine/compare.ts";
+import type { RecommendationEdit } from "./recommend.ts";
 import type { PriceBook } from "../server/prices.ts";
 import { evaluateInWorker, loadAssessment, type Documents } from "./assessment.ts";
 import { calculateBudget, compareBudgets, unknownPrices } from "./budget.ts";
@@ -13,7 +14,7 @@ const fields: Readonly<Record<string, string>> = {
   bottleneck: "병목", assumption: "가정", quest: "검증 퀘스트", condition: "조건", need: "필요한 결합 형태",
 };
 const dollars = new Intl.NumberFormat("en-US", { style: "currency", currency: "USD", maximumFractionDigits: 0 });
-function money(cents: bigint) {
+export function money(cents: bigint) {
   const absolute = cents < 0n ? -cents : cents;
   return (cents < 0n ? "−" : "") + dollars.format(absolute / 100n) + "." + String(absolute % 100n).padStart(2, "0");
 }
@@ -24,10 +25,10 @@ function el<K extends keyof HTMLElementTagNameMap>(tag: K, text = "") {
   return element;
 }
 
-async function snapshot(document: SceneDocument, documents: Documents): Promise<Snapshot> {
+export async function snapshot(document: SceneDocument, documents: Documents, owner:object={}): Promise<Snapshot> {
   const loaded = loadAssessment(document, documents, null);
   if ("error" in loaded) throw new Error(loaded.error);
-  const reply = await evaluateInWorker({}, { kind: "primary", document, documents });
+  const reply = await evaluateInWorker(owner, { kind: "primary", document, documents });
   if (reply?.kind !== "primary") throw new Error(reply?.kind === "error" ? reply.message : "비교할 판정을 읽을 수 없습니다.");
   return { scene: loaded.scene, result: reply.result };
 }
@@ -40,7 +41,7 @@ function technicalValue(snapshot: Snapshot, row: number | null) {
   return [verdictText[outcome.verdict], outcome.label || outcome.mode, metric && interval(metric, metric.unit)].filter(Boolean).join(" · ");
 }
 
-async function prices() {
+export async function prices() {
   const response = await fetch("/api/prices");
   if (!response.ok) return null;
   return await response.json() as PriceBook;
@@ -51,11 +52,11 @@ export function mountSwap(root: HTMLElement, documents: Documents, saveCopy: (do
   dialog.className = "creator swap-dialog";
   dialog.setAttribute("aria-label", "슬롯 교체");
   root.append(dialog);
-  return (base: SceneDocument, originalId: string, replacement: Model, scenarioId: string | null) => {
-    const sceneId = "swap-" + crypto.randomUUID();
-    const replacementId = "item-" + crypto.randomUUID();
-    const original = base.items.find(row => row.instanceId === originalId)!;
-    const originalName = original.alias || documents.models.get(modelKey(original))!.name;
+  return (base: SceneDocument, originalId: string, replacement: Model, scenarioId: string | null, edit?:RecommendationEdit) => {
+    const sceneId = edit?.document.sceneId ?? "swap-" + crypto.randomUUID();
+    const replacementId = edit?.item.instanceId ?? "item-" + crypto.randomUUID();
+    const original = base.items.find(row => row.instanceId === originalId);
+    const originalName = edit?.kind==="insert" ? edit.target+" 연결" : original!.alias || documents.models.get(modelKey(original!))!.name;
     const choices = new Map<string, string>();
     const shown = new Map<string, SwapChoice>();
 
@@ -79,7 +80,7 @@ export function mountSwap(root: HTMLElement, documents: Documents, saveCopy: (do
     dialog.replaceChildren(top, body, controls);
     dialog.showModal();
 
-    const before = { ...base, scenarios: base.scenarios.filter(row => row.id === scenarioId) };
+    const before = edit ? base : { ...base, scenarios: base.scenarios.filter(row => row.id === scenarioId) };
     let old: Promise<Snapshot> | undefined;
     let book: Promise<PriceBook | null> | undefined;
     let generation = 0;
@@ -116,7 +117,8 @@ export function mountSwap(root: HTMLElement, documents: Documents, saveCopy: (do
     async function render() {
       const turn = ++generation;
       const focused = [...selection.querySelectorAll("select")].indexOf(document.activeElement as HTMLSelectElement);
-      const { document: candidate, pending } = swapSlot(base, documents, { originalId, replacementId, sceneId, replacement, choices });
+      const { document: candidate, pending } = edit ? {document:edit.document,pending:[]}
+        : swapSlot(base, documents, { originalId, replacementId, sceneId, replacement, choices });
       ready = undefined;
       save.disabled = true;
       renderSelection(pending);
@@ -129,12 +131,12 @@ export function mountSwap(root: HTMLElement, documents: Documents, saveCopy: (do
 
       status.textContent = "비교 계산 중…";
       try {
-        const newDocument = { ...candidate, scenarios: candidate.scenarios.filter(row => row.id === scenarioId) };
+        const newDocument = edit ? candidate : { ...candidate, scenarios: candidate.scenarios.filter(row => row.id === scenarioId) };
         const [a, b, offers] = await Promise.all([
           old ??= snapshot(before, documents), snapshot(newDocument, documents), book ??= prices().catch(() => null),
         ]);
         if (turn !== generation || !dialog.open || !dialog.isConnected) return;
-        const changes = compareSwap(a, b, originalId, replacementId);
+        const changes = edit?.kind==="insert" ? compare(a,b) : compareSwap(a, b, originalId, replacementId);
         const technical = el("section");
         technical.setAttribute("aria-label", "기술 차이");
         technical.append(el("h3", changes.length ? "기술 차이 " + changes.length + "건" : "기술 차이 없음"));
@@ -147,9 +149,9 @@ export function mountSwap(root: HTMLElement, documents: Documents, saveCopy: (do
         }
         const costs = el("section");
         costs.setAttribute("aria-label", "비용 차이");
-        const left = before.scenarios[0], right = newDocument.scenarios[0];
-        const oldView = resultView(a.scene, a.result, left ? 0 : null, "together");
-        const nextView = resultView(b.scene, b.result, right ? 0 : null, "together");
+        const left = before.scenarios.find(s => s.id === scenarioId), right = newDocument.scenarios.find(s => s.id === scenarioId);
+        const oldView = resultView(a.scene, a.result, left ? a.scene.scenarios.findIndex(s => s.id === left.id) : null, "together");
+        const nextView = resultView(b.scene, b.result, right ? b.scene.scenarios.findIndex(s => s.id === right.id) : null, "together");
         if (left && right && offers) {
           const oldBudget = calculateBudget(left, before.items, offers, oldView);
           const newBudget = calculateBudget(right, candidate.items, offers, nextView);

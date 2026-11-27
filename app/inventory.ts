@@ -10,6 +10,7 @@ type Tab = keyof typeof tabs;
 export function mountInventory(root: HTMLElement, library: Pick<Library, "inventory" | "models">, actions: {
   add: (item: InventoryItem) => void;
   cable: (item: InventoryItem) => void;
+  recommend: (list:HTMLElement) => void;
 }) {
   const bar = document.createElement("div");
   bar.className = "inventory-tabs";
@@ -49,10 +50,8 @@ export function mountInventory(root: HTMLElement, library: Pick<Library, "invent
     const focus = list.contains(document.activeElement) ? document.activeElement as HTMLButtonElement : null;
     const rows = document.createDocumentFragment();
     if (tab === "recommended") {
-      const message = document.createElement("p");
-      message.className = "inventory-empty";
-      message.textContent = "표시할 추천 장비가 없습니다.";
-      rows.append(message);
+      actions.recommend(list);
+      return;
     } else if (tab === "models") for (const [key, model] of models) {
       const row = document.createElement("article");
       row.className = "inventory-item";

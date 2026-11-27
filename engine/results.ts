@@ -26,6 +26,8 @@ export interface Results {
     connections: number[]; portVisits?: {connection: number; port: number}[]; reasons: number[]; claims: number[]; issue?: "notMember" }[];
   goalWitnesses: {goal: number; world: number; workload: number; high: number | null;
     assignments: {claim: number; value: string | number | boolean}[]}[];
+  // 조건부 추천이 같은 세계에서 목표 전체가 달성됐음을 재현할 수 있게 첫 사례를 남긴다.
+  goalSuccesses?: {goal: number; assignments: {claim: number; value: string | number | boolean}[]}[];
   reservations: { scenario: number; workload: number }[];
   choices: (Choice & { scenario: number })[];
   searches: { scenario: number; examined: number; truncated: boolean }[];
