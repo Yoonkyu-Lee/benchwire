@@ -98,3 +98,11 @@ export const DSC_VISUALLY_LOSSLESS_RECOMMENDED_MIN_BPP = [
   { chroma: "4:2:2", bpp: 7 },
   { chroma: "4:2:0", bpp: 6 },
 ] as const;
+
+// 휘도 1표본과 가로·세로 서브샘플링을 반영한 색차 2성분의 표본 수를 합한다.
+// 출처: ITU-T H.266 표 2 “SubWidthC and SubHeightC” (신뢰도: official)
+export const VIDEO_CHROMA_SAMPLES = [
+  { chroma: "4:4:4", samplesPerPixel: 3 },
+  { chroma: "4:2:2", samplesPerPixel: 2 },
+  { chroma: "4:2:0", samplesPerPixel: 1.5 },
+] as const;
