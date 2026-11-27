@@ -2,13 +2,17 @@
 import charger from "../catalog/templates/usb-c-charger.json" with { type: "json" };
 import { domains, type DomainRegistration } from "../domains/registry.ts";
 import { modelFile, parseDocument } from "../scene/files.ts";
+import type { ResearchConfig, ResearchStatus } from "../server/research.ts";
 import type { Documents } from "./assessment.ts";
-import type { InventoryItem, Model, Port } from "./document.ts";
+import { modelKey, type InventoryItem, type Model, type Port } from "./document.ts";
 import { claimInput, describe, field, showError, type FieldValue, type JSONSchema } from "./field.ts";
 
 type Claim = Port["connector"];
 type Interface = Port["interfaces"][number];
 type Resource = Model["resources"][number];
+type Node = Model["nodes"][number];
+type Edge = Model["edges"][number];
+type Source = Model["sources"][number];
 type NamedChoice = readonly [id: string, label: string];
 type PortSeed = { name: string; connector: string; domain: string; protocol: string; role: string; unknownPrefixes: readonly string[] };
 const trust = [["inferred", "추정"], ["official", "공식"], ["review", "리뷰"], ["community", "커뮤니티"]] as const;
@@ -77,12 +81,168 @@ function rows<T, S = undefined>(root: HTMLElement, name: string, make: (box: HTM
   addButton.onclick = () => add();
   return {
     add, read: () => [...entries.values()].map(read => read()),
+    clear() { entries.clear(); list.replaceChildren(); ordinal = 0; },
   };
 }
 
 function recordValue(schema: JSONSchema) {
   if (typeof schema.additionalProperties === "object") return schema.additionalProperties;
   return Object.values(schema.patternProperties ?? {}).find((row): row is JSONSchema => typeof row === "object");
+}
+
+const researchPhase: Record<ResearchStatus["phase"], string> = {
+  identifying: "판본 식별 중…", choosing: "조사할 판본을 선택하세요.", researching: "공개 출처 조사 중…",
+  normalizing: "출처와 초안 검증 중…", complete: "조사 완료", stopped: "조사 중단",
+};
+const researchStop: Record<NonNullable<ResearchStatus["stop"]>, string> = {
+  budget: "다음 호출은 남은 예산으로 시작할 수 없습니다.",
+  refusal: "조사 요청이 거절됐습니다.",
+  incomplete: "응답이 중간에 종료됐습니다.",
+  unidentified: "제품명과 판본을 함께 확인할 수 있는 자료를 찾지 못했습니다.",
+  unverified: "초안에 쓸 수 있는 인용을 찾지 못했습니다.",
+  provider: "Claude API 응답을 받지 못했습니다.",
+  interrupted: "조사가 중단됐습니다.",
+};
+
+async function researchJson<T>(path: string, payload?: object): Promise<T> {
+  const response = await fetch(path, payload && {
+    method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload),
+  });
+  if (!response.ok) throw new Error(((await response.json()) as { message: string }).message);
+  return response.json() as Promise<T>;
+}
+
+function mountResearch(root: HTMLElement, fillDraft: (model: Model) => void) {
+  const model = input(root, "모델명 또는 공개 URL");
+  model.maxLength = 250;
+  const price = el("p");
+  const notice = el("p", "조사를 시작하면 입력한 모델명 또는 공개 URL을 Claude로 보냅니다.");
+  const start = button("조사 시작");
+  const refresh = button("조사 갱신");
+  const status = el("p");
+  status.setAttribute("role", "status");
+  const details = el("div");
+  root.append(notice, price, start, refresh, status, details);
+  start.disabled = model.disabled = true;
+  refresh.hidden = true;
+  let enabled = false;
+  let running = false;
+  let update: ReturnType<typeof setTimeout> | undefined;
+
+  function render(result: ResearchStatus) {
+    const pending = result.phase === "identifying" || result.phase === "researching" || result.phase === "normalizing";
+    status.textContent = [researchPhase[result.phase], result.stop && researchStop[result.stop],
+      result.stale && "갱신 필요", pending ? "" : `사용 비용 US$${result.spentUsd.toFixed(4)} · 검색 ${result.searches}회`]
+      .filter(Boolean).join(" ");
+    refresh.hidden = !result.stale;
+    details.replaceChildren();
+    if (pending) return true;
+    const sources = new Map(result.sources.map(source => [source.id, source]));
+    function citation(id: string) {
+      const source = sources.get(id);
+      if (!source) return el("span", id);
+      const link = el("a", source.title);
+      link.href = source.locator;
+      link.target = "_blank";
+      link.rel = "noopener noreferrer";
+      return link;
+    }
+    if (result.phase === "choosing") {
+      result.candidates.forEach((candidate, index) => {
+        const line = el("p");
+        const pick = button(candidate.name + " · " + candidate.revision);
+        pick.disabled = result.stale;
+        pick.onclick = () => begin({ action: "select", id: result.id, retrievedAt: result.retrievedAt, index });
+        line.append(pick);
+        if (candidate.year !== null) line.append(" · " + candidate.year + "년형");
+        for (const id of candidate.sourceIds) line.append(" ", citation(id));
+        details.append(line);
+      });
+    }
+    if (result.draft) {
+      const draft = result.draft;
+      const use = button("조사 초안 불러오기");
+      use.onclick = () => fillDraft(draft.model);
+      details.append(el("p", "초안을 불러오면 생성기의 입력이 바뀝니다. 내용을 확인한 뒤 저장하세요."), use);
+      if (draft.conflicts.length) {
+        const conflicts = el("ul");
+        for (const conflict of draft.conflicts) {
+          const row = el("li", conflict.field + (conflict.condition ? " · " + conflict.condition : ""));
+          for (const value of conflict.values) {
+            row.append(" · " + [String(value.value), value.unit].filter(Boolean).join(" ") +
+              " (" + (trust.find(([id]) => id === value.confidence)?.[1] ?? value.confidence) + ")");
+            for (const id of value.sources) row.append(" ", citation(id));
+          }
+          conflicts.append(row);
+        }
+        details.append(el("p", "출처 충돌"), conflicts);
+      }
+      if (draft.discarded.length) {
+        const dropped = el("details");
+        const list = el("ul");
+        for (const message of draft.discarded) list.append(el("li", message));
+        dropped.append(el("summary", `버린 필드 ${draft.discarded.length}개`), list);
+        details.append(dropped);
+      }
+    }
+    if (sources.size) {
+      const evidence = el("details");
+      const list = el("ul");
+      for (const [id, source] of sources) {
+        const row = el("li");
+        row.append(citation(id), " · " + source.retrievedAt);
+        list.append(row);
+      }
+      evidence.append(el("summary", `검색·열람 출처 ${sources.size}개`), list);
+      details.append(evidence);
+    }
+    return false;
+  }
+
+  function controls() {
+    model.disabled = !enabled || running;
+    start.disabled = !enabled || running;
+    refresh.disabled = running;
+  }
+
+  async function receive(response: Promise<ResearchStatus>) {
+    try {
+      const result = await response;
+      if (render(result)) {
+        update = setTimeout(() => void receive(researchJson("/api/research/" + result.id)), 600);
+        return;
+      }
+    } catch (error) {
+      status.textContent = error instanceof Error ? error.message : "조사 상태를 확인하지 못했습니다.";
+    }
+    running = false;
+    controls();
+  }
+
+  function begin(payload: object) {
+    if (!enabled || running) return;
+    clearTimeout(update);
+    running = true;
+    status.textContent = "조사 요청 중…";
+    details.replaceChildren();
+    controls();
+    void receive(researchJson("/api/research", payload));
+  }
+
+  start.onclick = () => begin({ action: "start", query: model.value });
+  refresh.onclick = () => begin({ action: "start", query: model.value, refresh: true });
+  model.oninput = () => { refresh.hidden = true; };
+  model.onkeydown = event => {
+    if (event.key !== "Enter" || event.isComposing) return;
+    event.preventDefault();
+    start.click();
+  };
+  void researchJson<ResearchConfig>("/api/research").then(config => {
+    enabled = config.enabled;
+    price.textContent = `조사 1건 상한 US$${config.budgetUsd.toFixed(2)} · 웹 검색 최대 ${config.maxSearches}회 · 갱신 기준 ${config.cacheDays}일`;
+    if (!enabled) status.textContent = "서버 .env에 ANTHROPIC_API_KEY를 넣으면 켜집니다.";
+    controls();
+  }).catch(() => { status.textContent = "조사 설정을 불러오지 못했습니다."; });
 }
 
 export async function persistModel(model: Model, item: InventoryItem) {
@@ -100,6 +260,31 @@ export async function persistModel(model: Model, item: InventoryItem) {
       throw new Error(path ? `${path} — ${message}` : message);
     }
   }
+}
+
+function duplicateModel(model: Model): Model {
+  const provenance = { confidence: "inferred", inferredFrom: modelKey(model) } as const;
+  function fact(claim: Claim): Claim {
+    if (claim.value === null) return claim;
+    return { ...claim, ...provenance,
+      ...(claim.conflicts && { conflicts: claim.conflicts.map(candidate => ({ ...candidate, ...provenance })) }) };
+  }
+  function fields(values: Record<string, Claim>) {
+    return Object.fromEntries(Object.entries(values).map(([key, value]) => [key, fact(value)]));
+  }
+  return {
+    ...model, modelId: "item-" + crypto.randomUUID().slice(0, 8), revision: "1", name: model.name + " 복제",
+    attributes: Object.fromEntries(Object.entries(model.attributes ?? {}).map(([domain, values]) => [domain, fields(values)])),
+    ports: model.ports.map(port => ({
+      ...port, connector: fact(port.connector), attachment: fact(port.attachment),
+      ...(port.position && { position: { ...port.position, ...provenance } }),
+      interfaces: port.interfaces.map(iface => ({ ...iface, evidence: fact(iface.evidence), params: fields(iface.params) })),
+    })),
+    edges: model.edges.map(edge => ({
+      ...edge, evidence: fact(edge.evidence), uses: edge.uses.map(use => ({ ...use, evidence: fact(use.evidence) })),
+    })),
+    resources: model.resources.map(resource => ({ ...resource, capacity: fact(resource.capacity), policy: fact(resource.policy) })),
+  };
 }
 
 export function mountCreator(dialog: HTMLDialogElement, documents: Documents, save: (model: Model, instanceId: string) => Promise<void>,
@@ -122,6 +307,18 @@ export function mountCreator(dialog: HTMLDialogElement, documents: Documents, sa
   footer.append(error, submit);
   form.append(header, body, footer);
   dialog.append(form);
+  const research = section(body, "AI 조사");
+  const copySection = section(body, "기존 모델에서 시작");
+  const toCopy = select(copySection, "복제할 모델 판본", [["", "선택"], ...Array.from(documents.models, ([key, model]) =>
+    [key, `${model.name} · ${key}`] as const)]);
+  const copy = button("모델 복제");
+  copy.disabled = true;
+  copySection.append(copy);
+  toCopy.onchange = () => { copy.disabled = !toCopy.value; };
+  copy.onclick = () => {
+    const original = documents.models.get(toCopy.value);
+    if (original) fillDraft(duplicateModel(original));
+  };
   const template = section(body, "템플릿");
   const count = input(template, "충전기 포트 수", "", "", "number");
   count.min = "1"; count.max = String(MAX_TEMPLATE_PORTS); count.step = "1";
@@ -138,11 +335,11 @@ export function mountCreator(dialog: HTMLDialogElement, documents: Documents, sa
 
   const provenance = section(body, "출처");
   const defaultSource = select(provenance, "기본 출처", [["", "선택"]]);
-  const sources = rows(provenance, "출처", (row, n) => {
-    const id = "source-" + n;
-    const title = input(row, "제목", "", `sources.${n - 1}.title`);
-    const locator = input(row, "주소", "", `sources.${n - 1}.locator`);
-    const date = input(row, "조회일", new Date().toISOString().slice(0, 10), `sources.${n - 1}.retrievedAt`, "date");
+  const sources = rows<Source, Source>(provenance, "출처", (row, n, seed) => {
+    const id = seed?.id ?? "manual-source-" + n;
+    const title = input(row, "제목", seed?.title ?? "", `sources.${n - 1}.title`);
+    const locator = input(row, "주소", seed?.locator ?? "", `sources.${n - 1}.locator`);
+    const date = input(row, "조회일", seed?.retrievedAt ?? new Date().toISOString().slice(0, 10), `sources.${n - 1}.retrievedAt`, "date");
     title.addEventListener("input", updateReferences);
     return () => ({ id, title: title.value, locator: locator.value, retrievedAt: date.value });
   }, updateReferences);
@@ -153,35 +350,46 @@ export function mountCreator(dialog: HTMLDialogElement, documents: Documents, sa
   const registered = new Map(registrations.map(r => [r.plugin.id, r]));
   const forInterfaces: NamedChoice[] = registrations.filter(r => r.interfaces.length).map(r => [r.plugin.id, r.name]);
 
-  function sourcePicker(box: HTMLElement, label: string) {
-    const pick = select(box, label + " 출처", [["", "기본 출처"]]);
+  function sourcePicker(box: HTMLElement, label: string, initial: readonly string[] = []) {
+    const options = sources.read().map(row => [row.id, row.title || row.id] as const);
+    const pick = select(box, label + " 출처", [["", "기본 출처"], ...options], initial[0]);
     pick.dataset.ref = "source";
-    return () => [pick.value || defaultSource.value].filter(Boolean);
+    return () => {
+      if (initial.length && pick.value === initial[0]) {
+        const available = new Set(sources.read().map(row => row.id));
+        return initial.filter(id => available.has(id));
+      }
+      return [pick.value || defaultSource.value].filter(Boolean);
+    };
   }
 
-  function claimProof(box: HTMLElement, label: string) {
-    const confidence = select(box, label + " 신뢰도", trust);
-    const readSources = sourcePicker(box, label);
-    return ({ value, unit }: FieldValue): Claim => ({
-      value, unit, confidence: value === null ? "unknown" : confidence.value as Claim["confidence"], sources: readSources(),
-    });
+  function claimProof(box: HTMLElement, label: string, seed?: Claim) {
+    const confidence = select(box, label + " 신뢰도", trust, seed?.confidence);
+    const readSources = sourcePicker(box, label, seed?.sources);
+    return ({ value, unit }: FieldValue): Claim => {
+      const rank = value === null ? "unknown" : confidence.value as Claim["confidence"];
+      const sources = readSources();
+      const same = seed && value === seed.value && unit === (seed.unit ?? "") && rank === seed.confidence
+        && sources.length === seed.sources.length && sources.every((id, i) => id === seed.sources[i]);
+      return same ? seed : { value, unit, confidence: rank, sources, ...(seed?.condition && { condition: seed.condition }) };
+    };
   }
 
-  function factField(box: HTMLElement, key: string, schema: JSONSchema | boolean, required: boolean, unknown: boolean, path: string) {
+  function factField(box: HTMLElement, key: string, schema: JSONSchema | boolean, required: boolean, unknown: boolean, path: string, seed?: Claim) {
     const label = typeof schema === "object" ? schema.title ?? key : key;
     const group = el("div");
     group.className = "creator-claim";
     box.append(group);
-    const { read } = claimInput(group, key, schema, required, unknown ? { value: null } : undefined, path);
-    const proof = claimProof(group, label);
+    const { read } = claimInput(group, key, schema, required, seed ?? (unknown ? { value: null } : undefined), path);
+    const proof = claimProof(group, label, seed);
     return () => { const value = read(); return value === undefined ? undefined : proof(value); };
   }
 
-  function factFields(box: HTMLElement, schema: JSONSchema, unknownPrefixes: readonly string[], path: string) {
+  function factFields(box: HTMLElement, schema: JSONSchema, unknownPrefixes: readonly string[], path: string, seed?: Record<string, Claim>) {
     const fields = Object.entries(schema.properties ?? {}).map(([key, property]) => {
       const required = schema.required?.includes(key) ?? false;
       return [key, factField(box, key, property, required,
-        required || unknownPrefixes.some(prefix => key.startsWith(prefix)), path + "." + key)] as const;
+        required || unknownPrefixes.some(prefix => key.startsWith(prefix)), path + "." + key, seed?.[key])] as const;
     });
     return () => Object.fromEntries(fields.flatMap(([key, read]) => {
       const value = read();
@@ -189,106 +397,123 @@ export function mountCreator(dialog: HTMLDialogElement, documents: Documents, sa
     }));
   }
 
-  function ref(box: HTMLElement, label: string, kind: "node" | "resource", blank: string) {
-    const control = select(box, label, [["", blank]]);
+  function ref(box: HTMLElement, label: string, kind: "node" | "resource", blank: string, initial = "") {
+    const control = select(box, label, initial ? [["", blank], [initial, initial]] : [["", blank]], initial);
     control.dataset.ref = kind;
     control.dataset.empty = blank;
     return control;
   }
 
-  const ports = rows<Port, PortSeed>(section(body, "포트"), "포트", (row, n, seed) => {
-    const id = input(row, "포트 ID", "port-" + n);
-    const label = input(row, "포트 이름", seed ? seed.name + " " + n : "");
-    const connector = select(row, "커넥터", connectorChoices, seed?.connector ?? "");
-    const connectorProof = claimProof(row, "커넥터");
-    const attachment = ref(row, "부착 노드", "node", "미확인");
-    const attachmentProof = claimProof(row, "부착 노드");
+  const ports = rows<Port, Port | PortSeed>(section(body, "포트"), "포트", (row, n, seed) => {
+    const initial = seed && "interfaces" in seed ? seed : undefined;
+    const template = seed && "name" in seed ? seed : undefined;
+    const id = input(row, "포트 ID", initial?.id ?? "port-" + n);
+    const label = input(row, "포트 이름", initial?.label ?? (template ? template.name + " " + n : ""));
+    const connector = select(row, "커넥터", connectorChoices, String(initial?.connector.value ?? template?.connector ?? ""));
+    const connectorProof = claimProof(row, "커넥터", initial?.connector);
+    const attachment = ref(row, "부착 노드", "node", "미확인", String(initial?.attachment.value ?? ""));
+    const attachmentProof = claimProof(row, "부착 노드", initial?.attachment);
     const position = section(row, "위치");
-    const face = select(position, "면", [["", "미확인"], ...faces]);
+    const face = select(position, "면", [["", "미확인"], ...faces], initial?.position?.face);
     const coords = el("div");
     position.append(coords);
-    const x = input(coords, "가로 위치 (0–1)", "", "", "number");
-    const y = input(coords, "세로 위치 (0–1)", "", "", "number");
-    const positionTrust = select(coords, "위치 신뢰도", trust);
-    const positionSources = sourcePicker(coords, "위치");
-    coords.hidden = true;
+    const x = input(coords, "가로 위치 (0–1)", initial?.position ? String(initial.position.x) : "", "", "number");
+    const y = input(coords, "세로 위치 (0–1)", initial?.position ? String(initial.position.y) : "", "", "number");
+    const positionTrust = select(coords, "위치 신뢰도", trust, initial?.position?.confidence);
+    const positionSources = sourcePicker(coords, "위치", initial?.position?.sources);
+    coords.hidden = face.value === "";
     face.onchange = () => { coords.hidden = face.value === ""; };
 
-    const interfaces = rows<Interface, PortSeed>(section(row, "인터페이스"), "인터페이스", (box, j, initial) => {
-      const ifaceId = input(box, "인터페이스 ID", `port-${n}-if-${j}`);
+    const interfaces = rows<Interface, Interface | PortSeed>(section(row, "인터페이스"), "인터페이스", (box, j, initial) => {
+      const saved = initial && "params" in initial ? initial : undefined;
+      const ifaceId = input(box, "인터페이스 ID", saved?.id ?? `port-${n}-if-${j}`);
       const domain = select(box, "인터페이스 영역", forInterfaces, initial?.domain);
       const protocol = select(box, "프로토콜", []);
       const role = select(box, "역할", []);
-      const declared = claimProof(box, "인터페이스 선언");
+      const declared = claimProof(box, "인터페이스 선언", saved?.evidence);
       const settings = el("details");
       const params = el("div");
       settings.append(el("summary", "인터페이스 값"), params);
       box.append(settings);
       let readParams: () => Interface["params"];
-      function updateParams(initialRole = role.value, unknownPrefixes: readonly string[] = []) {
+      function updateParams(initialRole = role.value, unknownPrefixes: readonly string[] = [], values?: Interface["params"]) {
         const registration = registered.get(domain.value)!;
         const term = registration.interfaces.find(term => term.id === protocol.value)!;
         choices(role, term.roles.map(value => [value, roleNames.get(value) ?? value]), initialRole);
         params.replaceChildren();
         readParams = factFields(params, describe(registration.plugin.paramsFor?.(protocol.value) ?? registration.plugin.params),
-          unknownPrefixes, `ports.${n - 1}.interfaces.${j - 1}.params`);
+          unknownPrefixes, `ports.${n - 1}.interfaces.${j - 1}.params`, values);
         updateReferences();
       }
-      function updateProtocol(initialProtocol = protocol.value, initialRole = role.value, unknownPrefixes: readonly string[] = []) {
+      function updateProtocol(initialProtocol = protocol.value, initialRole = role.value, unknownPrefixes: readonly string[] = [], values?: Interface["params"]) {
         const terms = registered.get(domain.value)!.interfaces;
         choices(protocol, terms.map(term => [term.id, term.name]), initialProtocol);
-        updateParams(initialRole, unknownPrefixes);
+        updateParams(initialRole, unknownPrefixes, values);
       }
       domain.onchange = () => updateProtocol();
       protocol.onchange = () => updateParams();
-      updateProtocol(initial?.protocol, initial?.role, initial?.unknownPrefixes);
+      updateProtocol(initial?.protocol, initial?.role, initial && "unknownPrefixes" in initial ? initial.unknownPrefixes : [], saved?.params);
       return () => ({ id: ifaceId.value, domain: domain.value, protocol: protocol.value, role: role.value,
         evidence: declared({ value: true, unit: "" }), params: readParams() });
     }, updateReferences);
-    if (seed) interfaces.add(seed);
+    if (template) interfaces.add(template);
+    initial?.interfaces.forEach(interfaces.add);
 
-    return () => ({
-      id: id.value, label: label.value,
-      connector: connectorProof({ value: connector.value || null, unit: "" }),
-      attachment: attachmentProof({ value: attachment.value || null, unit: "" }),
-      ...(face.value && { position: { face: face.value as NonNullable<Port["position"]>["face"], x: x.valueAsNumber, y: y.valueAsNumber,
-        confidence: positionTrust.value as NonNullable<Port["position"]>["confidence"], sources: positionSources() } }),
-      interfaces: interfaces.read(),
-    });
+    return () => {
+      const position: Port["position"] = face.value ? {
+        face: face.value as NonNullable<Port["position"]>["face"], x: x.valueAsNumber, y: y.valueAsNumber,
+        confidence: positionTrust.value as NonNullable<Port["position"]>["confidence"], sources: positionSources(),
+      } : undefined;
+      const original = initial?.position;
+      if (position && original?.inferredFrom && position.face === original.face && position.x === original.x &&
+        position.y === original.y && position.confidence === original.confidence &&
+        position.sources.length === original.sources.length && position.sources.every((id, i) => id === original.sources[i]))
+        position.inferredFrom = original.inferredFrom;
+      return {
+        id: id.value, label: label.value, ...(initial?.location && { location: initial.location }),
+        connector: connectorProof({ value: connector.value || null, unit: "" }),
+        attachment: attachmentProof({ value: attachment.value || null, unit: "" }),
+        ...(position && { position }),
+        interfaces: interfaces.read(),
+      };
+    };
   }, updateReferences);
 
-  const nodes = rows(section(body, "내부 노드"), "노드", (row, n) => {
-    const id = input(row, "노드 ID", "node-" + n);
-    const label = input(row, "노드 이름");
-    const kind = input(row, "노드 종류", "junction");
+  const nodes = rows<Node, Node>(section(body, "내부 노드"), "노드", (row, n, seed) => {
+    const id = input(row, "노드 ID", seed?.id ?? "node-" + n);
+    const label = input(row, "노드 이름", seed?.label);
+    const kind = input(row, "노드 종류", seed?.kind ?? "junction");
     id.addEventListener("change", updateReferences);
     label.addEventListener("change", updateReferences);
     return () => ({ id: id.value, label: label.value, kind: kind.value });
   }, updateReferences);
 
-  const edges = rows<Model["edges"][number]>(section(body, "내부 간선"), "간선", (row, n) => {
-    const id = input(row, "간선 ID", "edge-" + n);
-    const from = ref(row, "출발 노드", "node", "선택");
-    const to = ref(row, "도착 노드", "node", "선택");
-    const evidence = claimProof(row, "간선");
-    const uses = rows(row, "사용 자원", box => {
-      const resource = ref(box, "자원", "resource", "선택");
-      const proof = claimProof(box, "자원 사용");
+  const edges = rows<Edge, Edge>(section(body, "내부 간선"), "간선", (row, n, seed) => {
+    const id = input(row, "간선 ID", seed?.id ?? "edge-" + n);
+    const from = ref(row, "출발 노드", "node", "선택", seed?.from);
+    const to = ref(row, "도착 노드", "node", "선택", seed?.to);
+    const evidence = claimProof(row, "간선", seed?.evidence);
+    type Use = Edge["uses"][number];
+    const uses = rows<Use, Use>(row, "사용 자원", (box, _, initial) => {
+      const resource = ref(box, "자원", "resource", "선택", initial?.resource);
+      const proof = claimProof(box, "자원 사용", initial?.evidence);
       return () => ({ resource: resource.value, evidence: proof({ value: true, unit: "" }) });
     }, updateReferences);
+    seed?.uses.forEach(uses.add);
     return () => ({ id: id.value, from: from.value, to: to.value, evidence: evidence({ value: true, unit: "" }), uses: uses.read() });
   }, updateReferences);
 
-  const resources = rows<Resource, typeof charger.resource>(section(body, "자원"), "자원", (row, n, seed) => {
+  const resources = rows<Resource, Resource | typeof charger.resource>(section(body, "자원"), "자원", (row, n, seed) => {
+    const initial = seed && "capacity" in seed ? seed : undefined;
     const id = input(row, "자원 ID", seed?.id ?? "resource-" + n);
     const kind = input(row, "자원 종류", seed?.kind ?? "");
     const domain = select(row, "자원 영역", domainChoices, seed?.domain);
     const unit = select(row, "자원 단위", []);
-    const capacity = input(row, "용량", "", "", "number");
+    const capacity = input(row, "용량", String(initial?.capacity.value ?? ""), "", "number");
     capacity.min = "0"; capacity.step = "any";
-    const capProof = claimProof(row, "용량");
-    const policy = input(row, "분배 정책");
-    const policyProof = claimProof(row, "분배 정책");
+    const capProof = claimProof(row, "용량", initial?.capacity);
+    const policy = input(row, "분배 정책", String(initial?.policy.value ?? ""));
+    const policyProof = claimProof(row, "분배 정책", initial?.policy);
     function updateUnits(wanted = unit.value) {
       choices(unit, (registered.get(domain.value)?.plugin.resourceUnits ?? []).map(value => [value, value]), wanted);
     }
@@ -301,7 +526,7 @@ export function mountCreator(dialog: HTMLDialogElement, documents: Documents, sa
   }, updateReferences);
 
   const attributeSection = section(body, "영역별 속성");
-  const readAttributes = registrations.flatMap(({ plugin, name }) => {
+  const attributeForms = registrations.flatMap(({ plugin, name }) => {
     const schema = describe(plugin.attributes);
     const fixed = Object.keys(schema.properties ?? {});
     const entry = recordValue(schema);
@@ -310,28 +535,46 @@ export function mountCreator(dialog: HTMLDialogElement, documents: Documents, sa
     group.append(el("summary", name));
     attributeSection.append(group);
     if (entry) {
-      const records = rows(group, "속성", (row, n) => {
+      type Attribute = { key: string; value: Claim };
+      const records = rows<Attribute, Attribute>(group, "속성", (row, n, seed) => {
         const keySchema = schema.propertyNames;
-        const key = input(row, typeof keySchema === "object" ? keySchema.title ?? "속성 키" : "속성 키");
+        const key = input(row, typeof keySchema === "object" ? keySchema.title ?? "속성 키" : "속성 키", seed?.key);
         if (typeof keySchema === "object" && keySchema.pattern) {
           key.pattern = keySchema.pattern;
           key.placeholder = keySchema.description ?? "";
         }
-        const value = factField(row, "값", entry, true, true, `attributes.${plugin.id}.${n - 1}`);
+        const value = factField(row, "값", entry, true, true, `attributes.${plugin.id}.${n - 1}`, seed?.value);
         return () => ({ key: key.value, value: value()! });
       }, updateReferences);
-      return [() => {
-        const facts: Record<string, Claim> = Object.create(null);
-        for (const { key, value } of records.read()) {
-          if (Object.hasOwn(facts, key)) throw new Error(`attributes.${plugin.id}.${key} — 속성 키가 겹칩니다.`);
-          facts[key] = value;
-        }
-        return [plugin.id, facts] as const;
+      return [{
+        id: plugin.id,
+        load(fields: Record<string, Claim>) {
+          records.clear();
+          for (const [key, value] of Object.entries(fields)) records.add({ key, value });
+        },
+        read() {
+          const facts: Record<string, Claim> = Object.create(null);
+          for (const { key, value } of records.read()) {
+            if (Object.hasOwn(facts, key)) throw new Error(`attributes.${plugin.id}.${key} — 속성 키가 겹칩니다.`);
+            facts[key] = value;
+          }
+          return facts;
+        },
       }];
     }
-    const read = factFields(group, schema, [], "attributes." + plugin.id);
     const enabled = select(group, "영역 속성", [["", "미선언"], ["known", "입력"]]);
-    return [() => [plugin.id, enabled.value ? read() : {}] as const];
+    const fields = el("div");
+    group.append(fields);
+    let read = factFields(fields, schema, [], "attributes." + plugin.id);
+    return [{
+      id: plugin.id,
+      load(values: Record<string, Claim>) {
+        fields.replaceChildren();
+        enabled.value = Object.keys(values).length ? "known" : "";
+        read = factFields(fields, schema, [], "attributes." + plugin.id, values);
+      },
+      read: () => enabled.value ? read() : {},
+    }];
   });
 
   function updateReferences() {
@@ -366,6 +609,29 @@ export function mountCreator(dialog: HTMLDialogElement, documents: Documents, sa
     error.textContent = "";
   };
 
+  function fillDraft(model: Model) {
+    for (const rows of [ports, nodes, edges, resources, sources]) rows.clear();
+    defaultSource.value = "";
+    kind.value = model.kind;
+    brand.value = model.brand;
+    name.value = model.name;
+    category.value = model.category;
+    modelId.value = model.modelId;
+    revision.value = model.revision;
+    model.sources.forEach(sources.add);
+    model.nodes.forEach(nodes.add);
+    model.resources.forEach(resources.add);
+    model.ports.forEach(ports.add);
+    model.edges.forEach(edges.add);
+    for (const fields of attributeForms) fields.load(model.attributes?.[fields.id] ?? {});
+    updateReferences();
+    error.textContent = "";
+    identity.scrollIntoView({ block: "start" });
+    name.focus({ preventScroll: true });
+  }
+
+  mountResearch(research, fillDraft);
+
   const instanceId = "item-" + crypto.randomUUID();
   form.onsubmit = async event => {
     event.preventDefault();
@@ -374,7 +640,7 @@ export function mountCreator(dialog: HTMLDialogElement, documents: Documents, sa
     submit.disabled = close.disabled = body.inert = true;
     submit.textContent = "저장 중…";
     try {
-      const attributes = Object.fromEntries(readAttributes.map(read => read()).filter(([, fields]) => Object.keys(fields).length));
+      const attributes = Object.fromEntries(attributeForms.map(fields => [fields.id, fields.read()] as const).filter(([, facts]) => Object.keys(facts).length));
       const model = parseDocument(modelFile, {
         modelId: modelId.value, revision: revision.value, kind: kind.value, name: name.value, brand: brand.value, category: category.value,
         sources: sources.read(), attributes, nodes: nodes.read(), ports: ports.read(), edges: edges.read(), resources: resources.read(),

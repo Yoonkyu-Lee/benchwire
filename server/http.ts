@@ -6,6 +6,7 @@ import { createServer, type IncomingMessage, type ServerResponse } from "node:ht
 import { extname, join, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { LibraryError, openLibrary, sceneIdPattern } from "./library.ts";
+import { configuredResearchClient, openResearch } from "./research.ts";
 
 const HOST = "127.0.0.1";
 const PORT = 3210;
@@ -65,8 +66,10 @@ function staticFile(buildDir: string, path: string, response: ServerResponse): b
   return true;
 }
 
-export async function startServer({ port = PORT, dataDir = join(ROOT, "userdata"), buildDir = join(ROOT, "dist", "app") } = {}) {
+export async function startServer({ port = PORT, dataDir = join(ROOT, "userdata"), buildDir = join(ROOT, "dist", "app"),
+  researchClient = configuredResearchClient(ROOT) } = {}) {
   const library = openLibrary(ROOT, dataDir);
+  const research = openResearch(dataDir, library.describe().connectors, researchClient);
   async function handle(request: IncomingMessage, response: ServerResponse) {
     response.setHeader("X-Content-Type-Options", "nosniff");
     response.setHeader("Cache-Control", "no-store");
@@ -76,6 +79,16 @@ export async function startServer({ port = PORT, dataDir = join(ROOT, "userdata"
     const origin = "http://" + host;
     const path = request.url?.split("?", 1)[0] ?? "/";
     const method = request.method;
+    if (path === "/api/research" && (method === "GET" || method === "POST")) {
+      const result = method === "GET" ? research.config : research.submit(await readJson(request, origin));
+      response.writeHead(method === "GET" ? 200 : 202, { "Content-Type": JSON_TYPE }).end(JSON.stringify(result));
+      return;
+    }
+    if (path.startsWith("/api/research/") && method === "GET") {
+      const result = research.status(path.slice("/api/research/".length));
+      response.writeHead(200, { "Content-Type": JSON_TYPE }).end(JSON.stringify(result));
+      return;
+    }
     if (path === "/api/library" && method === "GET") {
       response.writeHead(200, { "Content-Type": JSON_TYPE });
       response.end(JSON.stringify(library.describe()));

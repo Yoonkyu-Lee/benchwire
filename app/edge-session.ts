@@ -7,6 +7,7 @@ import { after, before } from "node:test";
 import { chromium, type Browser, type BrowserContext, type Locator, type Page } from "playwright";
 import { build } from "vite";
 import { startServer } from "../server/http.ts";
+import type { ResearchClient } from "../server/research.ts";
 
 export const viewport = { width: 1440, height: 900 };
 
@@ -19,8 +20,8 @@ export function edgeSession() {
   let server: Server | undefined;
   let base: string;
 
-  async function openServer() {
-    server = await startServer({ port: 0, dataDir: join(scratch!, "data"), buildDir: join(scratch!, "app") });
+  async function openServer(researchClient: ResearchClient | null = null) {
+    server = await startServer({ port: 0, dataDir: join(scratch!, "data"), buildDir: join(scratch!, "app"), researchClient });
     const address = server.address();
     assert(address && typeof address === "object");
     base = `http://127.0.0.1:${address.port}`;

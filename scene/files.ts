@@ -49,8 +49,9 @@ export const modelFile = z.strictObject({
     position: z.strictObject({
       face: z.enum(["front", "rear", "left", "right", "top", "bottom"]),
       x: z.number().min(0).max(1), y: z.number().min(0).max(1),
-      confidence: confidence.exclude(["unknown", "user_verified"]), sources: ids,
-    }).optional(),
+      confidence: confidence.exclude(["unknown", "user_verified"]), sources: ids, inferredFrom: revisionRef.optional(),
+    }).refine(position => !position.inferredFrom || position.confidence === "inferred",
+      { path: ["inferredFrom"], message: "원본 판본은 복제한 추정값에 붙입니다" }).optional(),
     interfaces: z.array(z.strictObject({ id, protocol: id, role: id, domain: id, evidence, params: fields })),
   })),
   edges: z.array(z.strictObject({

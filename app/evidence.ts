@@ -1,5 +1,6 @@
 // 선택한 선·작업·자원의 근거 나무와 실제 출처를 펼친다.
 import { evidenceRows } from "../engine/evidence.ts";
+import type { Claim, Value } from "../engine/contract.ts";
 import type { Results, Run } from "../engine/results.ts";
 import type { Variants } from "./assessment.ts";
 import { interval, quantity, resourceName, verdictText, type ResultView, type Selection } from "./results.ts";
@@ -27,14 +28,35 @@ function source(title: string, locator: string) {
   return row;
 }
 
-function appendClaimSources(row: HTMLElement, scene: ResultView["scene"], claim: number) {
-  const citations = el("ul");
-  citations.className = "citations";
-  for (const link of scene.claimSources) if (link.claim === claim) {
-    const s = scene.sources[link.source]!;
-    citations.append(source(s.title, s.locator));
+function claimText(claim: Claim, label = claim.field) {
+  const description = claim.conflictGroup !== undefined ? ["출처 충돌"]
+    : [[claim.value === null ? "미확인" : String(claim.value), claim.unit].filter(Boolean).join(" "),
+      confidence[claim.confidence], claim.inferredFrom && "원본 " + claim.inferredFrom];
+  return [label, ...description, claim.condition].filter(Boolean).join(" · ");
+}
+
+function appendClaimSources(row: HTMLElement, scene: ResultView["scene"], claim: number, value?: Exclude<Value, null>) {
+  const links = scene.claimSources.filter(link => link.claim === claim && (value === undefined || !link.candidate || link.candidate.value === value));
+  const groups = Map.groupBy(links, link => JSON.stringify(link.candidate));
+  const candidates = el("ul");
+  for (const group of groups.values()) {
+    const citations = el("ul");
+    citations.className = "citations";
+    for (const link of group) {
+      const { title, locator } = scene.sources[link.source]!;
+      citations.append(source(title, locator));
+    }
+    const candidate = group[0]!.candidate;
+    if (candidate && value === undefined) {
+      const unit = scene.claims[claim]!.unit;
+      const label = [`충돌 후보 ${String(candidate.value)}${unit ? " " + unit : ""}`, confidence[candidate.confidence],
+        candidate.inferredFrom && "원본 " + candidate.inferredFrom].filter(Boolean).join(" · ");
+      const evidence = el("li");
+      evidence.append(el("span", label), citations);
+      candidates.append(evidence);
+    } else row.append(citations);
   }
-  if (citations.childElementCount) row.append(citations);
+  if (candidates.childElementCount) row.append(candidates);
 }
 
 function tree(view: ResultView, start: Parameters<typeof evidenceRows>[1]) {
@@ -61,8 +83,7 @@ function tree(view: ResultView, start: Parameters<typeof evidenceRows>[1]) {
       claims.className = "reason-inputs";
       for (const input of inputs) {
         const claim = scene.claims[input.claim]!;
-        const value = claim.value === null ? "미확인" : String(claim.value);
-        const claimRow = el("li", [claim.field, [value, claim.unit].filter(Boolean).join(" "), confidence[claim.confidence], claim.condition].filter(Boolean).join(" · "));
+        const claimRow = el("li", claimText(claim));
         appendClaimSources(claimRow, scene, input.claim);
         claims.append(claimRow);
       }
@@ -124,7 +145,7 @@ function limitWitnesses(view: ResultView, outcome: number) {
       const owner = [item?.alias || item?.id, port?.label, iface?.id].filter(Boolean).join(" / ");
       const fact = [owner, `${claim.field} = ${value}${claim.unit ? " " + claim.unit : ""}`, claim.condition].filter(Boolean).join(" · ");
       const row = el("li", fact);
-      appendClaimSources(row, scene, index);
+      appendClaimSources(row, scene, index, value);
       claims.append(row);
     }
     const entry = el("dd");
@@ -190,8 +211,7 @@ function detail(root: HTMLElement, view: ResultView, selected: Selection) {
     root.append(el("h4", "배분 근거"));
     if (resource.used === 0 && resource.capacityClaim !== undefined) {
       const claim = scene.claims[resource.capacityClaim]!;
-      const declared = typeof claim.value === "number" ? claim.value : null;
-      const entry = el("li", ["용량 주장", quantity(declared, unit), confidence[claim.confidence], claim.condition].filter(Boolean).join(" · "));
+      const entry = el("li", claimText(claim, "용량 주장"));
       appendClaimSources(entry, scene, resource.capacityClaim);
       const capacityEvidence = el("ul");
       capacityEvidence.className = "reason-inputs";

@@ -1,6 +1,6 @@
 // SVG 카드와 배선을 그리며 포인터·키보드 조작을 장면 편집 의도로 내보낸다.
 import { occupiedPorts } from "./connection.ts";
-import { modelKey, portKey, type Library, type Point, type PortRef, type SceneDocument, type SceneIntent, type Viewport } from "./document.ts";
+import { modelKey, portKey, type Library, type Model, type Point, type Port, type PortRef, type SceneDocument, type SceneIntent, type Viewport } from "./document.ts";
 import { wireLayers, type Layer } from "./layers.ts";
 import type { WireMark } from "./results.ts";
 import { cardLayout, CARD_WIDTH, type PortLayout } from "./layout.ts";
@@ -25,6 +25,21 @@ function label(value: string, x: number, y: number, style: string) {
   const text = svg("text", { x, y, class: style });
   text.textContent = value;
   return text;
+}
+
+function portConflicts(port: Port, sources: Model["sources"]) {
+  const fields = [
+    ["커넥터", port.connector], ["부착 노드", port.attachment],
+    ...port.interfaces.flatMap(iface => Object.entries(iface.params).map(([name, fact]) => [iface.protocol + " " + name, fact] as const)),
+  ] as const;
+  return fields.flatMap(([name, fact]) => {
+    if (!fact.conflicts?.length) return [];
+    return [fact, ...fact.conflicts].map(candidate => {
+      const sourcesText = candidate.sources.map(id => sources.find(source => source.id === id)?.title ?? id).join(", ");
+      const value = [String(candidate.value), fact.unit].filter(Boolean).join(" ");
+      return [name, value, sourcesText].join(" · ");
+    });
+  });
 }
 
 interface Card { position: Point; element: SVGGElement; height: number; wires: Wire[] }
@@ -208,14 +223,15 @@ export function mountCanvas(root: HTMLElement, library: Library,
       for (const p of layout.ports) {
         const ref = { instanceId: item.instanceId, id: p.port.id };
         const key = portKey(ref);
-        const connector = typeof p.port.connector.value === "string" ? p.port.connector.value : "결합 형태 미확인";
+        const connector = p.port.connector.conflicts?.length ? "결합 형태 출처 충돌"
+          : typeof p.port.connector.value === "string" ? p.port.connector.value : "결합 형태 미확인";
         const glyph = connectors.get(connector);
         const socket = svg("g", { class: "port", "data-port": p.port.id, "data-item": item.instanceId,
           "data-face": p.port.position?.face ?? "list",
           role: "button", tabindex: "0", transform: `translate(${p.x} ${p.y})`,
           "aria-label": `${name} ${p.port.label} (${connector})`, "aria-disabled": String(occupied.has(key)) });
         const tooltip = svg("title");
-        tooltip.textContent = `${p.port.label} · ${connector}`;
+        tooltip.textContent = [`${p.port.label} · ${connector}`, ...portConflicts(p.port, model.sources)].join("\n");
         socket.append(tooltip, svg("rect", { class: "port-hit", x: -11, y: -11, width: 22, height: 22, rx: 5 }),
           svg("path", { class: "port-glyph", "data-glyph": glyph && glyphs.has(glyph) ? glyph : "neutral",
             d: glyphs.get(glyph ?? "") ?? neutral }));

@@ -19,6 +19,8 @@ npm run test:ui # 설치된 Edge에서 실제 서버와 화면 검증
 npm run perf    # 조용한 상태에서 프레임·편집 지연 측정, 한도 초과 시 실패, work/에 JSON 저장
 ```
 
+새 아이템의 **AI 조사**를 켜려면 저장소 루트의 `.env`에 `ANTHROPIC_API_KEY=발급받은_키`를 넣고 서버를 다시 시작한다. 조사 시작 버튼을 누르면 모델명 또는 공개 URL을 Claude API로 보낸다. 한 건의 상한은 US$5.00과 웹 검색 6회이며, 상한과 사용 비용을 생성기에 표시한다. 공개 자료와 사용량을 `userdata/research/`에 보관하고 30일 뒤 갱신 필요로 표시한다. 키 없이도 수동 생성기를 쓸 수 있다. [Claude 사용료](https://platform.claude.com/docs/en/about-claude/pricing) · [검색 도구 요금](https://platform.claude.com/docs/en/agents-and-tools/tool-use/web-search-tool)
+
 ## 의존성
 
 새 의존성은 이 표에 까닭과 함께 넣는다. 게이트가 `package.json`과 대조한다.
@@ -28,6 +30,7 @@ npm run perf    # 조용한 상태에서 프레임·편집 지연 측정, 한도
 | `typescript` (dev) | 형 검사만 한다. 실행은 Node가 형을 지워서 한다 |
 | `@types/node` (dev) | Node 내장 모듈의 형 |
 | `zod` | 아이템·장면 파일과 영역별 입력을 로드할 때 검증한다 |
+| `@anthropic-ai/sdk` | 로컬 서버에서 Claude의 공개 자료 조사와 구조화 출력을 요청한다 |
 | `vite` (dev) | 브라우저 작업대를 개발 중에 띄우고 배포할 정적 파일을 빌드한다 |
 | `playwright` (dev) | 설치된 Edge에서 캔버스 조작과 프레임 시간을 검증한다 |
 

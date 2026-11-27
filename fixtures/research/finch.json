@@ -1,0 +1,247 @@
+{
+  "identify": {
+    "id": "msg_fixture_identify",
+    "type": "message",
+    "role": "assistant",
+    "model": "claude-opus-5-5",
+    "container": null,
+    "content": [
+      {
+        "type": "web_search_tool_result",
+        "tool_use_id": "fixture-search",
+        "content": [
+          {
+            "type": "web_search_result",
+            "url": "https://manufacturer.example.com/manual/fa-24",
+            "title": "FA-24 제품 설명서",
+            "encrypted_content": "fixture",
+            "page_age": null
+          },
+          {
+            "type": "web_search_result",
+            "url": "https://manufacturer.example.com/manual/fa-25",
+            "title": "FA-25 제품 설명서",
+            "encrypted_content": "fixture",
+            "page_age": null
+          }
+        ]
+      },
+      {
+        "type": "text",
+        "text": "[{\"name\":\"Morrow Finch\",\"revision\":\"FA-24\",\"brand\":\"Morrow Example Labs\",\"category\":\"충전기\",\"kind\":\"device\",\"domains\":[\"power\"],\"sourceUrls\":[\"https://manufacturer.example.com/manual/fa-24\"],\"year\":2024},{\"name\":\"Morrow Finch\",\"revision\":\"FA-25\",\"brand\":\"Morrow Example Labs\",\"category\":\"충전기\",\"kind\":\"device\",\"domains\":[\"power\"],\"sourceUrls\":[\"https://manufacturer.example.com/manual/fa-25\"],\"year\":2025}]",
+        "citations": [
+          {
+            "type": "web_search_result_location",
+            "url": "https://manufacturer.example.com/manual/fa-24",
+            "title": "FA-24 제품 설명서",
+            "cited_text": "Morrow Finch FA-24 2024 제품 설명서",
+            "encrypted_index": "fixture"
+          },
+          {
+            "type": "web_search_result_location",
+            "url": "https://manufacturer.example.com/manual/fa-25",
+            "title": "FA-25 제품 설명서",
+            "cited_text": "Morrow Finch FA-25 2025 제품 설명서",
+            "encrypted_index": "fixture"
+          }
+        ]
+      }
+    ],
+    "stop_reason": "end_turn",
+    "stop_sequence": null,
+    "usage": {
+      "input_tokens": 1234,
+      "output_tokens": 621,
+      "cache_creation_input_tokens": null,
+      "cache_read_input_tokens": null,
+      "cache_creation": null,
+      "server_tool_use": {
+        "web_search_requests": 1,
+        "web_fetch_requests": 0
+      },
+      "service_tier": "standard",
+      "inference_geo": null,
+      "speed": "standard",
+      "output_tokens_details": null
+    }
+  },
+  "investigate": {
+    "id": "msg_fixture_investigate",
+    "type": "message",
+    "role": "assistant",
+    "model": "claude-opus-5-5",
+    "container": null,
+    "content": [
+      {
+        "type": "web_search_tool_result",
+        "tool_use_id": "fixture-search",
+        "content": [
+          {
+            "type": "web_search_result",
+            "url": "https://manufacturer.example.com/manual/fa-24",
+            "title": "FA-24 제품 설명서",
+            "encrypted_content": "fixture",
+            "page_age": null
+          },
+          {
+            "type": "web_search_result",
+            "url": "https://review.example.com/bench/fa-24",
+            "title": "FA-24 부하 측정",
+            "encrypted_content": "fixture",
+            "page_age": null
+          },
+          {
+            "type": "web_search_result",
+            "url": "https://manufacturer.example.com/manual/fa-25",
+            "title": "FA-25 제품 설명서",
+            "encrypted_content": "fixture",
+            "page_age": null
+          },
+          {
+            "type": "web_search_result",
+            "url": "https://community.example.com/posts/finch",
+            "title": "Morrow Finch 커뮤니티",
+            "encrypted_content": "fixture",
+            "page_age": null
+          }
+        ]
+      },
+      {
+        "type": "web_fetch_tool_result",
+        "tool_use_id": "fixture-fetch",
+        "content": {
+          "type": "web_fetch_result",
+          "url": "https://review.example.com/bench/fa-24",
+          "retrieved_at": null,
+          "content": {
+            "type": "document",
+            "title": "FA-24 부하 측정",
+            "citations": {
+              "enabled": true
+            },
+            "source": {
+              "type": "text",
+              "media_type": "text/plain",
+              "data": "Morrow Finch FA-24 · 실측 포트 A USB PD 최대 60 W."
+            }
+          }
+        }
+      },
+      {
+        "type": "text",
+        "text": "FA-24 상세 규격",
+        "citations": [
+          {
+            "type": "web_search_result_location",
+            "url": "https://manufacturer.example.com/manual/fa-24",
+            "title": "FA-24 제품 설명서",
+            "cited_text": "Morrow Finch FA-24 · USB-C 출력 A, USB PD 30 W, 스위치에 포트 A가 부착됩니다.",
+            "encrypted_index": "fixture"
+          },
+          {
+            "type": "char_location",
+            "document_index": 0,
+            "document_title": "FA-24 부하 측정",
+            "cited_text": "Morrow Finch FA-24 · 실측 포트 A USB PD 최대 60 W.",
+            "start_char_index": 0,
+            "end_char_index": 44
+          },
+          {
+            "type": "web_search_result_location",
+            "url": "https://manufacturer.example.com/manual/fa-25",
+            "title": "FA-25 제품 설명서",
+            "cited_text": "Morrow Finch FA-25 · USB PD 99 W.",
+            "encrypted_index": "fixture"
+          },
+          {
+            "type": "web_search_result_location",
+            "url": "https://community.example.com/posts/finch",
+            "title": "Morrow Finch 커뮤니티",
+            "cited_text": "Morrow Finch FA-24 · 최대 120 W.",
+            "encrypted_index": "fixture"
+          },
+          {
+            "type": "web_search_result_location",
+            "url": "https://invented.example.com/fake",
+            "title": "조사 도구 결과에 없음",
+            "cited_text": "Morrow Finch FA-24 최대 170 W.",
+            "encrypted_index": "fixture"
+          }
+        ]
+      }
+    ],
+    "stop_reason": "end_turn",
+    "stop_sequence": null,
+    "usage": {
+      "input_tokens": 1234,
+      "output_tokens": 621,
+      "cache_creation_input_tokens": null,
+      "cache_read_input_tokens": null,
+      "cache_creation": null,
+      "server_tool_use": {
+        "web_search_requests": 2,
+        "web_fetch_requests": 1
+      },
+      "service_tier": "standard",
+      "inference_geo": null,
+      "speed": "standard",
+      "output_tokens_details": null
+    }
+  },
+  "normalized": {
+    "id": "msg_fixture_normalize",
+    "type": "message",
+    "role": "assistant",
+    "model": "claude-opus-5-5",
+    "container": null,
+    "content": [
+      {
+        "type": "text",
+        "text": "{\"revision\":\"FA-24\",\"sources\":[{\"id\":\"source-1\",\"confidence\":\"official\"},{\"id\":\"detail-source-2\",\"confidence\":\"review\"},{\"id\":\"detail-source-3\",\"confidence\":\"official\"},{\"id\":\"fake\",\"confidence\":\"official\"}],\"ports\":[{\"id\":\"a\",\"label\":\"USB-C A\",\"citation\":\"quote-1\"},{\"id\":\"discarded\",\"label\":\"근거 없는 포트\",\"citation\":\"quote-5\"}],\"nodes\":[{\"id\":\"controller\",\"label\":\"컨트롤러\",\"kind\":\"controller\",\"citation\":\"quote-1\"}],\"interfaces\":[{\"id\":\"usb-a\",\"label\":\"USB PD\",\"port\":\"a\",\"domain\":\"power\",\"protocol\":\"USB PD\",\"role\":\"source\",\"citation\":\"quote-1\"}],\"edges\":[{\"id\":\"invented-edge\",\"from\":\"controller\",\"to\":\"ghost\",\"citation\":\"quote-1\"}],\"resources\":[{\"id\":\"supply\",\"label\":\"총 출력\",\"kind\":\"total-output\",\"domain\":\"power\",\"unit\":\"W\",\"citation\":\"quote-1\"}],\"claims\":[{\"target\":\"port\",\"id\":\"a\",\"domain\":\"\",\"field\":\"connector\",\"condition\":\"\",\"value\":\"usb-c-receptacle\",\"unit\":\"\",\"citation\":\"quote-1\",\"confidence\":\"official\"},{\"target\":\"interface\",\"id\":\"usb-a\",\"domain\":\"power\",\"field\":\"maxW\",\"condition\":\"\",\"value\":30,\"unit\":\"W\",\"citation\":\"quote-1\",\"confidence\":\"official\"},{\"target\":\"interface\",\"id\":\"usb-a\",\"domain\":\"power\",\"field\":\"pdo5\",\"condition\":\"\",\"value\":3,\"unit\":\"A\",\"citation\":\"quote-1\",\"confidence\":\"official\"},{\"target\":\"interface\",\"id\":\"usb-a\",\"domain\":\"power\",\"field\":\"accepts5\",\"condition\":\"\",\"value\":false,\"unit\":\"\",\"citation\":\"quote-1\",\"confidence\":\"official\"},{\"target\":\"interface\",\"id\":\"usb-a\",\"domain\":\"power\",\"field\":\"maxW\",\"condition\":\"\",\"value\":120,\"unit\":\"W\",\"citation\":\"quote-4\",\"confidence\":\"community\"},{\"target\":\"interface\",\"id\":\"usb-a\",\"domain\":\"power\",\"field\":\"maxW\",\"condition\":\"\",\"value\":99,\"unit\":\"W\",\"citation\":\"quote-3\",\"confidence\":\"official\"},{\"target\":\"interface\",\"id\":\"usb-a\",\"domain\":\"power\",\"field\":\"maxW\",\"condition\":\"\",\"value\":110,\"unit\":\"W\",\"citation\":\"source-invented\",\"confidence\":\"official\"},{\"target\":\"interface\",\"id\":\"usb-a\",\"domain\":\"power\",\"field\":\"maxW\",\"condition\":\"\",\"value\":170,\"unit\":\"W\",\"citation\":\"quote-5\",\"confidence\":\"official\"},{\"target\":\"interface\",\"id\":\"usb-a\",\"domain\":\"power\",\"field\":\"maxW\",\"condition\":\"\",\"value\":500,\"unit\":\"mW\",\"citation\":\"quote-1\",\"confidence\":\"official\"},{\"target\":\"interface\",\"id\":\"usb-a\",\"domain\":\"power\",\"field\":\"reserveW\",\"condition\":\"\",\"value\":5,\"unit\":\"W\",\"citation\":\"\",\"confidence\":\"official\"},{\"target\":\"port\",\"id\":\"a\",\"domain\":\"\",\"field\":\"attachment\",\"condition\":\"\",\"value\":\"hid-node\",\"unit\":\"\",\"citation\":\"quote-85\",\"confidence\":\"official\"},{\"target\":\"interface\",\"id\":\"usb-a\",\"domain\":\"power\",\"field\":\"accepts9\",\"condition\":\"\",\"value\":\"예\",\"unit\":\"\",\"citation\":\"quote-1\",\"confidence\":\"official\"},{\"target\":\"interface\",\"id\":\"usb-a\",\"domain\":\"power\",\"field\":\"maxW\",\"condition\":\"다른 부하 조건\",\"value\":15,\"unit\":\"W\",\"citation\":\"quote-2\",\"confidence\":\"review\"}]}",
+        "citations": null
+      }
+    ],
+    "stop_reason": "end_turn",
+    "stop_sequence": null,
+    "usage": {
+      "input_tokens": 1234,
+      "output_tokens": 621,
+      "cache_creation_input_tokens": null,
+      "cache_read_input_tokens": null,
+      "cache_creation": null,
+      "server_tool_use": null,
+      "service_tier": "standard",
+      "inference_geo": null,
+      "speed": "standard",
+      "output_tokens_details": null
+    }
+  },
+  "conflicting": {
+    "id": "msg_fixture_conflicts",
+    "type": "message",
+    "role": "assistant",
+    "model": "claude-opus-5-5",
+    "container": null,
+    "content": [
+      {
+        "type": "text",
+        "text": "{\"revision\":\"FA-24\",\"sources\":[{\"id\":\"source-1\",\"confidence\":\"official\"},{\"id\":\"detail-source-2\",\"confidence\":\"review\"},{\"id\":\"detail-source-3\",\"confidence\":\"official\"},{\"id\":\"fake\",\"confidence\":\"official\"}],\"ports\":[{\"id\":\"a\",\"label\":\"USB-C A\",\"citation\":\"quote-1\"},{\"id\":\"discarded\",\"label\":\"근거 없는 포트\",\"citation\":\"quote-5\"}],\"nodes\":[{\"id\":\"controller\",\"label\":\"컨트롤러\",\"kind\":\"controller\",\"citation\":\"quote-1\"}],\"interfaces\":[{\"id\":\"usb-a\",\"label\":\"USB PD\",\"port\":\"a\",\"domain\":\"power\",\"protocol\":\"USB PD\",\"role\":\"source\",\"citation\":\"quote-1\"}],\"edges\":[{\"id\":\"invented-edge\",\"from\":\"controller\",\"to\":\"ghost\",\"citation\":\"quote-1\"}],\"resources\":[{\"id\":\"supply\",\"label\":\"총 출력\",\"kind\":\"total-output\",\"domain\":\"power\",\"unit\":\"W\",\"citation\":\"quote-1\"}],\"claims\":[{\"target\":\"port\",\"id\":\"a\",\"domain\":\"\",\"field\":\"connector\",\"condition\":\"\",\"value\":\"usb-c-receptacle\",\"unit\":\"\",\"citation\":\"quote-1\",\"confidence\":\"official\"},{\"target\":\"interface\",\"id\":\"usb-a\",\"domain\":\"power\",\"field\":\"maxW\",\"condition\":\"\",\"value\":30,\"unit\":\"W\",\"citation\":\"quote-1\",\"confidence\":\"official\"},{\"target\":\"interface\",\"id\":\"usb-a\",\"domain\":\"power\",\"field\":\"pdo5\",\"condition\":\"\",\"value\":3,\"unit\":\"A\",\"citation\":\"quote-1\",\"confidence\":\"official\"},{\"target\":\"interface\",\"id\":\"usb-a\",\"domain\":\"power\",\"field\":\"accepts5\",\"condition\":\"\",\"value\":false,\"unit\":\"\",\"citation\":\"quote-1\",\"confidence\":\"official\"},{\"target\":\"interface\",\"id\":\"usb-a\",\"domain\":\"power\",\"field\":\"maxW\",\"condition\":\"\",\"value\":120,\"unit\":\"W\",\"citation\":\"quote-4\",\"confidence\":\"community\"},{\"target\":\"interface\",\"id\":\"usb-a\",\"domain\":\"power\",\"field\":\"maxW\",\"condition\":\"\",\"value\":99,\"unit\":\"W\",\"citation\":\"quote-3\",\"confidence\":\"official\"},{\"target\":\"interface\",\"id\":\"usb-a\",\"domain\":\"power\",\"field\":\"maxW\",\"condition\":\"\",\"value\":110,\"unit\":\"W\",\"citation\":\"source-invented\",\"confidence\":\"official\"},{\"target\":\"interface\",\"id\":\"usb-a\",\"domain\":\"power\",\"field\":\"maxW\",\"condition\":\"\",\"value\":170,\"unit\":\"W\",\"citation\":\"quote-5\",\"confidence\":\"official\"},{\"target\":\"interface\",\"id\":\"usb-a\",\"domain\":\"power\",\"field\":\"maxW\",\"condition\":\"\",\"value\":500,\"unit\":\"mW\",\"citation\":\"quote-1\",\"confidence\":\"official\"},{\"target\":\"interface\",\"id\":\"usb-a\",\"domain\":\"power\",\"field\":\"reserveW\",\"condition\":\"\",\"value\":5,\"unit\":\"W\",\"citation\":\"\",\"confidence\":\"official\"},{\"target\":\"port\",\"id\":\"a\",\"domain\":\"\",\"field\":\"attachment\",\"condition\":\"\",\"value\":\"hid-node\",\"unit\":\"\",\"citation\":\"quote-85\",\"confidence\":\"official\"},{\"target\":\"interface\",\"id\":\"usb-a\",\"domain\":\"power\",\"field\":\"accepts9\",\"condition\":\"\",\"value\":\"예\",\"unit\":\"\",\"citation\":\"quote-1\",\"confidence\":\"official\"},{\"target\":\"interface\",\"id\":\"usb-a\",\"domain\":\"power\",\"field\":\"maxW\",\"condition\":\"다른 부하 조건\",\"value\":15,\"unit\":\"W\",\"citation\":\"quote-2\",\"confidence\":\"review\"},{\"target\":\"interface\",\"id\":\"usb-a\",\"domain\":\"power\",\"field\":\"maxW\",\"condition\":\"\",\"value\":60,\"unit\":\"W\",\"citation\":\"quote-2\",\"confidence\":\"review\"}]}",
+        "citations": null
+      }
+    ],
+    "stop_reason": "end_turn",
+    "stop_sequence": null,
+    "usage": {
+      "input_tokens": 1234,
+      "output_tokens": 621,
+      "cache_creation_input_tokens": null,
+      "cache_read_input_tokens": null,
+      "cache_creation": null,
+      "server_tool_use": null,
+      "service_tier": "standard",
+      "inference_geo": null,
+      "speed": "standard",
+      "output_tokens_details": null
+    }
+  }
+}

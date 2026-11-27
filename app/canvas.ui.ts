@@ -2,8 +2,9 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import type { Page } from "playwright";
-import type { Library, SceneDocument } from "./document.ts";
+import type { Library, Model, SceneDocument } from "./document.ts";
 import { center, edgeSession, viewport, waitForAssessment } from "./edge-session.ts";
+import { fixtureClient, recording } from "../fixtures/research/recording.ts";
 
 const edge = edgeSession();
 const { newPage, openServer, closeServer } = edge;
@@ -794,6 +795,169 @@ test("USB-C 충전기 초안을 저장·배치하고 재시도와 서버 재시�
     assert.equal(await reopened.locator(`[data-inventory="${instanceId}"]`).count(), 1);
     assert.equal(await reopened.locator('[data-connection="connection-1"] [data-direction="forward"][data-unit="W"].wire-capability').count(), 1);
   } finally { await reopened.close(); }
+});
+
+test("키가 없으면 AI 조사가 꺼지고 수동 생성기를 계속 쓴다", async () => {
+  const { page, errors } = await newPage("/");
+  try {
+    await page.getByRole("button", { name: "새 아이템", exact: true }).click();
+    const dialog = page.getByRole("dialog", { name: "새 아이템" });
+    await dialog.getByText("서버 .env에 ANTHROPIC_API_KEY를 넣으면 켜집니다.").waitFor();
+    assert(await dialog.getByRole("button", { name: "조사 시작" }).isDisabled());
+    assert(await dialog.getByRole("button", { name: "저장하고 배치" }).isEnabled());
+    await page.screenshot({ path: "work/research-no-key.png" });
+    assert.deepEqual(errors, []);
+  } finally { await page.close(); }
+});
+
+test("판본을 골라 가상 조사 초안을 확인·편집한 뒤 저장하고 배치한다", async () => {
+  const { calls, client } = fixtureClient([recording.identify, recording.investigate, recording.conflicting]);
+  await closeServer();
+  await openServer(client);
+  const { page, errors } = await newPage("/");
+  try {
+    await page.getByRole("button", { name: "새 아이템", exact: true }).click();
+    const dialog = page.getByRole("dialog", { name: "새 아이템" });
+    await dialog.getByLabel("모델 이름", { exact: true }).fill("작성 중인 수동 초안");
+    await dialog.getByLabel("모델명 또는 공개 URL").fill("Morrow Finch");
+    await dialog.getByRole("button", { name: "조사 시작" }).click();
+    await dialog.getByRole("button", { name: "Morrow Finch · FA-25" }).waitFor();
+    assert.equal(calls.length, 1);
+    await dialog.getByRole("button", { name: "Morrow Finch · FA-24" }).click();
+    const fill = dialog.getByRole("button", { name: "조사 초안 불러오기" });
+    await fill.waitFor();
+    assert.equal(calls.length, 3);
+    assert.equal(await dialog.getByLabel("모델 이름", { exact: true }).inputValue(), "작성 중인 수동 초안");
+    const discarded = dialog.getByText(/버린 필드 \d+개/);
+    await discarded.waitFor();
+    await dialog.getByText("출처 충돌", { exact: true }).waitFor();
+    await page.screenshot({ path: "work/research-fixture.png" });
+    await fill.click();
+    assert.equal(await dialog.getByLabel("모델 이름", { exact: true }).inputValue(), "Morrow Finch");
+    assert.equal(await dialog.getByLabel("판본", { exact: true }).inputValue(), "FA-24");
+    await dialog.getByText("인터페이스 값", { exact: true }).click();
+    assert.equal(await dialog.getByLabel("포트 최대 전력 (W)", { exact: true }).inputValue(), "30");
+    await dialog.getByLabel("모델 이름", { exact: true }).fill("Morrow Finch 사용자 확인");
+    await dialog.getByRole("button", { name: "저장하고 배치" }).click();
+    await dialog.waitFor({ state: "hidden" });
+    const stored = await page.evaluate(async () => (await (await fetch("/api/library")).json()).models
+      .find((model: { modelId: string }) => model.modelId === "morrow-finch"));
+    assert.equal(stored.name, "Morrow Finch 사용자 확인");
+    assert.equal(stored.ports[0].attachment.value, null);
+    const maxW = stored.ports[0].interfaces[0].params.maxW;
+    assert.equal(maxW.value, 30);
+    assert.deepEqual(maxW.sources, ["source-1"]);
+    assert.equal(maxW.confidence, "official");
+    assert.deepEqual(maxW.conflicts, [{ value: 60, confidence: "review", sources: ["detail-source-2"] }]);
+    assert.deepEqual(errors, []);
+  } finally {
+    await page.close();
+    await closeServer();
+    await openServer();
+  }
+});
+
+async function openConflictScene(page: Page, sceneId: string) {
+  const status = await page.evaluate(async id => {
+    const [base, library] = await Promise.all([
+      fetch("/api/scenes/three-ports").then(response => response.json() as Promise<SceneDocument>),
+      fetch("/api/library").then(response => response.json() as Promise<Library>),
+    ]);
+    const original = library.models.find(model => model.modelId === "supply")!;
+    const model: Model = { ...original, modelId: "followup-supply", name: "시험 복제 원본" };
+    model.sources = [
+      { id: "spec", title: "시험 정격표", locator: "https://example.com/spec", retrievedAt: "2026-11-27" },
+      { id: "review", title: "시험 출력 측정", locator: "https://example.com/review", retrievedAt: "2026-11-27" },
+      ...model.sources,
+    ];
+    const [first, second] = model.ports;
+    const { params } = first!.interfaces[0]!;
+    params.maxW = { value: 30, unit: "W", confidence: "official", sources: ["spec"],
+      conflicts: [{ value: 60, confidence: "review", sources: ["review"] }] };
+    params.pdo5 = { value: 0, unit: "A", confidence: "official", sources: ["spec"] };
+    params.accepts5 = { value: false, confidence: "official", sources: ["spec"] };
+    params.pdo9 = { value: null, unit: "A", confidence: "unknown", sources: ["review"] };
+    first!.position = { face: "front", x: 0.25, y: 0.75, confidence: "official", sources: ["spec"] };
+    second!.attachment = { value: null, confidence: "unknown", sources: ["review"] };
+    const headers = { "Content-Type": "application/json" };
+    const saved = await fetch("/api/models/followup-supply/1", { method: "PUT", headers, body: JSON.stringify(model) });
+    if (!saved.ok) return await saved.text();
+    const scene = { ...base, sceneId: id, items: base.items.map(row => row.instanceId === "supply" ? { ...row, modelId: model.modelId } : row) };
+    const created = await fetch("/api/scenes/" + id, { method: "PUT", headers, body: JSON.stringify(scene) });
+    return created.ok ? "ok" : await created.text();
+  }, sceneId);
+  assert.equal(status, "ok");
+  await page.reload();
+  await port(page, "supply", "a").waitFor();
+  await waitForAssessment(page);
+}
+
+test("모델 복제가 새 판본에 알려진 값과 원본을 남기고 미확인과 미선언을 보존한다", async () => {
+  const { page, errors } = await newPage("/");
+  try {
+    await openConflictScene(page, "followup-clone");
+    await page.getByRole("button", { name: "새 아이템", exact: true }).click();
+    const dialog = page.getByRole("dialog", { name: "새 아이템" });
+    const original = dialog.getByLabel("복제할 모델 판본");
+    assert.equal(await original.count(), 1);
+    await original.selectOption("followup-supply@1");
+    await dialog.getByRole("button", { name: "모델 복제", exact: true }).click();
+    const id = await dialog.getByLabel("모델 ID", { exact: true }).inputValue();
+    assert.notEqual(id, "followup-supply");
+    assert.equal(await dialog.getByLabel("모델 이름", { exact: true }).inputValue(), "시험 복제 원본 복제");
+    await page.screenshot({ path: "work/m4-model-clone.png" });
+    await dialog.getByRole("button", { name: "저장하고 배치", exact: true }).click();
+    await dialog.waitFor({ state: "hidden" });
+    const saved = await page.evaluate(async id => {
+      const library = await (await fetch("/api/library")).json() as Library;
+      return {
+        copy: library.models.find(model => model.modelId === id), base: library.models.find(model => model.modelId === "followup-supply"),
+        inventory: library.inventory.filter(item => item.modelId === id),
+      };
+    }, id);
+    const { copy, base, inventory } = saved;
+    assert(copy && base);
+    assert.equal(inventory.length, 1);
+    assert.equal(base.ports[0]!.interfaces[0]!.params.maxW!.confidence, "official");
+    const params = copy.ports[0]!.interfaces[0]!.params;
+    assert.deepEqual([params.maxW!.value, params.pdo5!.value, params.accepts5!.value], [30, 0, false]);
+    const conflict = params.maxW!.conflicts![0]!;
+    assert.equal(conflict.value, 60);
+    assert.deepEqual(conflict.sources, ["review"]);
+    for (const fact of [params.maxW!, conflict, params.pdo5!, params.accepts5!, copy.ports[0]!.connector, copy.ports[0]!.attachment,
+      copy.ports[0]!.interfaces[0]!.evidence, copy.ports[0]!.position!, copy.resources[0]!.capacity, copy.resources[0]!.policy,
+      copy.edges[0]!.evidence, copy.edges[0]!.uses[0]!.evidence, Object.values(copy.attributes!.power!)[0]!]) {
+      assert.deepEqual([fact.confidence, fact.inferredFrom], ["inferred", "followup-supply@1"]);
+    }
+    assert.deepEqual([params.pdo9!.value, params.pdo9!.confidence, params.pdo9!.inferredFrom], [null, "unknown", undefined]);
+    assert.equal(copy.ports[1]!.attachment.value, null);
+    assert.equal(copy.ports[1]!.attachment.inferredFrom, undefined);
+    assert(!Object.hasOwn(params, "pdo12"));
+    await page.locator('[data-instance="' + inventory[0]!.instanceId + '"]').waitFor();
+    assert.deepEqual(errors, []);
+  } finally { await page.close(); }
+});
+
+test("왜 패널과 캔버스 포트 툴팁에서 충돌 후보마다 해당 출처를 짝지어 표시한다", async () => {
+  const { page, errors } = await newPage("/");
+  try {
+    await openConflictScene(page, "followup-evidence");
+    const tooltip = (await port(page, "supply", "a").locator("title").textContent())!;
+    await page.locator('[data-connection="a"] .wire-name').click();
+    const detail = page.getByRole("region", { name: "선택한 항목 근거" });
+    const sourcesByValue = await Promise.all(["충돌 후보 30 W · 공식", "충돌 후보 60 W · 리뷰"].map(label =>
+      detail.getByText(label, { exact: true }).first().locator("..").getByRole("link", { includeHidden: true }).allTextContents()));
+    assert.deepEqual({ sourcesByValue, matches: [
+      /^.*30 W[^\n]*시험 정격표.*$/m.test(tooltip),
+      /^.*60 W[^\n]*시험 출력 측정.*$/m.test(tooltip),
+      /^.*30 W[^\n]*시험 출력 측정.*$/m.test(tooltip),
+      /^.*60 W[^\n]*시험 정격표.*$/m.test(tooltip),
+    ] }, { sourcesByValue: [["시험 정격표"], ["시험 출력 측정"]], matches: [true, true, false, false] });
+    await detail.evaluate(root => root.querySelectorAll("details").forEach(row => row.open = true));
+    await detail.getByText("충돌 후보 60 W · 리뷰", { exact: true }).first().scrollIntoViewIfNeeded();
+    await page.screenshot({ path: "work/m4-claim-conflicts.png" });
+    assert.deepEqual(errors, []);
+  } finally { await page.close(); }
 });
 
 test("등록한 영역의 어휘와 스키마 필드가 생성기와 시나리오에 나타난다", async () => {
