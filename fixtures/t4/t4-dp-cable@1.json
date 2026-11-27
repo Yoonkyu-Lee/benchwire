@@ -1,0 +1,25 @@
+{
+  "modelId": "t4-dp-cable",
+  "revision": "1",
+  "kind": "cable",
+  "brand": "합성",
+  "name": "합성 HBR3 DP 통과 케이블",
+  "category": "연결 시험",
+  "sources": [
+    {"id":"dp-cable","title":"합성 HBR3 DP 통과 케이블","locator":"fixture:t4/dp-cable","retrievedAt":"2026-11-27"}
+  ],
+  "resources": [],
+  "edges": [
+    {"id":"a-b","from":"a","to":"b","evidence":{"value":true,"confidence":"inferred","sources":["dp-cable"]},"uses":[]},
+    {"id":"b-a","from":"b","to":"a","evidence":{"value":true,"confidence":"inferred","sources":["dp-cable"]},"uses":[]}
+  ],
+  "attributes": {},
+  "nodes": [
+    {"id":"a","label":"a","kind":"junction"},
+    {"id":"b","label":"b","kind":"junction"}
+  ],
+  "ports": [
+    {"id":"a","label":"a","connector":{"value":"dp-plug","confidence":"inferred","sources":["dp-cable"]},"attachment":{"value":"a","confidence":"inferred","sources":["dp-cable"]},"interfaces":[{"id":"video-1","domain":"display","protocol":"DP","role":"bidirectional","evidence":{"value":true,"confidence":"inferred","sources":["dp-cable"]},"params":{"version":{"value":null,"confidence":"unknown","sources":["dp-cable"]},"maxRate":{"value":"HBR3","confidence":"inferred","sources":["dp-cable"]},"lanes":{"value":4,"confidence":"inferred","sources":["dp-cable"]},"dscBpp":{"value":0,"unit":"bpp","confidence":"inferred","sources":["dp-cable"]}}}]},
+    {"id":"b","label":"b","connector":{"value":"dp-plug","confidence":"inferred","sources":["dp-cable"]},"attachment":{"value":"b","confidence":"inferred","sources":["dp-cable"]},"interfaces":[{"id":"video-2","domain":"display","protocol":"DP","role":"bidirectional","evidence":{"value":true,"confidence":"inferred","sources":["dp-cable"]},"params":{"version":{"value":null,"confidence":"unknown","sources":["dp-cable"]},"maxRate":{"value":"HBR3","confidence":"inferred","sources":["dp-cable"]},"lanes":{"value":4,"confidence":"inferred","sources":["dp-cable"]},"dscBpp":{"value":0,"unit":"bpp","confidence":"inferred","sources":["dp-cable"]}}}]}
+  ]
+}

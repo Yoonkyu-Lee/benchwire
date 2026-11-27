@@ -105,9 +105,33 @@ export function usbServices({ scene, connection, ports }: Link): { options: Opti
   } else if (tunneledBulk) {
     options.push(tunneledBulk);
   } else if (native.possible) {
+    const alt = !fabric.possible && !usb2 ? altModePins(scene, ports) : null;
+    if (alt) {
+      const usb2Fallback = modeRange([highSpeed], nativeModes, cableRates);
+      if (usb2Fallback.possible) addNative(usb2Fallback.possible, usb2Fallback.confirmed);
+      addNative(native.possible, native.confirmed, "usb-only");
+
+      if (alt.twoLane) {
+        // 핀 D가 USB에 남기는 송·수신 쌍으로는 USB 3.x 한 레인만 쓸 수 있다.
+        const oneLane = USB_3_2_PROTOCOL_ESTIMATES.filter(row => row.mode.endsWith("x1"));
+        const usb3 = modeRange(oneLane, nativeModes, cableRates);
+        if (usb3.possible) addNative(usb3.possible, usb3.confirmed, "dp-2lane", alt.twoLane);
+      }
+    } else {
+      addNative(native.possible, native.confirmed);
+    }
+  } else if (!options.length) {
+    options.push({ mode: BULK, unit: MB_PER_SECOND, verdict: "impossible", condition: "", limit: null,
+      rule: "양 끝과 중간 부품에서 함께 쓸 USB 모드 없음", inputs: facts, specs: [USB2_BULK, USB3_ESTIMATE, CABLE_DATA] });
+  }
+  return { options, pools };
+
+  function addNative(possible: typeof usbModes[number], confirmed: typeof usbModes[number] | undefined, profile?: string, pins: number[] = []) {
+    const usb2 = possible === highSpeed;
     const specs = usb2 ? [USB2_BULK, CABLE_DATA] : [USB3_ESTIMATE, CABLE_DATA];
-    if (native.confirmed === highSpeed && !usb2) specs.push(USB2_BULK);
-    const option = bulkOption(native.possible, native.confirmed, facts, specs, usb2 ? "USB 2.0 " : "USB 3.2 ");
+    if (confirmed === highSpeed && !usb2) specs.push(USB2_BULK);
+    const option = bulkOption(possible, confirmed, [...facts, ...pins], specs, usb2 ? "USB 2.0 " : "USB 3.2 ");
+    if (profile) option.profile = profile;
     if (usb2) {
       option.pool = { domain: DATA, id: USB2_POOL, perUnit: 1 };
       pools.push({ id: USB2_POOL, scope: "connection", unit: MB_PER_SECOND, limit: option.limit,
@@ -115,11 +139,35 @@ export function usbServices({ scene, connection, ports }: Link): { options: Opti
         rule: "USB 2.0 High Speed의 양방향 공용 벌크 시간 예산" });
     }
     options.push(option);
-  } else if (!options.length) {
-    options.push({ mode: BULK, unit: MB_PER_SECOND, verdict: "impossible", condition: "", limit: null,
-      rule: "양 끝과 중간 부품에서 함께 쓸 USB 모드 없음", inputs: facts, specs: [USB2_BULK, USB3_ESTIMATE, CABLE_DATA] });
   }
-  return { options, pools };
+}
+
+// 연결 설정은 양방향을 공유한다. 네이티브 USB 3.x가 경쟁하는 Alt Mode 경로만 확인한다.
+function altModePins(scene: Link["scene"], ports: number[]) {
+  function interfaces(port: number | undefined) {
+    return scene.interfaces.flatMap((i, row) => i.port === port && i.domain === "display" && i.protocol === "DP Alt Mode"
+      ? [{ row, role: i.role }] : []);
+  }
+  if (!ports.slice(1, -1).every(port => interfaces(port).some(i => i.role === "bidirectional"))) return null;
+  const ends = interfaces(ports.at(-1));
+  const supports = (role: string, wanted: string) => role === wanted || role === "bidirectional";
+  const pairs = interfaces(ports[0]).flatMap(a => ends.flatMap(b => supports(a.role, "source") && supports(b.role, "sink") ||
+    supports(a.role, "sink") && supports(b.role, "source") ? [[a.row, b.row]] : []));
+  function claims(profile: string, allowed: readonly string[]) {
+    return pairs.map(pair => pair.map(row => effectiveClaim(scene, "interface", row, "display", "pin", profile)))
+      .find(rows => {
+        const [a, b] = rows.map(row => row === undefined ? null : scene.claims[row]!.value as string | null);
+        const pin = a ?? b;
+        return !!pin && allowed.includes(pin) && (a === null || b === null || a === b);
+      });
+  }
+
+  const d = claims("dp-2lane", ["D"]);
+  if (!d && !claims("dp-4lane", ["C", "E"])) return null;
+  // 한쪽 핀만 알 때 USB 3.x를 추가로 보장할 수 없다.
+  const confirmed = d?.filter(row => row !== undefined);
+  const twoLane = confirmed?.length === 2 && confirmed.every(row => scene.claims[row]!.value === "D") ? confirmed : null;
+  return { twoLane };
 }
 
 function bulkOption(possible: typeof usbModes[number], confirmed: typeof usbModes[number] | undefined,

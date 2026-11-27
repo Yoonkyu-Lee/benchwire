@@ -1,0 +1,26 @@
+{
+  "modelId": "t2-monitor",
+  "revision": "1",
+  "kind": "device",
+  "brand": "합성",
+  "name": "합성 모니터 내장 허브",
+  "category": "연결 시험",
+  "sources": [
+    {"id":"monitor","title":"합성 모니터 내장 허브","locator":"fixture:t2/monitor","retrievedAt":"2026-11-27"}
+  ],
+  "resources": [
+    {"id":"hub-bulk","domain":"data","kind":"bandwidth","unit":"MB/s","capacity":{"value":420,"unit":"MB/s","confidence":"inferred","sources":["monitor"]},"policy":{"value":"max-min","confidence":"inferred","sources":["monitor"]}}
+  ],
+  "edges": [
+    {"id":"input-panel","from":"input","to":"panel","evidence":{"value":true,"confidence":"inferred","sources":["monitor"]},"uses":[]},
+    {"id":"input-hub","from":"input","to":"hub","evidence":{"value":true,"confidence":"inferred","sources":["monitor"]},"uses":[{"resource":"hub-bulk","evidence":{"value":true,"confidence":"inferred","sources":["monitor"]}}]}
+  ],
+  "nodes": [
+    {"id":"input","label":"input","kind":"junction"},
+    {"id":"panel","label":"panel","kind":"junction"},
+    {"id":"hub","label":"hub","kind":"junction"}
+  ],
+  "ports": [
+    {"id":"usb-c","label":"usb-c","connector":{"value":"usb-c-receptacle","confidence":"inferred","sources":["monitor"]},"attachment":{"value":"input","confidence":"inferred","sources":["monitor"]},"interfaces":[{"id":"video","domain":"display","protocol":"DP Alt Mode","role":"sink","evidence":{"value":true,"confidence":"inferred","sources":["monitor"]},"params":{"version":{"value":"1.4","confidence":"inferred","sources":["monitor"]},"maxRate":{"value":"HBR3","confidence":"inferred","sources":["monitor"]},"lanes":{"value":4,"confidence":"inferred","sources":["monitor"]},"dscBpp":{"value":12,"unit":"bpp","confidence":"inferred","sources":["monitor"]},"pin":{"value":"C","confidence":"inferred","sources":["monitor"]}}},{"id":"usb","domain":"data","protocol":"USB","role":"bidirectional","evidence":{"value":true,"confidence":"inferred","sources":["monitor"]},"params":{"modes":{"value":"High Speed, Gen 1x1","confidence":"inferred","sources":["monitor"]}}}]}
+  ]
+}

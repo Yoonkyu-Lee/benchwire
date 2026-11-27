@@ -1,0 +1,43 @@
+{
+  "modelId": "t4-usb-cable",
+  "revision": "1",
+  "kind": "cable",
+  "brand": "합성",
+  "name": "합성 20 Gbps USB 케이블",
+  "category": "연결 시험",
+  "sources": [
+    {"id":"usb-cable","title":"합성 20 Gbps USB 케이블","locator":"fixture:t4/usb-cable","retrievedAt":"2026-11-27"}
+  ],
+  "resources": [],
+  "edges": [
+    {"id":"a-b","from":"a","to":"b","evidence":{"value":true,"confidence":"inferred","sources":["usb-cable"]},"uses":[]},
+    {"id":"b-a","from":"b","to":"a","evidence":{"value":true,"confidence":"inferred","sources":["usb-cable"]},"uses":[]}
+  ],
+  "attributes": {
+    "data": {
+      "cableDataGbps": {
+        "value": 20,
+        "unit": "Gbps",
+        "confidence": "inferred",
+        "sources": [
+          "usb-cable"
+        ]
+      },
+      "cableUsb4": {
+        "value": false,
+        "confidence": "inferred",
+        "sources": [
+          "usb-cable"
+        ]
+      }
+    }
+  },
+  "nodes": [
+    {"id":"a","label":"a","kind":"junction"},
+    {"id":"b","label":"b","kind":"junction"}
+  ],
+  "ports": [
+    {"id":"a","label":"a","connector":{"value":"usb-c-plug","confidence":"inferred","sources":["usb-cable"]},"attachment":{"value":"a","confidence":"inferred","sources":["usb-cable"]},"interfaces":[]},
+    {"id":"b","label":"b","connector":{"value":"usb-c-plug","confidence":"inferred","sources":["usb-cable"]},"attachment":{"value":"b","confidence":"inferred","sources":["usb-cable"]},"interfaces":[]}
+  ]
+}

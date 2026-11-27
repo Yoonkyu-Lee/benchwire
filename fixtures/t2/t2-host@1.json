@@ -1,0 +1,19 @@
+{
+  "modelId": "t2-host",
+  "revision": "1",
+  "kind": "device",
+  "brand": "합성",
+  "name": "합성 영상·USB 호스트",
+  "category": "연결 시험",
+  "sources": [
+    {"id":"host","title":"합성 영상·USB 호스트","locator":"fixture:t2/host","retrievedAt":"2026-11-27"}
+  ],
+  "resources": [],
+  "edges": [],
+  "nodes": [
+    {"id":"out","label":"out","kind":"junction"}
+  ],
+  "ports": [
+    {"id":"usb-c","label":"usb-c","connector":{"value":"usb-c-receptacle","confidence":"inferred","sources":["host"]},"attachment":{"value":"out","confidence":"inferred","sources":["host"]},"interfaces":[{"id":"video","domain":"display","protocol":"DP Alt Mode","role":"source","evidence":{"value":true,"confidence":"inferred","sources":["host"]},"params":{"version":{"value":"1.4","confidence":"inferred","sources":["host"]},"maxRate":{"value":"HBR3","confidence":"inferred","sources":["host"]},"lanes":{"value":4,"confidence":"inferred","sources":["host"]},"dscBpp":{"value":12,"unit":"bpp","confidence":"inferred","sources":["host"]},"pin":{"value":"C","confidence":"inferred","sources":["host"]}}},{"id":"usb","domain":"data","protocol":"USB","role":"bidirectional","evidence":{"value":true,"confidence":"inferred","sources":["host"]},"params":{"modes":{"value":"High Speed, Gen 1x1","confidence":"inferred","sources":["host"]}}}]}
+  ]
+}

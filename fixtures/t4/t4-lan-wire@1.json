@@ -1,0 +1,65 @@
+{
+  "modelId": "t4-lan-wire",
+  "revision": "1",
+  "kind": "cable",
+  "brand": "합성",
+  "name": "합성 Cat5e LAN 케이블",
+  "category": "연결 시험",
+  "sources": [
+    {"id":"lan-wire","title":"합성 Cat5e LAN 케이블","locator":"fixture:t4/lan-wire","retrievedAt":"2026-11-27"}
+  ],
+  "resources": [],
+  "edges": [
+    {"id":"a-b","from":"a","to":"b","evidence":{"value":true,"confidence":"inferred","sources":["lan-wire"]},"uses":[]},
+    {"id":"b-a","from":"b","to":"a","evidence":{"value":true,"confidence":"inferred","sources":["lan-wire"]},"uses":[]}
+  ],
+  "attributes": {
+    "network": {
+      "category": {
+        "value": "Cat5e",
+        "confidence": "inferred",
+        "sources": [
+          "lan-wire"
+        ]
+      },
+      "length": {
+        "value": 3,
+        "unit": "m",
+        "confidence": "inferred",
+        "sources": [
+          "lan-wire"
+        ]
+      },
+      "screening": {
+        "value": "unscreened",
+        "confidence": "inferred",
+        "sources": [
+          "lan-wire"
+        ]
+      },
+      "poeType": {
+        "value": 0,
+        "confidence": "inferred",
+        "sources": [
+          "lan-wire"
+        ]
+      },
+      "poeLoss": {
+        "value": null,
+        "unit": "W",
+        "confidence": "unknown",
+        "sources": [
+          "lan-wire"
+        ]
+      }
+    }
+  },
+  "nodes": [
+    {"id":"a","label":"a","kind":"junction"},
+    {"id":"b","label":"b","kind":"junction"}
+  ],
+  "ports": [
+    {"id":"a","label":"a","connector":{"value":"ethernet-plug","confidence":"inferred","sources":["lan-wire"]},"attachment":{"value":"a","confidence":"inferred","sources":["lan-wire"]},"interfaces":[{"id":"a","domain":"network","protocol":"Ethernet channel","role":"bidirectional","evidence":{"value":true,"confidence":"inferred","sources":["lan-wire"]},"params":{}}]},
+    {"id":"b","label":"b","connector":{"value":"ethernet-plug","confidence":"inferred","sources":["lan-wire"]},"attachment":{"value":"b","confidence":"inferred","sources":["lan-wire"]},"interfaces":[{"id":"b","domain":"network","protocol":"Ethernet channel","role":"bidirectional","evidence":{"value":true,"confidence":"inferred","sources":["lan-wire"]},"params":{}}]}
+  ]
+}

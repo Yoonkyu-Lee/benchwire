@@ -1,0 +1,42 @@
+{
+  "sceneId": "t4-usb4-local-two-lane",
+  "sources": [
+    {"id":"scene","title":"합성 4K 111.9851 Hz 타이밍 · CVT-RB v2 클록 1 GHz, 비압축 16 Gbps·DSC 8 Gbps","locator":"fixture:t4/scene","retrievedAt":"2026-11-27"},
+    {"id":"configuration","title":"합성 로컬 출력 설정","locator":"fixture:t4/configuration","retrievedAt":"2026-11-27"}
+  ],
+  "items": [
+    {"instanceId":"host","modelId":"t4-host","revision":"1"},
+    {"instanceId":"dock","modelId":"t4-dock","revision":"1"},
+    {"instanceId":"monitor-a","modelId":"t4-monitor","revision":"1"},
+    {"instanceId":"monitor-b","modelId":"t4-monitor","revision":"1"},
+    {"instanceId":"ssd","modelId":"t4-ssd","revision":"1"},
+    {"instanceId":"lan-peer","modelId":"t4-lan-peer","revision":"1"},
+    {"instanceId":"upstream","modelId":"t4-usb4-cable","revision":"1"},
+    {"instanceId":"dp-wire-a","modelId":"t4-dp-cable","revision":"1"},
+    {"instanceId":"dp-wire-b","modelId":"t4-dp-cable","revision":"1"},
+    {"instanceId":"storage-wire","modelId":"t4-usb-cable","revision":"1"},
+    {"instanceId":"ethernet-wire","modelId":"t4-lan-wire","revision":"1"}
+  ],
+  "connections": [
+    {"id":"usb4-upstream","from":{"instanceId":"host","id":"usb4"},"to":{"instanceId":"dock","id":"usb4"},"parts":[{"instanceId":"upstream","entry":"a","exit":"b"}],"evidence":{"value":true,"confidence":"inferred","sources":["scene"]}},
+    {"id":"monitor-a","from":{"instanceId":"dock","id":"dp-a"},"to":{"instanceId":"monitor-a","id":"in"},"parts":[{"instanceId":"dp-wire-a","entry":"a","exit":"b"}],"evidence":{"value":true,"confidence":"inferred","sources":["scene"]}},
+    {"id":"monitor-b","from":{"instanceId":"dock","id":"dp-b"},"to":{"instanceId":"monitor-b","id":"in"},"parts":[{"instanceId":"dp-wire-b","entry":"a","exit":"b"}],"evidence":{"value":true,"confidence":"inferred","sources":["scene"]}},
+    {"id":"storage","from":{"instanceId":"dock","id":"usb-storage"},"to":{"instanceId":"ssd","id":"in"},"parts":[{"instanceId":"storage-wire","entry":"a","exit":"b"}],"evidence":{"value":true,"confidence":"inferred","sources":["scene"]}},
+    {"id":"ethernet","from":{"instanceId":"dock","id":"lan"},"to":{"instanceId":"lan-peer","id":"in"},"parts":[{"instanceId":"ethernet-wire","entry":"a","exit":"b"}],"evidence":{"value":true,"confidence":"inferred","sources":["scene"]}}
+  ],
+  "workloads": [
+    {"id":"video-a","domain":"display","kind":"video","from":{"instanceId":"host","id":"controller"},"to":{"instanceId":"monitor-a","id":"panel"},"request":{"width":{"value":3840,"unit":"px","confidence":"inferred","sources":["scene"]},"height":{"value":2160,"unit":"px","confidence":"inferred","sources":["scene"]},"refresh":{"value":111.9851,"unit":"Hz","confidence":"inferred","sources":["scene"]},"bitsPerComponent":{"value":8,"unit":"bpc","confidence":"inferred","sources":["scene"]},"chroma":{"value":"4:2:2","confidence":"inferred","sources":["scene"]}}},
+    {"id":"video-b","domain":"display","kind":"video","from":{"instanceId":"host","id":"controller"},"to":{"instanceId":"monitor-b","id":"panel"},"request":{"width":{"value":3840,"unit":"px","confidence":"inferred","sources":["scene"]},"height":{"value":2160,"unit":"px","confidence":"inferred","sources":["scene"]},"refresh":{"value":111.9851,"unit":"Hz","confidence":"inferred","sources":["scene"]},"bitsPerComponent":{"value":8,"unit":"bpc","confidence":"inferred","sources":["scene"]},"chroma":{"value":"4:2:2","confidence":"inferred","sources":["scene"]},"dscBpp":{"value":8,"unit":"bpp","confidence":"inferred","sources":["scene"]}}},
+    {"id":"ssd-write","domain":"storage","kind":"copy","from":{"instanceId":"host","id":"controller"},"to":{"instanceId":"ssd","id":"media"},"request":{"throughput":{"value":800,"unit":"MB/s","confidence":"inferred","sources":["scene"]}}},
+    {"id":"nic-pcie","domain":"data","kind":"pcie-tunnel","from":{"instanceId":"host","id":"controller"},"to":{"instanceId":"dock","id":"nic"},"request":{"throughput":{"value":100,"unit":"MB/s","confidence":"inferred","sources":["scene"]}}},
+    {"id":"nic-reverse","domain":"data","kind":"pcie-tunnel","from":{"instanceId":"dock","id":"nic"},"to":{"instanceId":"host","id":"controller"},"request":{"throughput":{"value":100,"unit":"MB/s","confidence":"inferred","sources":["scene"]}}},
+    {"id":"ethernet","domain":"network","kind":"traffic","from":{"instanceId":"dock","id":"nic"},"to":{"instanceId":"lan-peer","id":"receive"},"request":{"throughput":{"value":800,"unit":"Mbps","confidence":"inferred","sources":["scene"]}}}
+  ],
+  "scenarios": [
+    {"id":"one-video","members":["video-a","ssd-write","nic-pcie","nic-reverse","ethernet"]},
+    {"id":"two-video","members":["video-a","video-b","ssd-write","nic-pcie","nic-reverse","ethernet"]}
+  ],
+  "personal": [
+    {"instanceId":"dock","ownerKind":"interface","ownerId":"video-b","domain":"display","field":"lanes","claim":{"value":2,"confidence":"user_verified","sources":["configuration"]}}
+  ]
+}

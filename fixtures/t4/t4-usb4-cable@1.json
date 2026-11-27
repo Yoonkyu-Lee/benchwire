@@ -1,0 +1,43 @@
+{
+  "modelId": "t4-usb4-cable",
+  "revision": "1",
+  "kind": "cable",
+  "brand": "합성",
+  "name": "합성 40 Gbps USB4 케이블",
+  "category": "연결 시험",
+  "sources": [
+    {"id":"usb4-cable","title":"합성 40 Gbps USB4 케이블","locator":"fixture:t4/usb4-cable","retrievedAt":"2026-11-27"}
+  ],
+  "resources": [],
+  "edges": [
+    {"id":"a-b","from":"a","to":"b","evidence":{"value":true,"confidence":"inferred","sources":["usb4-cable"]},"uses":[]},
+    {"id":"b-a","from":"b","to":"a","evidence":{"value":true,"confidence":"inferred","sources":["usb4-cable"]},"uses":[]}
+  ],
+  "attributes": {
+    "data": {
+      "cableDataGbps": {
+        "value": 40,
+        "unit": "Gbps",
+        "confidence": "inferred",
+        "sources": [
+          "usb4-cable"
+        ]
+      },
+      "cableUsb4": {
+        "value": true,
+        "confidence": "inferred",
+        "sources": [
+          "usb4-cable"
+        ]
+      }
+    }
+  },
+  "nodes": [
+    {"id":"a","label":"a","kind":"junction"},
+    {"id":"b","label":"b","kind":"junction"}
+  ],
+  "ports": [
+    {"id":"a","label":"a","connector":{"value":"usb-c-plug","confidence":"inferred","sources":["usb4-cable"]},"attachment":{"value":"a","confidence":"inferred","sources":["usb4-cable"]},"interfaces":[]},
+    {"id":"b","label":"b","connector":{"value":"usb-c-plug","confidence":"inferred","sources":["usb4-cable"]},"attachment":{"value":"b","confidence":"inferred","sources":["usb4-cable"]},"interfaces":[]}
+  ]
+}

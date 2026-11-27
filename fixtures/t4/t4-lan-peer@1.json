@@ -1,0 +1,19 @@
+{
+  "modelId": "t4-lan-peer",
+  "revision": "1",
+  "kind": "device",
+  "brand": "합성",
+  "name": "합성 LAN 수신 단말",
+  "category": "연결 시험",
+  "sources": [
+    {"id":"lan-peer","title":"합성 LAN 수신 단말","locator":"fixture:t4/lan-peer","retrievedAt":"2026-11-27"}
+  ],
+  "resources": [],
+  "edges": [],
+  "nodes": [
+    {"id":"receive","label":"receive","kind":"junction"}
+  ],
+  "ports": [
+    {"id":"in","label":"in","connector":{"value":"ethernet-receptacle","confidence":"inferred","sources":["lan-peer"]},"attachment":{"value":"receive","confidence":"inferred","sources":["lan-peer"]},"interfaces":[{"id":"mac","domain":"network","protocol":"Ethernet","role":"bidirectional","evidence":{"value":true,"confidence":"inferred","sources":["lan-peer"]},"params":{"baseTModes":{"value":"1000BASE-T","confidence":"inferred","sources":["lan-peer"]},"networkRole":{"value":"lan","confidence":"inferred","sources":["lan-peer"]}}}]}
+  ]
+}

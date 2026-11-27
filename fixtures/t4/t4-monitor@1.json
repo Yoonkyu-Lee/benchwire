@@ -1,0 +1,19 @@
+{
+  "modelId": "t4-monitor",
+  "revision": "1",
+  "kind": "device",
+  "brand": "합성",
+  "name": "합성 DP 모니터",
+  "category": "연결 시험",
+  "sources": [
+    {"id":"monitor","title":"합성 DP 모니터","locator":"fixture:t4/monitor","retrievedAt":"2026-11-27"}
+  ],
+  "resources": [],
+  "edges": [],
+  "nodes": [
+    {"id":"panel","label":"panel","kind":"junction"}
+  ],
+  "ports": [
+    {"id":"in","label":"in","connector":{"value":"dp-receptacle","confidence":"inferred","sources":["monitor"]},"attachment":{"value":"panel","confidence":"inferred","sources":["monitor"]},"interfaces":[{"id":"video","domain":"display","protocol":"DP","role":"sink","evidence":{"value":true,"confidence":"inferred","sources":["monitor"]},"params":{"version":{"value":"1.4","confidence":"inferred","sources":["monitor"]},"maxRate":{"value":"HBR3","confidence":"inferred","sources":["monitor"]},"lanes":{"value":4,"confidence":"inferred","sources":["monitor"]},"dscBpp":{"value":8,"unit":"bpp","confidence":"inferred","sources":["monitor"]}}}]}
+  ]
+}

@@ -1,0 +1,24 @@
+{
+  "modelId": "t4-ssd",
+  "revision": "1",
+  "kind": "device",
+  "brand": "합성",
+  "name": "합성 USB 벌크 저장장치",
+  "category": "연결 시험",
+  "sources": [
+    {"id":"ssd","title":"합성 USB 벌크 저장장치","locator":"fixture:t4/ssd","retrievedAt":"2026-11-27"}
+  ],
+  "resources": [
+    {"id":"media-write","domain":"storage","kind":"bandwidth","unit":"MB/s","capacity":{"value":2000,"unit":"MB/s","confidence":"inferred","sources":["ssd"]},"policy":{"value":"max-min","confidence":"inferred","sources":["ssd"]}}
+  ],
+  "edges": [
+    {"id":"usb-media","from":"usb","to":"media","evidence":{"value":true,"confidence":"inferred","sources":["ssd"]},"uses":[{"resource":"media-write","evidence":{"value":true,"confidence":"inferred","sources":["ssd"]}}]}
+  ],
+  "nodes": [
+    {"id":"usb","label":"usb","kind":"junction"},
+    {"id":"media","label":"media","kind":"junction"}
+  ],
+  "ports": [
+    {"id":"in","label":"in","connector":{"value":"usb-c-receptacle","confidence":"inferred","sources":["ssd"]},"attachment":{"value":"usb","confidence":"inferred","sources":["ssd"]},"interfaces":[{"id":"storage","domain":"data","protocol":"USB","role":"bidirectional","evidence":{"value":true,"confidence":"inferred","sources":["ssd"]},"params":{"modes":{"value":"Gen 2x2","confidence":"inferred","sources":["ssd"]}}}]}
+  ]
+}

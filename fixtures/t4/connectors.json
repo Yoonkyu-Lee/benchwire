@@ -1,0 +1,18 @@
+{
+  "sources": [
+    {"id":"connectors","title":"합성 커넥터 결합","locator":"fixture:t4/connectors","retrievedAt":"2026-11-27"}
+  ],
+  "connectors": [
+    {"id":"usb-c-plug","endForm":{"value":"plug","confidence":"inferred","sources":["connectors"]}},
+    {"id":"usb-c-receptacle","endForm":{"value":"receptacle","confidence":"inferred","sources":["connectors"]}},
+    {"id":"dp-plug","endForm":{"value":"plug","confidence":"inferred","sources":["connectors"]}},
+    {"id":"dp-receptacle","endForm":{"value":"receptacle","confidence":"inferred","sources":["connectors"]}},
+    {"id":"ethernet-plug","endForm":{"value":"plug","confidence":"inferred","sources":["connectors"]}},
+    {"id":"ethernet-receptacle","endForm":{"value":"receptacle","confidence":"inferred","sources":["connectors"]}}
+  ],
+  "mates": [
+    {"a":"usb-c-plug","b":"usb-c-receptacle","evidence":{"value":true,"confidence":"inferred","sources":["connectors"]}},
+    {"a":"dp-plug","b":"dp-receptacle","evidence":{"value":true,"confidence":"inferred","sources":["connectors"]}},
+    {"a":"ethernet-plug","b":"ethernet-receptacle","evidence":{"value":true,"confidence":"inferred","sources":["connectors"]}}
+  ]
+}

@@ -1,0 +1,26 @@
+{
+  "sceneId": "t2-alt-mode",
+  "sources": [
+    {"id":"scene","title":"영상 4K144과 400 MB/s 허브 수요","locator":"fixture:t2/scene","retrievedAt":"2026-11-27"},
+    {"id":"configuration","title":"합성 양 끝의 핀 D 지원","locator":"fixture:t2/configuration","retrievedAt":"2026-11-27"}
+  ],
+  "items": [
+    {"instanceId":"host","modelId":"t2-host","revision":"1"},
+    {"instanceId":"monitor","modelId":"t2-monitor","revision":"1"},
+    {"instanceId":"cable","modelId":"t2-cable","revision":"1"}
+  ],
+  "personal": [
+    {"instanceId":"host","ownerKind":"interface","ownerId":"video","domain":"display","field":"pin","claim":{"value":"D","confidence":"user_verified","condition":"dp-2lane","sources":["configuration"]}},
+    {"instanceId":"monitor","ownerKind":"interface","ownerId":"video","domain":"display","field":"pin","claim":{"value":"D","confidence":"user_verified","condition":"dp-2lane","sources":["configuration"]}}
+  ],
+  "connections": [
+    {"id":"display-hub","from":{"instanceId":"host","id":"usb-c"},"to":{"instanceId":"monitor","id":"usb-c"},"parts":[{"instanceId":"cable","entry":"a","exit":"b"}],"evidence":{"value":true,"confidence":"inferred","sources":["scene"]}}
+  ],
+  "workloads": [
+    {"id":"video","domain":"display","kind":"video","from":{"instanceId":"host","id":"out"},"to":{"instanceId":"monitor","id":"panel"},"request":{"width":{"value":3840,"unit":"px","confidence":"inferred","sources":["scene"]},"height":{"value":2160,"unit":"px","confidence":"inferred","sources":["scene"]},"refresh":{"value":144,"unit":"Hz","confidence":"inferred","sources":["scene"]},"bitsPerComponent":{"value":8,"unit":"bpc","confidence":"inferred","sources":["scene"]},"chroma":{"value":"4:4:4","confidence":"inferred","sources":["scene"]},"dscBpp":{"value":12,"unit":"bpp","confidence":"inferred","sources":["scene"]},"fallbackRefresh":{"value":60,"unit":"Hz","confidence":"inferred","sources":["scene"]}}},
+    {"id":"hub","domain":"data","kind":"bulk","from":{"instanceId":"host","id":"out"},"to":{"instanceId":"monitor","id":"hub"},"request":{"throughput":{"value":400,"unit":"MB/s","confidence":"inferred","sources":["scene"]}}}
+  ],
+  "scenarios": [
+    {"id":"both","members":["hub",{"workload":"video","priority":{"value":0,"confidence":"inferred","sources":["scene"]}}]}
+  ]
+}

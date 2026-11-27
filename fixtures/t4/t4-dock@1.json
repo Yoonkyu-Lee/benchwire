@@ -1,0 +1,35 @@
+{
+  "modelId": "t4-dock",
+  "revision": "1",
+  "kind": "device",
+  "brand": "합성",
+  "name": "합성 USB4 독과 이더넷 NIC",
+  "category": "연결 시험",
+  "sources": [
+    {"id":"dock","title":"합성 USB4 독과 이더넷 NIC","locator":"fixture:t4/dock","retrievedAt":"2026-11-27"}
+  ],
+  "resources": [
+    {"id":"streams","domain":"display","kind":"streams","unit":"streams","capacity":{"value":2,"unit":"streams","confidence":"inferred","sources":["dock"]},"policy":{"value":"max-min","confidence":"inferred","sources":["dock"]}}
+  ],
+  "edges": [
+    {"id":"router-video-a","from":"router","to":"video-a","evidence":{"value":true,"confidence":"inferred","sources":["dock"]},"uses":[{"resource":"streams","evidence":{"value":true,"confidence":"inferred","sources":["dock"]}}]},
+    {"id":"router-video-b","from":"router","to":"video-b","evidence":{"value":true,"confidence":"inferred","sources":["dock"]},"uses":[{"resource":"streams","evidence":{"value":true,"confidence":"inferred","sources":["dock"]}}]},
+    {"id":"router-storage","from":"router","to":"storage","evidence":{"value":true,"confidence":"inferred","sources":["dock"]},"uses":[]},
+    {"id":"router-nic","from":"router","to":"nic","evidence":{"value":true,"confidence":"inferred","sources":["dock"]},"uses":[]},
+    {"id":"nic-router","from":"nic","to":"router","evidence":{"value":true,"confidence":"inferred","sources":["dock"]},"uses":[]}
+  ],
+  "nodes": [
+    {"id":"router","label":"router","kind":"junction"},
+    {"id":"video-a","label":"video-a","kind":"junction"},
+    {"id":"video-b","label":"video-b","kind":"junction"},
+    {"id":"storage","label":"storage","kind":"junction"},
+    {"id":"nic","label":"nic","kind":"junction"}
+  ],
+  "ports": [
+    {"id":"usb4","label":"usb4","connector":{"value":"usb-c-receptacle","confidence":"inferred","sources":["dock"]},"attachment":{"value":"router","confidence":"inferred","sources":["dock"]},"interfaces":[{"id":"usb4","domain":"data","protocol":"USB4","role":"bidirectional","evidence":{"value":true,"confidence":"inferred","sources":["dock"]},"params":{"modes":{"value":"Gen 3x2","confidence":"inferred","sources":["dock"]},"usb3Modes":{"value":"Gen 2x2","confidence":"inferred","sources":["dock"]},"pcie":{"value":true,"confidence":"inferred","sources":["dock"]},"tunnelGbps":{"value":28,"unit":"Gbps","confidence":"inferred","sources":["dock"]}}},{"id":"tunnel","domain":"display","protocol":"DP Tunnel","role":"sink","evidence":{"value":true,"confidence":"inferred","sources":["dock"]},"params":{"version":{"value":"1.4","confidence":"inferred","sources":["dock"]},"maxRate":{"value":"HBR3","confidence":"inferred","sources":["dock"]},"lanes":{"value":4,"confidence":"inferred","sources":["dock"]},"dscBpp":{"value":8,"unit":"bpp","confidence":"inferred","sources":["dock"]}}}]},
+    {"id":"dp-a","label":"dp-a","connector":{"value":"dp-receptacle","confidence":"inferred","sources":["dock"]},"attachment":{"value":"video-a","confidence":"inferred","sources":["dock"]},"interfaces":[{"id":"video-a","domain":"display","protocol":"DP","role":"source","evidence":{"value":true,"confidence":"inferred","sources":["dock"]},"params":{"version":{"value":"1.4","confidence":"inferred","sources":["dock"]},"maxRate":{"value":"HBR3","confidence":"inferred","sources":["dock"]},"lanes":{"value":4,"confidence":"inferred","sources":["dock"]},"dscBpp":{"value":8,"unit":"bpp","confidence":"inferred","sources":["dock"]}}}]},
+    {"id":"dp-b","label":"dp-b","connector":{"value":"dp-receptacle","confidence":"inferred","sources":["dock"]},"attachment":{"value":"video-b","confidence":"inferred","sources":["dock"]},"interfaces":[{"id":"video-b","domain":"display","protocol":"DP","role":"source","evidence":{"value":true,"confidence":"inferred","sources":["dock"]},"params":{"version":{"value":"1.4","confidence":"inferred","sources":["dock"]},"maxRate":{"value":"HBR3","confidence":"inferred","sources":["dock"]},"lanes":{"value":4,"confidence":"inferred","sources":["dock"]},"dscBpp":{"value":8,"unit":"bpp","confidence":"inferred","sources":["dock"]}}}]},
+    {"id":"usb-storage","label":"usb-storage","connector":{"value":"usb-c-receptacle","confidence":"inferred","sources":["dock"]},"attachment":{"value":"storage","confidence":"inferred","sources":["dock"]},"interfaces":[{"id":"storage","domain":"data","protocol":"USB","role":"bidirectional","evidence":{"value":true,"confidence":"inferred","sources":["dock"]},"params":{"modes":{"value":"Gen 2x2","confidence":"inferred","sources":["dock"]}}}]},
+    {"id":"lan","label":"lan","connector":{"value":"ethernet-receptacle","confidence":"inferred","sources":["dock"]},"attachment":{"value":"nic","confidence":"inferred","sources":["dock"]},"interfaces":[{"id":"mac","domain":"network","protocol":"Ethernet","role":"bidirectional","evidence":{"value":true,"confidence":"inferred","sources":["dock"]},"params":{"baseTModes":{"value":"1000BASE-T","confidence":"inferred","sources":["dock"]},"networkRole":{"value":"lan","confidence":"inferred","sources":["dock"]}}}]}
+  ]
+}

@@ -1,0 +1,19 @@
+{
+  "modelId": "t4-host",
+  "revision": "1",
+  "kind": "device",
+  "brand": "합성",
+  "name": "합성 USB4 호스트",
+  "category": "연결 시험",
+  "sources": [
+    {"id":"host","title":"합성 USB4 호스트","locator":"fixture:t4/host","retrievedAt":"2026-11-27"}
+  ],
+  "resources": [],
+  "edges": [],
+  "nodes": [
+    {"id":"controller","label":"controller","kind":"junction"}
+  ],
+  "ports": [
+    {"id":"usb4","label":"usb4","connector":{"value":"usb-c-receptacle","confidence":"inferred","sources":["host"]},"attachment":{"value":"controller","confidence":"inferred","sources":["host"]},"interfaces":[{"id":"usb4","domain":"data","protocol":"USB4","role":"bidirectional","evidence":{"value":true,"confidence":"inferred","sources":["host"]},"params":{"modes":{"value":"Gen 3x2","confidence":"inferred","sources":["host"]},"usb3Modes":{"value":"Gen 2x2","confidence":"inferred","sources":["host"]},"pcie":{"value":true,"confidence":"inferred","sources":["host"]},"tunnelGbps":{"value":28,"unit":"Gbps","confidence":"inferred","sources":["host"]}}},{"id":"tunnel","domain":"display","protocol":"DP Tunnel","role":"source","evidence":{"value":true,"confidence":"inferred","sources":["host"]},"params":{"version":{"value":"1.4","confidence":"inferred","sources":["host"]},"maxRate":{"value":"HBR3","confidence":"inferred","sources":["host"]},"lanes":{"value":4,"confidence":"inferred","sources":["host"]},"dscBpp":{"value":8,"unit":"bpp","confidence":"inferred","sources":["host"]}}}]}
+  ]
+}
