@@ -67,11 +67,11 @@ export function fieldUnit(schema: JSONSchema) {
 }
 
 export function claimInput(form: HTMLElement, key: string, property: JSONSchema | boolean, required: boolean,
-  initial: { value: Value; unit?: string | undefined } | undefined, path: string) {
+  initial: { value: Value; unit?: string | undefined } | undefined, path: string, verified = false) {
   if (typeof property !== "object" || typeof property.properties?.value !== "object")
     throw new Error("주장 필드의 값 스키마가 필요합니다: " + key);
   const variants = alternatives(property.properties.value);
-  const canBeUnknown = variants.some(schema => schema.type === "null");
+  const canBeUnknown = !verified && variants.some(schema => schema.type === "null");
   const known = variants.filter(schema => schema.type !== "null");
   const unit = fieldUnit(property) || initial?.unit || "";
   const options = known.map(schema => schema.enum ?? (schema.const !== undefined ? [schema.const] : schema.type === "boolean" ? [true, false] : undefined));
@@ -81,9 +81,13 @@ export function claimInput(form: HTMLElement, key: string, property: JSONSchema 
   if (choices?.length) {
     const select = document.createElement("select");
     select.append(...choices.map(choice => new Option(choice === true ? "예" : choice === false ? "아니요" : String(choice))));
-    select.selectedIndex = Math.max(0, choices.indexOf(initial?.value ?? null));
+    if (verified) {
+      const blank = new Option("확인한 값 선택", "", true, true);
+      blank.disabled = true;
+      select.prepend(blank);
+    } else select.selectedIndex = Math.max(0, choices.indexOf(initial?.value ?? null));
     control = select;
-    read = () => choices[select.selectedIndex]!;
+    read = () => choices[select.selectedIndex - Number(verified)] ?? null;
   } else {
     const input = document.createElement("input");
     const numeric = known.every(schema => schema.type === "number" || schema.type === "integer" || typeof schema.const === "number");

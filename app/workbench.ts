@@ -10,6 +10,7 @@ import { showFieldError } from "./field.ts";
 import { INVENTORY_DRAG, mountInventory } from "./inventory.ts";
 import { mountLayers } from "./layers.ts";
 import { CARD_WIDTH } from "./layout.ts";
+import { mountQuests } from "./quests.ts";
 import { resultView, type ResultView } from "./results.ts";
 import { mountScenario } from "./scenario.ts";
 
@@ -54,6 +55,7 @@ export function mountWorkbench(root: HTMLElement, initial: SceneDocument, librar
           <button type="button" class="zoom-out" aria-label="축소" title="축소">−</button>
           <button type="button" class="zoom-in" aria-label="확대" title="확대">+</button>
           <button type="button" class="results-toggle" aria-controls="results-panel">결과 · 근거</button>
+          <button type="button" class="quests-open" hidden>검증 퀘스트</button>
         </div>
         <div class="canvas-help">빈 곳 드래그로 이동 · 휠로 확대/축소 · 포트에서 포트로 연결</div>
         <div class="status" role="status"></div>
@@ -62,6 +64,7 @@ export function mountWorkbench(root: HTMLElement, initial: SceneDocument, librar
         <aside id="results-panel" class="results-panel" aria-label="결과와 근거" hidden></aside>
       </main>
     </div>
+    <dialog class="quest-dialog"></dialog>
     <dialog></dialog>`;
   root.querySelector("h1")!.textContent = options.title || initial.sceneId;
   const count = root.querySelector<HTMLElement>(".scene-count")!;
@@ -80,6 +83,18 @@ export function mountWorkbench(root: HTMLElement, initial: SceneDocument, librar
     run(next) { run = next; redrawResults(); },
     variant(index) { variant = index; redrawResults(); },
     loadVariants,
+  });
+  const questTrigger = root.querySelector<HTMLButtonElement>(".quests-open")!;
+  const questDialog = root.querySelector<HTMLDialogElement>(".quest-dialog")!;
+  const renderQuests = mountQuests(questDialog, questTrigger, (before, next, validateOnly) => {
+    if (scene !== before || !root.contains(questDialog)) return "장면이 바뀌었습니다. 현재 퀘스트에서 다시 입력하세요.";
+    const loaded = loadAssessment(next, documents, readScenario());
+    if ("error" in loaded) return loaded.error;
+    if (!validateOnly) commit(next, { kind: "verify-measurement" }, loaded);
+    return undefined;
+  }, id => {
+    scenarioPanel.open = true;
+    renderScenario.selectWorkload(id);
   });
   const inventoryRoot = root.querySelector<HTMLElement>(".inventory-content")!;
   const hiddenLayers = new Set<string>();
@@ -114,7 +129,7 @@ export function mountWorkbench(root: HTMLElement, initial: SceneDocument, librar
     for (const layer of hiddenLayers) canvas.setLayer(layer, false);
   }
   const trigger = root.querySelector<HTMLButtonElement>(".creator-open")!;
-  const dialog = root.querySelector("dialog")!;
+  const dialog = root.querySelector<HTMLDialogElement>("dialog:not(.quest-dialog)")!;
   let openCreator: () => void;
   if (options.onChange) trigger.hidden = false;
   trigger.onclick = () => {
@@ -182,6 +197,8 @@ export function mountWorkbench(root: HTMLElement, initial: SceneDocument, librar
     view = resultView(assessment.scene, variants[variant]?.result ?? primary, scenario, run);
     render();
     panel.render(view, variants, variant, preserveSelection);
+    questTrigger.hidden = !options.onChange;
+    if (options.onChange) renderQuests(view, scene);
   }
 
   async function loadVariants() {

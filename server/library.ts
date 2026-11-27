@@ -45,13 +45,13 @@ function filesIn(dir: string): string[] {
   }
 }
 
-function writeJson(file: string, text: string, exclusive = false): void {
+export function writeAtomic(file: string, content: string | Buffer, exclusive = false): void {
   mkdirSync(dirname(file), { recursive: true });
   const temp = join(dirname(file), "." + randomUUID() + ".tmp");
   const fd = openSync(temp, "wx", 0o600);
   let moved = false;
   try {
-    try { writeFileSync(fd, text); }
+    try { writeFileSync(fd, content); }
     finally { closeSync(fd); }
     if (exclusive) linkSync(temp, file);
     else { renameSync(temp, file); moved = true; }
@@ -217,7 +217,7 @@ export function openLibrary(root: string, dataDir: string) {
         for (let number = 2; readScene(target); number++) target = id + "-copy-" + number;
       }
       const stored = snapshot(JSON.stringify({ ...saved, sceneId: target }, null, 2) + "\n");
-      writeJson(scenePath(target), stored.text);
+      writeAtomic(scenePath(target), stored.text);
       return { id: target, created: exampleCopy || before === undefined, ...stored };
     },
     saveModel(id: string, revision: string, body: unknown) {
@@ -232,7 +232,7 @@ export function openLibrary(root: string, dataDir: string) {
         { connectors, models: new Map([[key, model]]) }, plugins));
       const file = modelPath(key);
       const text = JSON.stringify(model, null, 2) + "\n";
-      try { writeJson(file, text, true); }
+      try { writeAtomic(file, text, true); }
       catch (error) {
         if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
         sameRevision(parseDocument(modelFile, JSON.parse(readFileSync(file, "utf8")), file), model);
@@ -252,7 +252,7 @@ export function openLibrary(root: string, dataDir: string) {
         if (!isDeepStrictEqual(prior, row)) throw new LibraryError(409, "instanceId", "같은 ID의 실물이 이미 있습니다");
         return false;
       }
-      writeJson(inventoryPath, JSON.stringify([...inventory, row], null, 2) + "\n");
+      writeAtomic(inventoryPath, JSON.stringify([...inventory, row], null, 2) + "\n");
       return true;
     },
   };

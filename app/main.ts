@@ -138,6 +138,17 @@ function replay(latest: SceneDocument, edit: Edit) {
       const item = part && edit.after.items.find(item => item.instanceId === part.instanceId)!;
       return addConnection(latest, intent.from, intent.to, part && item ? { item, part } : undefined);
     }
+    case "verify-measurement": {
+      const { before, after } = edit;
+      // 측정이 기대고 있는 배선·실물 상태가 변하면 값을 새 장면에 자동 적용하지 않는다.
+      const sameTargets = same(before.items, latest.items) && same(before.connections, latest.connections)
+        && same(before.personal, latest.personal);
+      if (!sameTargets) return;
+      const added = after.sources.filter(source => !before.sources.includes(source));
+      if (added.some(source => latest.sources.some(row => row.id === source.id))) return;
+      return { ...latest, sources: [...latest.sources, ...added], items: after.items,
+        personal: after.personal, connections: after.connections };
+    }
     case "edit-scenario": return replayScenario(latest, edit);
   }
 }
@@ -147,6 +158,7 @@ function editName({ intent, before, after }: Edit) {
     case "place": return intent.instanceId + " 배치 이동";
     case "add-item": return intent.item.instanceId + " 실물 배치";
     case "connect": return `${intent.from.instanceId}/${intent.from.id} → ${intent.to.instanceId}/${intent.to.id} 연결`;
+    case "verify-measurement": return "검증값 · 실물 상태 편집";
     case "edit-scenario": {
       const changed = after.workloads.find((row, index) => row !== before.workloads[index]);
       return changed ? changed.id + " 작업 편집"

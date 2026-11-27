@@ -1,13 +1,13 @@
 // 제품의 영역 플러그인과 폼에 쓰는 작업·인터페이스 어휘를 등록한다.
-import type { DomainPlugin } from "../engine/contract.ts";
+import type { DomainPlugin, InputSchema } from "../engine/contract.ts";
 import { data } from "./data/data.ts";
-import { dataDomainName, dataInterfaces, dataPresets } from "./data/vocabulary.ts";
+import { dataDomainName, dataInterfaces, dataPresets, dataQuests } from "./data/vocabulary.ts";
 import { display } from "./display/display.ts";
-import { displayDomainName, displayInterfaces, displayPresets } from "./display/vocabulary.ts";
+import { displayDomainName, displayInterfaces, displayPresets, displayQuests } from "./display/vocabulary.ts";
 import { network } from "./network/network.ts";
-import { networkDomainName, networkInterfaces, networkPresets } from "./network/vocabulary.ts";
+import { networkDomainName, networkInterfaces, networkPresets, networkQuests } from "./network/vocabulary.ts";
 import { power } from "./power/power.ts";
-import { powerDomainName, powerInterfaces, powerPresets } from "./power/vocabulary.ts";
+import { powerDomainName, powerInterfaces, powerPresets, powerQuests } from "./power/vocabulary.ts";
 import { storageDomain } from "./storage/copy.ts";
 import { storageDomainName, storagePresets } from "./storage/vocabulary.ts";
 
@@ -17,15 +17,19 @@ interface Preset {
   request: Readonly<Record<string, { value: string | number | boolean | null; unit: string }>>;
 }
 interface InterfaceTerm { id: string; name: string; roles: readonly string[] }
+export interface QuestTemplate {
+  ownerKind: string; field: string; protocol?: string; title: string; steps: readonly string[]; read: string;
+  observation?: { schema: InputSchema; mode?: string; fromLimit?: (limit: number) => number | string | undefined };
+}
 export interface DomainRegistration {
-  plugin: DomainPlugin; name: string; presets: readonly Preset[]; interfaces: readonly InterfaceTerm[];
+  plugin: DomainPlugin; name: string; presets: readonly Preset[]; interfaces: readonly InterfaceTerm[]; quests?: readonly QuestTemplate[];
 }
 
 export const domains: readonly DomainRegistration[] = [
-  { plugin: data, name: dataDomainName, presets: dataPresets, interfaces: dataInterfaces },
-  { plugin: display, name: displayDomainName, presets: displayPresets, interfaces: displayInterfaces },
-  { plugin: network, name: networkDomainName, presets: networkPresets, interfaces: networkInterfaces },
-  { plugin: power, name: powerDomainName, presets: powerPresets, interfaces: powerInterfaces },
+  { plugin: data, name: dataDomainName, presets: dataPresets, interfaces: dataInterfaces, quests: dataQuests },
+  { plugin: display, name: displayDomainName, presets: displayPresets, interfaces: displayInterfaces, quests: displayQuests },
+  { plugin: network, name: networkDomainName, presets: networkPresets, interfaces: networkInterfaces, quests: networkQuests },
+  { plugin: power, name: powerDomainName, presets: powerPresets, interfaces: powerInterfaces, quests: powerQuests },
   { plugin: storageDomain, name: storageDomainName, presets: storagePresets, interfaces: [] },
 ];
 

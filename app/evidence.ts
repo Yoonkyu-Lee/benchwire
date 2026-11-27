@@ -3,6 +3,7 @@ import { evidenceRows } from "../engine/evidence.ts";
 import type { Claim, Value } from "../engine/contract.ts";
 import type { Results, Run } from "../engine/results.ts";
 import type { Variants } from "./assessment.ts";
+import { verificationSource } from "./quests.ts";
 import { interval, quantity, resourceName, verdictText, type ResultView, type Selection } from "./results.ts";
 
 const stages = { physical: "물리", negotiate: "협상", path: "경로", allocate: "배분", judge: "판정" };
@@ -35,6 +36,32 @@ function claimText(claim: Claim, label = claim.field) {
   return [label, ...description, claim.condition].filter(Boolean).join(" · ");
 }
 
+function claimCitation(claim: Claim, { title, locator, retrievedAt }: ResultView["scene"]["sources"][number]) {
+  if (claim.confidence !== "user_verified") return source(title, locator);
+  const note = verificationSource(locator);
+  const observed = [...new Map(claim.observedPorts?.map(port => [port.instanceId, port])).values()];
+  const condition = claim.measurementCondition === null ? "별도 조건 없음" : claim.measurementCondition
+    ?? note?.get("condition") ?? [...new Set(observed.map(p => p.measurementCondition === null ? "별도 조건 없음" : p.measurementCondition))].filter(Boolean).join(" / ");
+  const label = ["사용자 검증", retrievedAt, condition].filter(Boolean).join(" · ");
+  const citation = note ? el("li", label) : source(title, locator);
+  if (!note) citation.prepend(el("span", label + " · "));
+  const firmware = claim.firmware === null ? "없음" : claim.firmware ?? note?.get("firmware")
+    ?? observed.map(p => `${p.instanceId} ${p.firmware === null ? "없음" : p.firmware ?? "미확인"}`).join(" / ");
+  const environment = [note?.get("os"), note?.get("driver") && "드라이버 " + note.get("driver"), firmware && "펌웨어 " + firmware, note?.get("note")].filter(Boolean);
+  if (environment.length) citation.append(el("small", environment.join(" · ")));
+  if (note?.get("prediction")) citation.append(el("div", "측정 전 예측 · " + note.get("prediction")));
+  if (note?.get("different") === "1") citation.append(el("strong", "예측과 다름 · 모델 보정 후보"));
+  const photo = note?.get("photo");
+  if (photo && /^\/api\/evidence\/[a-f0-9]{64}$/.test(photo)) {
+    const link = el("a", "첨부 사진");
+    link.href = photo;
+    link.target = "_blank";
+    link.rel = "noopener noreferrer";
+    citation.append(" · ", link);
+  }
+  return citation;
+}
+
 function appendClaimSources(row: HTMLElement, scene: ResultView["scene"], claim: number, value?: Exclude<Value, null>) {
   const links = scene.claimSources.filter(link => link.claim === claim && (value === undefined || !link.candidate || link.candidate.value === value));
   const groups = Map.groupBy(links, link => JSON.stringify(link.candidate));
@@ -42,10 +69,7 @@ function appendClaimSources(row: HTMLElement, scene: ResultView["scene"], claim:
   for (const group of groups.values()) {
     const citations = el("ul");
     citations.className = "citations";
-    for (const link of group) {
-      const { title, locator } = scene.sources[link.source]!;
-      citations.append(source(title, locator));
-    }
+    for (const link of group) citations.append(claimCitation(scene.claims[claim]!, scene.sources[link.source]!));
     const candidate = group[0]!.candidate;
     if (candidate && value === undefined) {
       const unit = scene.claims[claim]!.unit;
@@ -57,6 +81,33 @@ function appendClaimSources(row: HTMLElement, scene: ResultView["scene"], claim:
     } else row.append(citations);
   }
   if (candidates.childElementCount) row.append(candidates);
+}
+
+function measurements(root: HTMLElement, { scene, result }: ResultView, rows: readonly number[], connections: Set<number>, capacity?: number) {
+  const outcomes = new Set(rows);
+  const recorded = new Set(result.reasonInputs.filter(i => outcomes.has(result.reasons[i.reason]!.outcome)).map(i => i.claim));
+  if (capacity !== undefined) recorded.add(capacity);
+  const key = ({ ownerKind, owner, domain, field, condition }: Claim) => JSON.stringify([ownerKind, owner, domain, field, condition]);
+  const subjects = new Set([...recorded].map(index => key(scene.claims[index]!)));
+  const list = el("ul");
+  const inactive = { firmware: "펌웨어 다름", measurementCondition: "측정 조건 다름", wiring: "배선 다름" };
+  scene.claims.forEach((claim, index) => {
+    if (claim.scope !== "personal" || claim.confidence !== "user_verified") return;
+    const observation = claim.ownerKind === "connection" && connections.has(claim.owner);
+    if (!observation && !(claim.inactive ? subjects.has(key(claim)) : recorded.has(index))) return;
+    const state = claim.inactive ? "적용 안 됨 · " + inactive[claim.inactive]
+      : !recorded.has(index) ? "현재 배선에서 기록한 관측" : "";
+    const iface = claim.ownerKind === "interface" ? scene.interfaces[claim.owner] : undefined;
+    const port = claim.ownerKind === "port" ? scene.ports[claim.owner] : iface && scene.ports[iface.port];
+    const resource = claim.ownerKind === "resource" ? scene.resources[claim.owner] : undefined;
+    const item = scene.items[claim.ownerKind === "item" ? claim.owner : port?.item ?? resource?.item ?? -1];
+    const target = observation ? scene.connections[claim.owner]!.id : [item?.alias || item?.id, port?.label ?? resource?.id].filter(Boolean).join(" / ");
+    const value = [claim.value, claim.unit].filter(v => v !== "" && v !== null).join(" ");
+    const entry = el("li", [target, claim.field, value, state].filter(Boolean).join(" · "));
+    appendClaimSources(entry, scene, index);
+    list.append(entry);
+  });
+  if (list.childElementCount) root.append(el("h4", "사용자 실측 · 관측"), list);
 }
 
 function tree(view: ResultView, start: Parameters<typeof evidenceRows>[1]) {
@@ -162,6 +213,7 @@ function detail(root: HTMLElement, view: ResultView, selected: Selection) {
     if (!rows?.length) return;
     root.append(el("h3", `연결 · ${selected.id}`));
     outcomeNotes(root, result, rows);
+    measurements(root, view, rows, new Set([scene.connections.findIndex(c => c.id === selected.id)]));
     const marks = view.wires.get(selected.id)!.filter(mark => mark.kind === "negotiation");
     rows.forEach((row, index) => {
       const negotiation = el("details");
@@ -184,6 +236,7 @@ function detail(root: HTMLElement, view: ResultView, selected: Selection) {
     const bindings = result.bindings.filter(b => b.scenario === outcome.scenario && b.workload === outcome.subjectRow && b.run === view.run);
     list(root, "병목 자원", bindings.map(b => resourceName(scene, result, b.resourceKind, b.resource)));
     outcomeNotes(root, result, [row], view.run);
+    measurements(root, view, [row], new Set(workload.steps.map(step => step.row)));
     root.append(el("h4", "판정 근거"), tree(view, { outcome: row, run: view.run }));
   } else if (selected.kind === "resource") {
     const resource = view.resources[selected.row];
@@ -208,6 +261,8 @@ function detail(root: HTMLElement, view: ResultView, selected: Selection) {
       for (const w of view.workloads) if (result.outcomes[w.row]!.subjectRow === b.workload) outcomes.add(w.row);
     }
     outcomeNotes(root, result, [...outcomes]);
+    measurements(root, view, [...outcomes], new Set(resource.resourceKind === "link" ? [result.linkResources[resource.resource]!.connection] : []),
+      resource.capacityClaim);
     root.append(el("h4", "배분 근거"));
     if (resource.used === 0 && resource.capacityClaim !== undefined) {
       const claim = scene.claims[resource.capacityClaim]!;

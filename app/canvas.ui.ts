@@ -1,5 +1,6 @@
 // 설치된 Edge에서 작업대의 편집 결과와 저장·복구 동작을 검증한다.
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import { test } from "node:test";
 import type { Page } from "playwright";
 import type { Library, Model, SceneDocument } from "./document.ts";
@@ -1084,6 +1085,183 @@ async function openStored(page: Page, id: string) {
   await page.waitForFunction(() => !document.querySelector<HTMLElement>("#app")?.inert);
   await waitForAssessment(page);
 }
+
+test("검증 퀘스트는 충전기 실물 하나에만 적용되고 재개방과 펌웨어 변경 후에도 근거가 남는다", async () => {
+  const { page, errors } = await newPage("/");
+  const id = "quest-charge";
+  try {
+    const origin = new URL(page.url()).origin;
+    const catalog = await (await page.request.get(origin + "/api/library")).json() as Library;
+    const model = { ...catalog.models.find(m => m.modelId === "supply")!, modelId: "quest-supply" };
+    model.resources[0]!.capacity = { ...model.resources[0]!.capacity, value: null, confidence: "unknown" };
+    assert.equal((await page.request.put(origin + "/api/models/quest-supply/1", { headers: { Origin: origin }, data: model })).status(), 201);
+    const document = JSON.parse(readFileSync("fixtures/power/single-port.json", "utf8")) as SceneDocument;
+    document.sceneId = id;
+    document.items[0]!.modelId = model.modelId;
+    document.items[0]!.alias = "충전기 A";
+    const twin = <T extends { instanceId: string }>(row: T) => ({ ...row, instanceId: row.instanceId + "-b" });
+    document.items.push(...document.items.map(twin));
+    document.items[3]!.alias = "충전기 B";
+    const c = document.connections[0]!, w = document.workloads[0]!;
+    document.connections.push({ ...c, id: "b", from: twin(c.from), to: twin(c.to), parts: c.parts.map(twin) });
+    const other = { ...w, id: "idle-b", from: twin(w.from), to: twin(w.to) };
+    document.workloads.push(other, { ...other, id: "idle-target",
+      request: { ...w.request, targetW: { ...w.request.targetW!, value: null, confidence: "unknown" } } });
+    document.scenarios[0]!.members.push("idle-b");
+    document.scenarios.push({ id: "작업 요청 확인", members: ["idle-target"] });
+    await saveFromAnotherTab(page, document);
+    await openStored(page, id);
+
+    await page.getByRole("button", { name: /^검증 퀘스트/ }).click({ timeout: 1500 });
+    const panel = page.getByRole("dialog", { name: "검증 퀘스트" });
+    const card = panel.locator("details.quest-card").filter({ hasText: /충전기 A.*총 출력|총 출력.*충전기 A/ });
+    await card.locator(":scope > summary").click();
+    await card.getByLabel("총 출력 (W)", { exact: true }).fill("65");
+    await card.getByLabel("현재 펌웨어 · 충전기 A", { exact: true }).fill("1.0");
+    await card.getByLabel("측정 조건", { exact: true }).fill("대기");
+    await card.getByText("환경 · 증거", { exact: true }).click();
+    await card.getByLabel("메모", { exact: true }).fill("동일한 부하 구성에서 측정");
+    await card.getByLabel("사진", { exact: true }).setInputFiles({ name: "evidence.png", mimeType: "image/png",
+      buffer: Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+nm6kAAAAASUVORK5CYII=", "base64") });
+    const save = card.getByRole("button", { name: "검증값 저장" });
+    await save.scrollIntoViewIfNeeded();
+    await page.screenshot({ path: "work/m5-quest-charge.png" });
+    await save.dblclick();
+    await panel.getByRole("button", { name: "닫기", exact: true }).click();
+    await page.getByText("저장됨", { exact: true }).waitFor();
+    await waitForAssessment(page);
+
+    const before = await readStored(page, id);
+    assert.equal(before.document.personal?.length, 1);
+    assert.equal(before.document.personal?.[0]?.claim.value, 65);
+    assert.equal(before.document.sources.filter(s => s.title === "검증 퀘스트").length, 1);
+    for (const reopen of [false, true]) {
+      if (reopen) {
+        await closeServer();
+        await openServer();
+        await edge.navigate(page, "/");
+      }
+      assert.equal(await exampleFlow(page, "a", "idle").getAttribute("data-verdict"), "ok");
+      assert.equal(await exampleFlow(page, "b", "idle-b").getAttribute("data-verdict"), "unknown");
+    }
+    await page.getByRole("button", { name: /^검증 퀘스트/ }).click();
+    await panel.getByText("실물의 현재 펌웨어 · 측정 조건", { exact: true }).click();
+    await panel.getByLabel("실물", { exact: true }).selectOption("supply");
+    await panel.getByLabel("현재 펌웨어", { exact: true }).fill("2.0");
+    await panel.getByRole("button", { name: "실물 상태 적용" }).click();
+    await panel.getByRole("button", { name: "닫기", exact: true }).click();
+    await page.getByText("저장됨", { exact: true }).waitFor();
+    await waitForAssessment(page);
+    const flow = exampleFlow(page, "a", "idle");
+    assert.equal(await flow.getAttribute("data-verdict"), "unknown");
+    await page.getByRole("button", { name: "결과 · 근거" }).click();
+    await page.locator(".result-list").first().getByRole("button").first().click();
+    const proof = page.getByRole("region", { name: "선택한 항목 근거" });
+    await proof.getByText(/적용 안 됨.*펌웨어 다름/).waitFor();
+    assert.match(await proof.innerText(), /사용자 검증 · \d{4}-\d{2}-\d{2} · 대기/);
+    assert.match(await proof.innerText(), /동일한 부하 구성에서 측정/);
+    const photo = await proof.getByRole("link", { name: "첨부 사진" }).getAttribute("href");
+    assert.match(photo ?? "", /^\/api\/evidence\//);
+    assert.equal((await page.request.get(new URL(photo!, page.url()).href)).headers()["content-type"], "image/png");
+    await page.screenshot({ path: "work/m5-quest-history.png" });
+    const editor = page.locator(".scenario-panel");
+    await editor.locator("summary").click();
+    await editor.getByLabel("현재 시나리오", { exact: true }).selectOption("작업 요청 확인");
+    await page.getByRole("button", { name: "검증 퀘스트", exact: true }).click();
+    const request = panel.getByText(/^targetW · idle-target ·/);
+    await request.click();
+    await request.locator("..").getByRole("button", { name: "작업 편집" }).click();
+    assert.notEqual(await editor.getAttribute("open"), null);
+    assert.equal(await editor.getByLabel("작업", { exact: true }).inputValue(), "idle-target");
+    assert.deepEqual(errors, []);
+  } finally { await page.close(); }
+});
+
+test("이더넷 링크 속도 퀘스트는 선택한 배선만 좁히고 측정 전 회선 예측을 보존한다", async () => {
+  const { page, errors } = await newPage("/");
+  const id = "quest-network";
+  try {
+    const origin = new URL(page.url()).origin;
+    const catalog = await (await page.request.get(origin + "/api/library")).json() as Library;
+    const router = { ...catalog.models.find(m => m.modelId === "network-router")!, modelId: "quest-router" };
+    for (const port of router.ports.slice(0, 2)) port.interfaces[0]!.params.baseTModes!.value = "1000BASE-T,2.5GBASE-T";
+    const wire = { ...catalog.models.find(m => m.modelId === "network-copper")!, modelId: "quest-cat6a" };
+    wire.attributes!.network!.category!.value = "Cat6A";
+    for (const model of [router, wire])
+      assert.equal((await page.request.put(origin + "/api/models/" + model.modelId + "/1", { headers: { Origin: origin }, data: model })).status(), 201);
+    const document = JSON.parse(readFileSync("fixtures/network/scene.json", "utf8")) as SceneDocument;
+    document.sceneId = id;
+    const works = ["first-hop", "first-hop-b"];
+    const firstHop = document.workloads.find(w => w.id === works[0])!;
+    firstHop.request.throughput!.value = 2000;
+    document.workloads.push({ ...firstHop, id: works[1]!, from: { ...firstHop.from, instanceId: "host-b" },
+      to: { ...firstHop.to, id: "lan-b" } });
+    document.scenarios.unshift({ id: "두 링크", members: works });
+    for (const item of document.items) {
+      if (item.modelId === "network-router") item.modelId = router.modelId;
+      if (item.modelId === "network-copper") item.modelId = wire.modelId;
+      item.firmware = "1.0";
+      item.measurementCondition = "동시";
+    }
+    delete document.items.find(i => i.instanceId === "lan-a-wire")!.firmware;
+    delete document.items.find(i => i.instanceId === "lan-a-wire")!.measurementCondition;
+    await saveFromAnotherTab(page, document);
+    await openStored(page, id);
+    const first = exampleFlow(page, "lan-a", "first-hop");
+    const other = exampleFlow(page, "lan-b", "first-hop-b");
+    assert.match(await first.textContent() ?? "", /2000 Mbps/);
+    const unchanged = await other.textContent();
+    assert.match(unchanged ?? "", /2000 Mbps/);
+
+    const open = page.getByRole("button", { name: "검증 퀘스트", exact: true });
+    const panel = page.getByRole("dialog", { name: "검증 퀘스트" });
+    for (const attempt of [0, 1]) {
+      await open.click();
+      const summary = panel.locator("details.quest-card > summary").filter({ hasText: /^이더넷 링크 속도 · lan-a ·/ });
+      const card = summary.locator("..");
+      if (await card.getAttribute("open") === null) await summary.click();
+      await card.getByLabel("이더넷 링크 속도 (Mbps)", { exact: true }).selectOption({ label: "1000" });
+      if (attempt === 0) {
+        await card.getByLabel("현재 펌웨어 · lan-a-wire 상태", { exact: true }).selectOption("none");
+        await card.getByLabel("측정 조건 · lan-a-wire 상태", { exact: true }).selectOption("none");
+      }
+      await card.getByRole("button", { name: "검증값 저장" }).click();
+      if (attempt === 1) await card.getByText("이미 같은 값이 저장되어 있습니다.").waitFor();
+      await panel.getByRole("button", { name: "닫기" }).click();
+      await page.getByText("저장됨", { exact: true }).waitFor();
+      await waitForAssessment(page);
+    }
+    assert.match(await first.textContent() ?? "", /975\.293 Mbps/);
+    assert.equal(await other.textContent(), unchanged);
+    await page.getByRole("button", { name: "결과 · 근거" }).click();
+    await page.locator(".result-list").first().getByRole("button").first().click();
+    const proof = page.getByRole("region", { name: "선택한 항목 근거" });
+    await proof.getByText("예측과 다름 · 모델 보정 후보").first().waitFor();
+    assert.match(await proof.innerText(), /측정 전 예측 · 2500 Mbps/);
+    await page.screenshot({ path: "work/m5-quest-network.png" });
+    const saved = (await readStored(page, id)).document;
+    assert.equal(saved.personal?.length ?? 0, 0);
+    assert.equal(saved.sources.filter(s => s.title === "검증 퀘스트").length, 1);
+    const obs = saved.connections[0]!.observations!;
+    assert.deepEqual(obs.map(o => [o.domain, o.field, o.claim.value]), [["network", "linkSpeed", 1000]]);
+    assert.deepEqual(obs[0]!.ports.map(p => p.id), ["lan", "a", "b", "lan-a"]);
+    assert.deepEqual(obs[0]!.ports.slice(1, 3).map(p => [p.firmware, p.measurementCondition]), [[null, null], [null, null]]);
+    assert.equal(saved.connections[1]!.observations, undefined);
+    assert.deepEqual(errors, []);
+  } finally { await page.close(); }
+});
+
+test("이더넷 링크 속도 퀘스트는 같은 케이블의 이더넷 작업에만 영향을 표시한다", async () => {
+  const page = await networkPage();
+  try {
+    await page.getByRole("button", { name: "검증 퀘스트", exact: true }).click();
+    const summary = page.getByRole("dialog", { name: "검증 퀘스트" }).getByText(/^이더넷 링크 속도 · poe ·/);
+    await summary.click();
+    const card = summary.locator("..");
+    assert.match(await card.innerText(), /poe-ethernet/);
+    assert.doesNotMatch(await card.innerText(), /poe-12/);
+  } finally { await page.close(); }
+});
 
 test("저장 경합 뒤 작업과 시나리오 멤버를 순서대로 합치고 같은 칸의 충돌을 알린다", async () => {
   const page = await networkPage();

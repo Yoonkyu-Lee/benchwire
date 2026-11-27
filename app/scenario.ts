@@ -292,7 +292,7 @@ export function mountScenario(root: HTMLElement, documents: Documents, act: (int
     act({ kind: "select-scenario", scenarioId: id });
   };
   workloadSelect.onchange = () => { selectedWorkload = workloadSelect.value; creatingWorkload = false; renderWorkload(); };
-  return (next: State) => {
+  return Object.assign((next: State) => {
     const previous = state;
     state = next;
     if (previous?.scenarioId !== next.scenarioId || previous?.document.scenarios !== next.document.scenarios
@@ -300,5 +300,10 @@ export function mountScenario(root: HTMLElement, documents: Documents, act: (int
       renderScenario(previous?.scenarioId === next.scenarioId && previous?.document.workloads !== next.document.workloads);
     }
     if (previous?.document.items !== next.document.items || previous?.document.workloads !== next.document.workloads) renderWorkload();
-  };
+  }, { selectWorkload(id: string) {
+    selectedWorkload = id;
+    creatingWorkload = false;
+    renderWorkload();
+    workloadForm.querySelector<HTMLElement>("input, select")?.focus();
+  } });
 }

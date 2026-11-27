@@ -22,6 +22,7 @@ export type SceneIntent =
   | { kind: "place"; instanceId: string; position: Point }
   | { kind: "add-item"; item: InventoryItem; position: Point }
   | { kind: "connect"; from: PortRef; to: PortRef }
+  | { kind: "verify-measurement" }
   | { kind: "edit-scenario" };
 
 export function modelKey(item: Pick<Item, "modelId" | "revision">) {

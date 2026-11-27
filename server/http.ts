@@ -5,6 +5,7 @@ import { readFileSync, realpathSync } from "node:fs";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { extname, join, sep } from "node:path";
 import { fileURLToPath } from "node:url";
+import { evidence } from "./evidence.ts";
 import { LibraryError, openLibrary, sceneIdPattern } from "./library.ts";
 import { configuredResearchClient, openResearch } from "./research.ts";
 
@@ -79,6 +80,7 @@ export async function startServer({ port = PORT, dataDir = join(ROOT, "userdata"
     const origin = "http://" + host;
     const path = request.url?.split("?", 1)[0] ?? "/";
     const method = request.method;
+    if (path.startsWith("/api/evidence") && await evidence(request, response, dataDir, path, origin)) return;
     if (path === "/api/research" && (method === "GET" || method === "POST")) {
       const result = method === "GET" ? research.config : research.submit(await readJson(request, origin));
       response.writeHead(method === "GET" ? 200 : 202, { "Content-Type": JSON_TYPE }).end(JSON.stringify(result));

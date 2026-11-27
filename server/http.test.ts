@@ -107,6 +107,39 @@ test("T7 새 라이브러리의 읽기 전용 예제에서 같은 케이블에 9
   assert.equal(saved.headers.get("etag"), copyTag);
 });
 
+test("T8 퀘스트 증거는 같은 출처의 짧은 메모와 제한된 이미지 한 장만 저장한다", async t => {
+  const files = workspace(t);
+  const server = await files.open();
+  const png = Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+nm6kAAAAASUVORK5CYII=", "base64");
+  function submit(body: FormData, origin = server.origin) {
+    return fetch(server.origin + "/api/evidence", { method: "POST", headers: { Origin: origin }, body });
+  }
+  function photo(bytes: Uint8Array<ArrayBuffer>, type: string) {
+    const body = new FormData();
+    body.set("photo", new Blob([bytes], { type }), "filename.png");
+    return body;
+  }
+  const valid = photo(Uint8Array.from(png), "image/png");
+  valid.set("note", "측정 메모");
+  assert.equal((await submit(valid, "http://localhost")).status, 403);
+  assert.equal((await submit(photo(new TextEncoder().encode("<html>"), "image/png"))).status, 422);
+  assert.equal((await submit(photo(new TextEncoder().encode("<svg/>"), "image/svg+xml"))).status, 415);
+  assert.equal((await submit(photo(new Uint8Array(2 * 1024 * 1024 + 1), "image/png"))).status, 413);
+  const duplicate = photo(Uint8Array.from(png), "image/png");
+  duplicate.append("photo", duplicate.get("photo")!);
+  assert.equal((await submit(duplicate)).status, 422);
+  const saved = await submit(valid);
+  assert.equal(saved.status, 201);
+  const location = saved.headers.get("Location")!;
+  assert.equal(location, (await submit(valid)).headers.get("Location"));
+  const stored = await server.get(location);
+  assert.equal(stored.headers.get("Content-Type"), "image/png");
+  assert.deepEqual(Buffer.from(await stored.arrayBuffer()), png);
+  const hash = location.split("/").at(-1)!;
+  assert.deepEqual(readdirSync(join(files.dataDir, "evidence")).sort(), [hash, hash + ".txt"]);
+  assert.equal(readFileSync(join(files.dataDir, "evidence", hash + ".txt"), "utf8"), "측정 메모");
+});
+
 test("같은 ETag를 읽은 두 탭 중 한 저장만 성공하고 잘못된 장면은 원본을 보존한다", async t => {
   const files = workspace(t);
   const { get, put } = await files.open();
