@@ -24,6 +24,7 @@ export interface Link {
   scene: Scene; connection: number; direction: Direction;
   // 신호가 지나는 순서대로 양 끝과 사이 부품의 진입·이탈 포트를 담는다.
   ports: number[];
+  // 같은 서비스·설정의 레인 한도는 각각 유지하고, 주장 행은 제공자 전체에서 모은다.
   laneProfiles?: readonly LaneProfile[];
 }
 export interface Option extends Trace {

@@ -46,8 +46,16 @@ export function negotiate(scene: Scene, plugins: readonly DomainPlugin[], result
       const domains = new Set(scene.interfaces.filter(i => ports.includes(i.port)).map(i => i.domain));
       const active = plugins.filter(p => domains.has(p.id));
       const link: Link = { scene, connection, direction, ports };
-      const profiles = active.flatMap(p => p.laneProfiles?.(link) ?? []);
-      if (profiles.length) link.laneProfiles = profiles;
+      const providers = active.toSorted((a, b) => a.id === b.id ? 0 : a.id < b.id ? -1 : 1);
+      const profiles = providers.flatMap(p => p.laneProfiles?.(link) ?? []);
+      if (profiles.length) {
+        const settings = Map.groupBy(profiles, row => JSON.stringify([row.domain, row.mode, row.profile]));
+        link.laneProfiles = [...settings.values()].flatMap(rows => {
+          if (rows.length === 1) return rows;
+          const inputs = [...new Set(rows.flatMap(row => row.inputs))];
+          return rows.map(row => ({ ...row, inputs }));
+        });
+      }
       for (const plugin of active) {
         const options = plugin.negotiate(link);
         const position = { connection, domain: plugin.id, direction };

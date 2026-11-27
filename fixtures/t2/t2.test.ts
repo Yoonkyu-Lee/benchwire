@@ -184,6 +184,41 @@ test("T2 USB 벌크는 제공자가 바꾼 핀 표기와 설정 이름에서도 
   }
 });
 
+test("T2 같은 설정의 두 레인 제공자는 등록 순서와 무관하게 두 주장 모두를 인용한다", () => {
+  const scene = fixture("scene");
+  const pins = scene.claims.flatMap((claim, row) => claim.field === "pin" && claim.value === "D" ? [row] : []);
+  const [firstPin, secondPin] = pins;
+  assert.ok(firstPin !== undefined && secondPin !== undefined);
+  const pinInputs = (inputs: number[]): number[] => inputs.filter(row => row === firstPin || row === secondPin);
+  for (const claim of scene.claims) {
+    if (claim.domain === "data" && claim.field === "modes") claim.value = "High Speed, Gen 1x1, Gen 2x2";
+    if (claim.field === "cableDataGbps") claim.value = 20;
+  }
+  const display = plugins.find(p => p.id === "display")!;
+  const data = plugins.find(p => p.id === "data")!;
+  const otherId = "test-wiring";
+  scene.interfaces.push({ ...scene.interfaces.find(i => i.domain === display.id)!, domain: otherId });
+  scene.members = scene.members.filter(m => scene.workloads[m.workload]!.domain === data.id);
+  for (const [secondLanes, secondLimit] of [[1, 450], [2, 2200]] as const) {
+    const first: DomainPlugin = { ...display, negotiate: () => [], laneProfiles: () =>
+      [{ domain: data.id, mode: "bulk", profile: "공유 설정", maxLanes: 1, inputs: [firstPin] }] };
+    const second: DomainPlugin = { ...first, id: otherId, laneProfiles: () =>
+      [{ domain: data.id, mode: "bulk", profile: "공유 설정", maxLanes: secondLanes, inputs: [secondPin] }] };
+    for (const order of [[first, data, second], [second, data, first]]) {
+      const r = evaluate(scene, order);
+      const options = r.options.filter(o => o.domain === data.id && o.profile === "공유 설정");
+      const hub = r.outcomes.findIndex(o => o.subjectKind === "workload" && o.domain === data.id);
+      const reason = r.reasons.findIndex(o => o.outcome === hub && o.stage === "negotiate" && o.rule.startsWith("USB 3.2"));
+      assert.ok(hub >= 0 && reason >= 0);
+      assert.deepEqual(pinInputs(r.reasonInputs.filter(x => x.reason === reason).map(x => x.claim)), [firstPin, secondPin]);
+      assert.deepEqual(options.map(o => [o.direction, o.limit, pinInputs(o.inputs)]), [
+        ["forward", 450, [firstPin, secondPin]], ["forward", secondLimit, [firstPin, secondPin]],
+        ["reverse", 450, [firstPin, secondPin]], ["reverse", secondLimit, [firstPin, secondPin]],
+      ]);
+    }
+  }
+});
+
 test("T2 우선순위 생략 시 고정 영상 요청을 먼저 세우고 명시적인 허브 우선은 그보다 앞선다", () => {
   const s = fixture("scene");
   for (const m of s.members) { delete m.priority; delete m.evidence; }
