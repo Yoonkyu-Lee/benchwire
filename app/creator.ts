@@ -2,6 +2,7 @@
 import charger from "../catalog/templates/usb-c-charger.json" with { type: "json" };
 import { domains, type DomainRegistration } from "../domains/registry.ts";
 import { modelFile, parseDocument } from "../scene/files.ts";
+import { missingModelAttributes } from "../scene/load.ts";
 import { researchQuery } from "../scene/research-query.ts";
 import type { ResearchConfig, ResearchStatus } from "../server/research.ts";
 import type { Documents } from "./assessment.ts";
@@ -436,7 +437,10 @@ export function mountCreator(dialog: HTMLDialogElement, documents: Documents, sa
   const submit = button("저장하고 배치", "submit");
   const reviewStatus = el("p");
   reviewStatus.setAttribute("role", "status");
-  footer.append(error, reviewStatus, submit);
+  const missingAttributes = el("p");
+  missingAttributes.setAttribute("role", "status");
+  missingAttributes.hidden = true;
+  footer.append(error, reviewStatus, missingAttributes, submit);
   form.append(header, body, footer);
   dialog.append(form);
   const research = section(body, "AI 조사");
@@ -800,15 +804,15 @@ export function mountCreator(dialog: HTMLDialogElement, documents: Documents, sa
         return () => ({ key: key.value, value: value()! });
       }, updateReferences);
       return [{
-        id: plugin.id,
+        id: plugin.id, plugin, schema,
         load(fields: Record<string, Claim>) {
           records.clear();
           for (const [key, value] of Object.entries(fields)) records.add({ key, value });
         },
-        read() {
+        read(allowDuplicate = false) {
           const facts: Record<string, Claim> = Object.create(null);
           for (const { key, value } of records.read()) {
-            if (Object.hasOwn(facts, key)) throw new Error(`attributes.${plugin.id}.${key} — 속성 키가 겹칩니다.`);
+            if (!allowDuplicate && Object.hasOwn(facts, key)) throw new Error(`attributes.${plugin.id}.${key} — 속성 키가 겹칩니다.`);
             facts[key] = value;
           }
           return facts;
@@ -820,7 +824,7 @@ export function mountCreator(dialog: HTMLDialogElement, documents: Documents, sa
     group.append(fields);
     let read = factFields(fields, schema, [], "attributes." + plugin.id);
     return [{
-      id: plugin.id,
+      id: plugin.id, plugin, schema,
       load(values: Record<string, Claim>) {
         fields.replaceChildren();
         enabled.value = Object.keys(values).length ? "known" : "";
@@ -829,6 +833,22 @@ export function mountCreator(dialog: HTMLDialogElement, documents: Documents, sa
       read: () => enabled.value ? read() : {},
     }];
   });
+
+  function updateMissingAttributes() {
+    const model = { kind: kind.value as Model["kind"], ports: ports.read() };
+    const labels = attributeForms.flatMap(({ id, plugin, schema, read }) => {
+      if (!plugin.requiredAttributes) return [];
+      const values = read(true);
+      const attributes = Object.keys(values).length ? { [id]: values } : {};
+      return missingModelAttributes({ ...model, attributes }, plugin).map(([key]) => {
+        const field = schema.properties?.[key];
+        return typeof field === "object" ? field.title ?? key : key;
+      });
+    });
+    missingAttributes.textContent = labels.length ? labels.join(" · ") + " — 미확인으로 저장됨" : "";
+    missingAttributes.hidden = labels.length === 0 || !review.hidden;
+  }
+  form.addEventListener("change", updateMissingAttributes);
 
   function nodeChoices(): NamedChoice[] {
     return nodes.read().flatMap(node => node.id ? [[node.id, node.label || node.id] as const] : []);
@@ -848,6 +868,7 @@ export function mountCreator(dialog: HTMLDialogElement, documents: Documents, sa
       choices(control, [["", control.dataset.empty ?? "선택"], ...entries]);
       if (control.value !== before) control.dispatchEvent(new Event("change", { bubbles: true }));
     }
+    updateMissingAttributes();
   }
 
   sources.add();
@@ -893,6 +914,7 @@ export function mountCreator(dialog: HTMLDialogElement, documents: Documents, sa
 
   mountResearch(research, draft => reviewResearch(review, draft, pending => {
     review.hidden = !pending;
+    updateMissingAttributes();
     submit.disabled = pending > 0;
     reviewStatus.textContent = pending ? "확인 전 값·배선 " + pending + "개" : "";
     for (const panel of body.querySelectorAll<HTMLElement>(":scope > fieldset")) {

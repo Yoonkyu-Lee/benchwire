@@ -41,6 +41,36 @@ async function chargeScene(page: Page,id: string,field: "capacity" | "maxW") {
   await open(page,id);
 }
 
+test("영역의 필수 속성을 생략하면 생성기가 저장 전 안내하고 배치를 허용한다", async () => {
+  const { page } = await edge.newPage("/");
+  try {
+    await button(page, "새 아이템").click();
+    const creator = panel(page, "새 아이템");
+    await creator.getByLabel("복제할 모델 판본").selectOption("network-copper@1");
+    await button(creator, "모델 복제").click();
+    const network = creator.locator('details:has(> summary:text-is("네트워크"))');
+    await network.locator(":scope > summary").click();
+    const group = network.getByLabel("영역 속성");
+    const notice = creator.getByText(/미확인으로 저장됨/);
+    await group.selectOption("");
+    await notice.waitFor({ timeout: 1800 });
+    await group.selectOption("known");
+    await notice.waitFor({ state: "hidden" });
+    await group.selectOption("");
+    await notice.waitFor({ timeout: 1800 });
+    assert.match(await notice.innerText(), /케이블 등급.*케이블 길이/);
+    await notice.scrollIntoViewIfNeeded();
+    await page.screenshot({ path: "work/required-attributes-creator.png" });
+    await button(creator, "저장하고 배치").click();
+    await creator.waitFor({ state: "hidden" });
+    const library = await get<Library>(page, "/api/library");
+    const model = library.models.find(model => model.name === "합성 Cat5e 통과 채널 복제");
+    assert.ok(model);
+    assert.ok(library.inventory.some(item => item.modelId === model.modelId));
+  } finally {
+    await page.close();
+  }
+});
 test("전력 장비 두 대에 영상 예제 USB-C 케이블을 끼워 공용 결합 근거를 본다",async()=>{
   const {page}=await edge.newPage("/");
   try{

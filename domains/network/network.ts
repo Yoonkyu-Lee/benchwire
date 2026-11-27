@@ -4,7 +4,7 @@ import { MAC_PAYLOAD_FRACTION, PCIE_CARRIER, PCIE_NIC } from "./constants.ts";
 import { negotiateEthernet } from "./ethernet.ts";
 import { readNetworkClaim } from "./evidence.ts";
 import {
-  attributes, ETHERNET, MAC, MBPS, NETWORK, observations, params, paramsFor, PD, POE, PSE, request, WATTS, WIRE_LINE,
+  attributes, CHANNEL, ETHERNET, MAC, MBPS, NETWORK, observations, params, paramsFor, PD, POE, PSE, request, WATTS, WIRE_LINE,
 } from "./input.ts";
 import { negotiatePoe, reservePoe } from "./poe.ts";
 import { FRAMING, sources } from "./sources.ts";
@@ -13,6 +13,11 @@ const labels: Record<Verdict, string> = { ok: "성립", conditional: "조건부"
 
 export const network: DomainPlugin = {
   id: NETWORK, sources, observations, params, paramsFor, attributes, request, resourceUnits: [MBPS, WATTS],
+  requiredAttributes({ kind, protocols }) {
+    if ((kind === "cable" || kind === "adapter") && protocols.has(CHANNEL))
+      return { category: "", length: "m", screening: "", poeType: "", poeLoss: WATTS };
+    return undefined;
+  },
   negotiate(link) {
     const ends = link.scene.interfaces.filter(i => i.domain === NETWORK && [link.ports[0], link.ports.at(-1)].includes(i.port));
     const options = [];

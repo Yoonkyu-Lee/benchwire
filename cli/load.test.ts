@@ -768,6 +768,37 @@ test("T4 시나리오의 우선순위가 입력 주장과 출처를 통해 고�
   assert.ok(result.reasonInputs.some(c => c.claim === claim && result.reasons[c.reason]!.rule.includes("우선순위")));
 });
 
+test("T10 새 영역이 어댑터 필수 속성을 선언하면 로더부터 검증 퀘스트까지 이어진다", t => {
+  const s = sample(t);
+  s.saved.items.push({ instanceId: "pass", modelId: "adapter", revision: "1", alias: "", state: "" });
+  s.saved.connections[0]!.parts.push({ instanceId: "pass", entry: "entry", exit: "exit" });
+  s.save();
+  const base = trialDomain();
+  const plugin: DomainPlugin = {
+    ...base,
+    requiredAttributes: ({ kind, protocols }) => kind === "adapter" && protocols.has("pulse") ? { "budget:pass": "회/s" } : undefined,
+    negotiate(link) {
+      const part = link.scene.parts.find(p => p.connection === link.connection);
+      const row = part && effectiveClaim(link.scene, "item", part.item, base.id, "budget:pass");
+      if (row === undefined || link.scene.claims[row]!.value !== null) return base.negotiate(link);
+      return base.negotiate(link).map(option => ({ ...option, verdict: "unknown", limit: null,
+        bounds: { low: 0, high: option.limit! }, inputs: [...option.inputs, row] }));
+    },
+  };
+  const { scene, result } = s.open([plugin]);
+  const part = scene.parts[0]!;
+  const row = effectiveClaim(scene, "item", part.item, plugin.id, "budget:pass");
+  assert.ok(row !== undefined);
+  assert.ok(!scene.claims.some(claim => claim.ownerKind === "item" && claim.owner !== part.item && claim.field === "budget:pass"));
+  assert.ok(result.quests.some(q => q.claim === row && result.outcomes[q.outcome]!.verdict === "unknown"));
+  assert.equal(scene.sources[scene.claimSources.find(c => c.claim === row)!.source]!.title, "모델에 값 없음");
+
+  s.adapter.attributes.trial = { "budget:pass": { value: 1200, unit: "회/s", condition: "", confidence: "inferred", sources: ["adapter"] } };
+  s.save();
+  const known = s.open([plugin]);
+  assert.ok(known.result.outcomes.some(o => o.subjectKind === "connection" && o.verdict === "ok"));
+  assert.ok(!known.result.quests.some(q => known.scene.claims[q.claim]!.field === "budget:pass"));
+});
 test("T10 메모리 문서와 고정 판본 파일은 같은 장면·근거·제품 영역 판정을 낸다", () => {
   const dir = "fixtures/network", file = join(dir,"scene.json");
   const doc = (name: string): unknown => JSON.parse(readFileSync(name,"utf8"));

@@ -53,6 +53,20 @@ function interfaceSchema(plugin: DomainPlugin, protocol: string) {
   return plugin.paramsFor?.(protocol) ?? plugin.params;
 }
 type Model = z.infer<typeof modelFile>;
+type ModelAttributes = Pick<z.input<typeof modelFile>, "kind" | "ports" | "attributes">;
+type PortInterface = Model["ports"][number]["interfaces"][number];
+
+export function missingModelAttributes(model: ModelAttributes, plugin: DomainPlugin,
+  ends?: readonly [readonly PortInterface[], readonly PortInterface[]], measured = false) {
+  if (!plugin.requiredAttributes) return [];
+  const protocols = new Set(model.ports.flatMap(p => p.interfaces.filter(i => i.domain === plugin.id).map(i => i.protocol)));
+  const linkedProtocols = new Set(ends?.[0].flatMap(i => i.domain === plugin.id &&
+    ends[1].some(other => other.domain === i.domain && other.protocol === i.protocol) ? [i.protocol] : []));
+  const attributes = Object.hasOwn(model.attributes ?? {}, plugin.id) ? model.attributes![plugin.id] : undefined;
+  const required = plugin.requiredAttributes({ kind: model.kind, protocols, linkedProtocols, hasAttributes: attributes !== undefined || measured });
+  return Object.entries(required ?? {}).filter(([field]) => !Object.hasOwn(attributes ?? {}, field));
+}
+
 interface Local {
   item: number; nodes: Map<string, number>; ports: Map<string, number>; resources: Map<string, number>; interfaces: Map<string, number>;
 }
@@ -108,14 +122,17 @@ export function loadSceneDocuments(document: unknown, library: { connectors: unk
     return row;
   }
   function fields(ownerKind: Claim["ownerKind"], owner: number, scope: Claim["scope"], domain: string,
-    values: Record<string, Fact>, schema: InputSchema, citations: Map<string, number>, at: string) {
-    const base = Object.fromEntries(Object.entries(values).map(([key, f]) => [key, { value: f.value, unit: f.unit }]));
+    values: Record<string, Fact>, schema: InputSchema, citations: Map<string, number>, at: string,
+    generated?: { values: Record<string, Fact>; citations: Map<string, number> }) {
+    const entries = Object.entries({ ...generated?.values, ...values });
+    const base = Object.fromEntries(entries.map(([key, f]) => [key, { value: f.value, unit: f.unit }]));
     validateFields(schema, base, at);
-    for (const [key, fact] of Object.entries(values)) {
+    for (const [key, fact] of entries) {
       const where = at + "." + key;
       fact.conflicts?.forEach((c,i) => validateFields(schema, { ...base, [key]: { value: c.value, unit: fact.unit } },
         where + ".conflicts." + i, key));
-      claim(ownerKind, owner, scope, domain, key, fact, citations, where);
+      const sourceRows = generated && Object.hasOwn(generated.values, key) ? generated.citations : citations;
+      claim(ownerKind, owner, scope, domain, key, fact, sourceRows, where);
     }
   }
 
@@ -138,7 +155,7 @@ export function loadSceneDocuments(document: unknown, library: { connectors: unk
     scene.mates.push({ a, b, evidence: claim("mate", i, "catalog", "", "mate", m.evidence, catalogSources, at + ".evidence") });
   });
   const sceneSources = sources(saved.sources,file + "#",true);
-  const models = new Map<string, { row: number; model: Model; citations: Map<string, number> }>();
+  const models = new Map<string, { row: number; model: Model; citations: Map<string, number>; missing?: Map<string, number> }>();
   const instances = new Map<string, Local>();
 
   function checkResource(field: string, fact: Fact, unit: string, at: string) {
@@ -176,8 +193,6 @@ export function loadSceneDocuments(document: unknown, library: { connectors: unk
     scene.items.push({ id: instanceId, model: pinned.row, alias, state, ...(firmware !== undefined && {firmware}), ...(measurementCondition !== undefined && {measurementCondition}) });
     const local = unique<Local>(instances, instanceId, { item, nodes: new Map(), ports: new Map(), resources: new Map(), interfaces: new Map() }, instanceAt + ".instanceId");
     const at = modelPath + "#";
-    for (const [domain, values] of Object.entries(model.attributes))
-      fields("item", item, "model", domain, values, ref(domains, domain, at + "attributes." + domain).attributes, citations, at + "attributes." + domain);
     model.nodes.forEach((n, i) => unique(local.nodes, n.id, scene.nodes.push({ ...n, item }) - 1, at + "nodes." + i + ".id"));
     model.ports.forEach((p, i) => {
       const pos = at + "ports." + i;
@@ -228,6 +243,41 @@ export function loadSceneDocuments(document: unknown, library: { connectors: unk
         scene.resourceUses.push({ edge, resource, evidence: claim("edge", edge, "model", "", "use:" + u.resource, u.evidence, citations, pos + ".evidence") });
       });
     });
+  });
+  const requiredDomains = plugins.filter(p => p.requiredAttributes).map(p => p.id);
+  const linkByPart = new Map(saved.connections.flatMap(link => link.parts.map(part => [part.instanceId, link] as const)));
+  // 연결을 옮긴 뒤에도 기존 개인 검증은 같은 모델 속성을 참조한다.
+  const measurements = new Set(saved.personal.filter(p => p.ownerKind === "item").map(p => JSON.stringify([p.instanceId, p.domain])));
+  function portInterfaces(end: typeof saved.connections[number]["from"]) {
+    const owner = instances.get(end.instanceId);
+    if (!owner) return [];
+    const { modelId, revision } = saved.items[owner.item]!;
+    return models.get(modelId + "@" + revision)!.model.ports.find(p => p.id === end.id)?.interfaces ?? [];
+  }
+  saved.items.forEach(({ instanceId, modelId, revision }, item) => {
+    const key = modelId + "@" + revision;
+    const pinned = models.get(key)!;
+    const { model, citations } = pinned;
+    const at = names.model(key) + "#attributes";
+    const link = linkByPart.get(instanceId);
+    const ends = link && [portInterfaces(link.from), portInterfaces(link.to)] as const;
+    const groups = new Set([...Object.keys(model.attributes), ...requiredDomains]);
+    for (const domain of groups) {
+      const where = at + "." + domain;
+      const plugin = ref(domains, domain, where);
+      const missing = missingModelAttributes(model, plugin, ends, measurements.has(JSON.stringify([instanceId, domain])));
+      const values = Object.hasOwn(model.attributes, domain) ? model.attributes[domain] : undefined;
+      if (!values && !missing.length) continue;
+      let generated;
+      if (missing.length) {
+        const id = "missing-model-value";
+        pinned.missing ??= sources([{ id, title: "모델에 값 없음", locator: at, retrievedAt: "" }], at);
+        const unknowns: Record<string, Fact> = Object.fromEntries(missing.map(([field, unit]) =>
+          [field, { value: null, unit, confidence: "unknown", condition: "", sources: [id] }]));
+        generated = { values: unknowns, citations: pinned.missing };
+      }
+      fields("item", item, "model", domain, values ?? {}, plugin.attributes, citations, where, generated);
+    }
   });
   const placed = new Set<string>();
   saved.layout?.placements?.forEach(({ instanceId }, i) => {
