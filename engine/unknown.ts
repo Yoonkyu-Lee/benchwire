@@ -123,11 +123,31 @@ function snapshot(r: Results, row: number, base = r) {
     needs: r.needs.filter(n => n.outcome === row).map(n => n.requiredCapability) };
 }
 
-function sameOutcome(a: ReturnType<typeof snapshot>, b: ReturnType<typeof snapshot>) {
-  return a.o.verdict === b.o.verdict && a.o.mode === b.o.mode &&
-    a.possible.length === b.possible.length && a.possible.every((v, i) => v === b.possible[i]) &&
-    a.assessments.length === b.assessments.length && a.assessments.every(x => b.assessments.some(y => y.run === x.run && y.verdict === x.verdict)) &&
-    a.measures.length === b.measures.length && a.measures.every(x => b.measures.some(y =>
+type Observation = ReturnType<typeof snapshot>;
+type Outcome = Results["outcomes"][number];
+function sameBudget(a: Outcome, b: Outcome) {
+  return a.unit === b.unit && a.pool?.domain === b.pool?.domain && a.pool?.id === b.pool?.id;
+}
+
+function budgetObservation(result: Results, row: number, available: Observation[]): Observation {
+  const base = result.outcomes[row]!;
+  const match = available.find(s => sameBudget(s.o,base)) ?? available.find(s => s.o.unit === undefined);
+  if (match) return match;
+  const sample = available[0];
+  // 같은 영역이 다른 예산만 선언한 세계에서는 이 예산으로 보낼 수 있는 양은 0이다.
+  if (base.unit && sample) return { ...sample, selected:null, o:{...base, verdict:"impossible", mode:"", label:"연결 불가"},
+    possible:["impossible"], metrics:[{outcome:row, kind:"limit", unit:base.unit, value:0, low:0, high:0, basis:"calculated"}],
+    inputs:available.flatMap(s => s.inputs), specs:available.flatMap(s => s.specs), quests:[], needs:[] };
+  return { ...snapshot(result,row), selected:null, o:{ ...base, verdict:"unknown", mode:"" },
+    possible:["ok","conditional","impossible"], metrics:[], measures:[], assessments:[], bindings:[], needs:[] };
+}
+
+function sameVerdicts(a: Observation, b: Observation) {
+  return a.possible.length === b.possible.length && a.possible.every((v,i) => v === b.possible[i]) &&
+    a.assessments.length === b.assessments.length && a.assessments.every(x => b.assessments.some(y => y.run === x.run && y.verdict === x.verdict));
+}
+function samePerformance(a: Observation, b: Observation) {
+  return a.o.mode === b.o.mode && a.measures.length === b.measures.length && a.measures.every(x => b.measures.some(y =>
       y.run === x.run && y.kind === x.kind && y.unit === x.unit && y.low === x.low && y.high === x.high)) &&
     a.metrics.length === b.metrics.length && a.metrics.every((m, i) => {
       const n = b.metrics[i]!;
@@ -164,10 +184,10 @@ function merge(scene: Scene, plugins: readonly DomainPlugin[], r: Results, row: 
       const position = Math.floor(i / stride) % v.samples.length;
       if (!position) continue;
       const other = samples[i - position * stride]!;
-      if (s.possible.length !== other.possible.length || s.possible.some((p,n) => p !== other.possible[n])) {
+      if (!sameVerdicts(s,other)) {
         impact = "verdict"; break;
       }
-      if (!sameOutcome(s,other)) impact = "range";
+      if (!samePerformance(s,other)) impact = "range";
     }
     if (impact) { changed = true; ask(scene, plugins, r, row, v.claim, impact); }
   });
@@ -270,9 +290,26 @@ export function resolveUnknowns(scene: Scene, plugins: readonly DomainPlugin[], 
     if (!profileLinks.has(claim)) all.push({claim,samples:nodes.map(node => ({node,value:scene.nodes[node]!.id}))});
   }
   if (!all.length) return;
-  const groups: { variables: Variable[]; affected: number[] }[] = [];
-  result.outcomes.forEach((o, row) => {
-    const claims = new Set(inputs(result, row));
+  // 후보가 연결 설정이나 예산을 바꾸면 반대 방향·다른 영역의 작업도 함께 재배분될 수 있다.
+  const variableLinks = new Set(result.options.filter(o => o.profile).map(o => o.connection));
+  for (const links of profileLinks.values()) for (const link of links) variableLinks.add(link);
+  const workLinks = routeInputs.map(route => new Set([...route.resources].flatMap(resource => {
+    const link = result.linkResources[resource - scene.resources.length];
+    return link ? [link.connection] : [];
+  })));
+  for (const step of result.steps) if (step.kind === "connection")
+    workLinks[result.paths[step.path]!.workload]!.add(step.row);
+  const linkOffset = scene.resources.length + result.linkResources.length;
+  const dependencies = routeInputs.map((route,w) => ({ ...route, resources: new Set([...route.resources,
+    ...[...workLinks[w]!].filter(c => variableLinks.has(c)).map(c => linkOffset + c)]) }));
+  const groups: { variables: Variable[]; subjects: number[][] }[] = [];
+  const subjects = Map.groupBy(result.outcomes.keys(), row => {
+    const o = result.outcomes[row]!;
+    return JSON.stringify([o.subjectKind, o.subjectRow, o.scenario, o.direction, o.domain]);
+  });
+  for (const rows of subjects.values()) {
+    const o = result.outcomes[rows[0]!]!;
+    const claims = new Set(rows.flatMap(row => inputs(result,row)));
     const links = new Set<number>();
     if (o.subjectKind === "connection") {
       links.add(o.subjectRow);
@@ -280,24 +317,27 @@ export function resolveUnknowns(scene: Scene, plugins: readonly DomainPlugin[], 
         for (const port of [p.entry,p.exit]) claims.add(portFacts(scene,port).attachment);
       for (const opt of result.options.filter(v => v.connection === o.subjectRow && v.direction === o.direction && v.domain === o.domain))
         for (const id of opt.inputs) claims.add(id);
-    } else {
-      const members = scene.members.filter(m => m.scenario === o.scenario);
-      for (const w of competingWorks(o.subjectRow, members.map(m => m.workload), routeInputs)) {
-        const rank = members.find(m => m.workload === w)?.evidence;
-        if (rank !== undefined) claims.add(rank);
-        for (const id of routeInputs[w]!.claims) claims.add(id);
-        for (const resource of routeInputs[w]!.resources) {
-          const link = result.linkResources[resource - scene.resources.length];
-          if (link) links.add(link.connection);
-        }
-      }
+    }
+    const members = scene.members.filter(m => m.scenario === o.scenario).map(m => m.workload);
+    const seeds = o.subjectKind === "workload" ? [o.subjectRow] : members.filter(w => workLinks[w]!.has(o.subjectRow));
+    const peers = new Set(seeds.flatMap(w => [...competingWorks(w,members,dependencies)]));
+    for (const w of peers) {
+      for (const id of routeInputs[w]!.claims) claims.add(id);
+      for (const link of workLinks[w]!) links.add(link);
+      const peer = result.outcomes.findIndex(peer => peer.subjectKind === "workload" && peer.subjectRow === w && peer.scenario === o.scenario);
+      if (peer >= 0) for (const id of inputs(result,peer)) claims.add(id);
+    }
+    for (const v of all) {
+      const c = scene.claims[v.claim]!;
+      if (c.ownerKind !== "workload" || !peers.has(c.owner)) continue;
+      if (c.domain || scene.members.some(m => m.scenario === o.scenario && m.evidence === v.claim)) claims.add(v.claim);
     }
     for (const [claim,connections] of profileLinks) if ([...links].some(c => connections.has(c))) claims.add(claim);
     const variables = all.filter(v => claims.has(v.claim));
-    if (!variables.length) return;
+    if (!variables.length) continue;
     const group = groups.find(g => g.variables.length === variables.length && g.variables.every((v,i) => v === variables[i]));
-    if (group) group.affected.push(row); else groups.push({ variables, affected: [row] });
-  });
+    if (group) group.subjects.push(rows); else groups.push({ variables, subjects: [rows] });
+  }
   // 각 배선에서 이미 합산한 사용량끼리 비교한다. 서로 배타적인 작업별 상한을 더할 수 없다.
   const provisional = result.resourceUsage.map(u => ({ ...u }));
   const usageKey = (r: Results, u: Results["resourceUsage"][number]) => JSON.stringify([u.scenario,u.unit,
@@ -305,7 +345,8 @@ export function resolveUnknowns(scene: Scene, plugins: readonly DomainPlugin[], 
   const keys = provisional.map(u => usageKey(result,u));
   const updated = new Set<number>();
   let world = 0;
-  for (const { variables, affected } of groups) {
+  for (const { variables, subjects } of groups) {
+    const affected = subjects.flat();
     const axes = new Map<number, number>();
     let count = 1;
     const strides = variables.map(v => {
@@ -361,7 +402,7 @@ export function resolveUnknowns(scene: Scene, plugins: readonly DomainPlugin[], 
       continue;
     }
     const assignments = all.filter(v => axes.has(scene.claims[v.claim]!.conflictGroup ?? v.claim));
-    const observations = affected.map((): ReturnType<typeof snapshot>[] => []), worlds: number[] = [];
+    const observations = subjects.map((): Observation[][] => []), worlds: number[] = [];
     const totals = new Map<number, Pick<Results["resourceUsage"][number], "used" | "capacity" | "basis">>();
     for (let i = 0; i < count; i++, world++) {
       const claims = [...scene.claims];
@@ -396,39 +437,27 @@ export function resolveUnknowns(scene: Scene, plugins: readonly DomainPlugin[], 
           if (concreteUsage?.basis === "assumed") prior.basis = "assumed";
         }
       }
-      // 배선에 따라 협상 서비스 수가 달라지므로 행 번호 대신 판정의 대상을 맞춘다.
-      affected.forEach((row,j) => {
-        const base = result.outcomes[row]!;
-        const sameSubject = (o: typeof base) => o.subjectKind === base.subjectKind && o.subjectRow === base.subjectRow &&
+      subjects.forEach((rows,j) => {
+        const base = result.outcomes[rows[0]!]!;
+        const matches = answer.outcomes.flatMap((o,n) => o.subjectKind === base.subjectKind && o.subjectRow === base.subjectRow &&
           (o.scenario === base.scenario || o.subjectKind === "connection" && o.scenario === null) &&
-          o.direction === base.direction && o.domain === base.domain;
-        const exact = answer.outcomes.findIndex(o => sameSubject(o) && o.unit === base.unit &&
-          o.pool?.domain === base.pool?.domain && o.pool?.id === base.pool?.id);
-        if (exact >= 0) {
-          observations[j]!.push(snapshot(answer, exact, result));
-          return;
-        }
-        const silent = answer.outcomes.findIndex(o => sameSubject(o) && o.unit === undefined);
-        if (silent >= 0) {
-          observations[j]!.push(snapshot(answer, silent, result));
-          return;
-        }
-        // 같은 영역이 다른 예산만 선언한 세계에서는 이 예산으로 보낼 수 있는 양은 0이다.
-        const others = answer.outcomes.flatMap((o,index) => sameSubject(o) ? [snapshot(answer,index,result)] : []);
-        if (base.unit && others.length) {
-          const sample = others[0]!;
-          observations[j]!.push({ ...sample, selected:null, o:{...base, verdict:"impossible", mode:"", label:"연결 불가"},
-            possible:["impossible"], metrics:[{outcome:row, kind:"limit", unit:base.unit, value:0, low:0, high:0, basis:"calculated"}],
-            inputs:others.flatMap(s => s.inputs), specs:others.flatMap(s => s.specs), quests:[], needs:[] });
-          return;
-        }
-        const absent = snapshot(result, row);
-        observations[j]!.push({ ...absent, selected: null, o: { ...base, verdict: "unknown", mode: "" },
-          possible: ["ok","conditional","impossible"], metrics: [], measures: [], assessments: [], bindings: [], needs: [] });
+          o.direction === base.direction && o.domain === base.domain ? [snapshot(answer,n,result)] : []);
+        observations[j]!.push(matches);
       });
       worlds.push(world);
     }
-    affected.forEach((row,j) => merge(scene, plugins, result, row, variables, observations[j]!, worlds, strides));
+    subjects.forEach((rows,j) => {
+      const samples = observations[j]!, base = result.outcomes[rows[0]!]!;
+      // 기본 장면에서 보이지 않던 서비스도 세계별 예산의 합집합에 남긴다.
+      if (base.subjectKind === "connection") for (const world of samples) for (const {o} of world) {
+        if (!o.unit || rows.some(n => sameBudget(result.outcomes[n]!,o))) continue;
+        const outcome: Outcome = { ...o, scenario:base.scenario, verdict:"unknown" };
+        delete outcome.option;
+        rows.push(result.outcomes.push(outcome) - 1);
+      }
+      for (const row of rows) merge(scene, plugins, result, row, variables,
+        samples.map(world => budgetObservation(result,row,world)), worlds, strides);
+    });
     for (const [i, total] of totals) {
       const base = provisional[i]!, u = result.resourceUsage[i]!;
       if (total.used === base.used && total.capacity === base.capacity && total.basis === base.basis) continue;

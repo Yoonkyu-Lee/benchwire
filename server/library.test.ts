@@ -68,3 +68,16 @@ test("같은 모델 판본이나 커넥터 ID의 정의가 다르면 시작할 �
     connectors: [{ ...files.connector, endForm: { ...files.form, value: "다른 형태" } }] });
   assert.throws(files.open, /second[\\/]connectors\.json.*plug/);
 });
+
+test("커넥터 형태의 대체 출처도 공용 출처로 연결하고 결합의 구조 근거는 참값만 받는다", t => {
+  const files = exampleLibrary(t);
+  const source = files.registry.sources[0]!, second = {...source,id:"alt",locator:"fixture:other"};
+  files.write("catalog/connectors.json", {sources:[source,second], connectors:[{id:"catalog-plug",
+    endForm:{...files.form,conflicts:[{value:"other",confidence:"review",sources:["alt"]}]}}],mates:[]});
+  const library = files.open().describe().connectors;
+  const alt = library.connectors.find(c => c.id === "catalog-plug")!.endForm.conflicts![0]!;
+  assert.equal(library.sources.find(s => s.id === alt.sources[0])!.locator, second.locator);
+  files.write("catalog/connectors.json", {...files.registry, mates:[{...files.registry.mates[0],
+    evidence:{...files.form,value:true,conflicts:[{value:false,confidence:"review",sources:[source.id]}]}}]});
+  assert.throws(files.open,/mates\.0\.evidence/u);
+});

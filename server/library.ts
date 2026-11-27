@@ -5,7 +5,7 @@ import { dirname, join } from "node:path";
 import { isDeepStrictEqual } from "node:util";
 import { z } from "zod";
 import { plugins } from "../domains/registry.ts";
-import { connectorsFile, modelFile, parseDocument, sceneFile } from "../scene/files.ts";
+import { connectorsFile, modelFile, parseDocument, sceneFile, type Fact } from "../scene/files.ts";
 import { loadSceneDocuments } from "../scene/load.ts";
 
 export const sceneIdPattern = /^[a-z0-9_-]{1,80}$/;
@@ -103,13 +103,18 @@ function readConnectors(files: readonly { file: string; text: string }[]): Conne
       if (row === undefined) throw new Error(`${file} — 찾을 수 없는 출처: ${id}`);
       return row;
     }
+    function citations(fact: Fact): Fact {
+      return { ...fact, sources: fact.sources.map(cite), ...(fact.conflicts && {
+        conflicts: fact.conflicts.map(c => ({ ...c, sources: c.sources.map(cite) })),
+      }) };
+    }
     for (const row of registry.connectors) {
-      const connector = { ...row, endForm: { ...row.endForm, sources: row.endForm.sources.map(cite) } };
+      const connector = { ...row, endForm: citations(row.endForm) };
       mergeRow(connectors, row.id, connector, file, "커넥터");
     }
     for (const row of registry.mates) {
       const [a, b] = row.a <= row.b ? [row.a, row.b] : [row.b, row.a];
-      const mate = { a, b, evidence: { ...row.evidence, sources: row.evidence.sources.map(cite) } };
+      const mate = { a, b, evidence: citations(row.evidence) };
       mergeRow(mates, JSON.stringify([a, b]), mate, file, "결합쌍");
     }
   }

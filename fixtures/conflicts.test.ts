@@ -204,3 +204,100 @@ test("T8 출처 조합 상한을 넘으면 확인하지 않은 판정을 후보 
   assert.ok(r.quests.some(q => q.outcome === row && scene.claims[q.claim]!.field === "capacity"));
   assert.ok(r.reasons.some(reason => reason.outcome === row && /후보.*상한/u.test(reason.rule)));
 });
+
+test("T2 영상 주사율 후보가 같은 연결 설정을 고르는 허브의 범위와 판정을 가른다", () => {
+  const f = fixture("t2", "scene");
+  f.document.workloads.find((w: {id: string}) => w.id === "video").request.refresh.conflicts = [competing(60, "scene")];
+  const scene = f.load(), r = evaluate(scene, plugins);
+  const claim = scene.claims.findIndex(c => c.field === "refresh" && c.conflictGroup !== undefined);
+  const hub = r.outcomes.findIndex(o => o.subjectKind === "workload" && scene.workloads[o.subjectRow]!.id === "hub");
+  const m = r.metrics.find(m => m.outcome === hub && m.kind === "together")!;
+  assert.deepEqual([r.outcomes[hub]!.verdict, m.low, m.high], ["unknown", 53.248, 400]);
+  assert.deepEqual(r.possibleVerdicts.filter(v => v.outcome === hub).map(v => v.verdict).sort(), ["conditional","ok"]);
+  assert.ok(r.quests.some(q => q.outcome === hub && q.claim === claim && q.impact === "verdict"));
+  for (const [world, value] of [[m.lowWorld,144],[m.highWorld,60]]) {
+    assert.ok(r.profileWorlds.some(v => v.world === world && v.claim === claim && v.value === value));
+  }
+});
+
+function conflictingUsb() {
+  const f = fixture("data","scene"), model = f.models.get("usb-endpoint@1");
+  const modes = model.ports[0].interfaces[0].params.modes;
+  Object.assign(modes, {value:"High Speed",conflicts:[competing("Gen 1x1","endpoint")]});
+  f.models.get("usb-cable@1").attributes.data.cableDataGbps.value = 20;
+  f.document.workloads[0].request.throughput.value = 40;
+  return f;
+}
+
+test("T5 후보에서 생기는 양방향 USB 예산은 역방향 수요와 함께 네 세계에서 검산한다", () => {
+  const f = conflictingUsb(), forward = f.document.workloads[0], back = structuredClone(forward);
+  Object.assign(back, {id:"return", from:forward.to, to:forward.from});
+  Object.assign(back.request.throughput, {value:10,conflicts:[competing(40,"scene")]});
+  f.document.workloads.push(back);
+  f.document.scenarios[0].members.push("return");
+  const scene = f.load(), r = evaluate(scene,plugins);
+  const work = r.outcomes.findIndex(o => o.subjectKind === "workload" && o.subjectRow === 0);
+  const m = r.metrics.find(m => m.outcome === work && m.kind === "together")!;
+  assert.deepEqual([m.low,m.high], [26.624,40]);
+  assert.deepEqual(r.possibleVerdicts.filter(v => v.outcome === work).map(v => v.verdict).sort(), ["conditional","ok"]);
+  const request = scene.claims.findIndex(c => c.ownerKind === "workload" && c.owner === 1 && c.field === "throughput");
+  assert.ok(r.quests.some(q => q.outcome === work && q.claim === request && q.impact === "verdict"));
+  const modes = f.models.get("usb-endpoint@1").ports[0].interfaces[0].params.modes;
+  delete modes.conflicts;
+  delete back.request.throughput.conflicts;
+  for (const mode of ["High Speed","Gen 1x1"]) for (const reverse of [10,40]) {
+    modes.value = mode;
+    back.request.throughput.value = reverse;
+    const answer = evaluate(f.load(),plugins);
+    const row = answer.outcomes.findIndex(o => o.subjectKind === "workload" && o.subjectRow === 0);
+    const congested = mode === "High Speed" && reverse === 40;
+    assert.equal(answer.outcomes[row]!.verdict, congested ? "conditional" : "ok");
+    assert.equal(answer.metrics.find(m => m.outcome === row && m.kind === "together")!.value, congested ? 26.624 : 40);
+  }
+});
+
+test("T5 한 후보에서만 생기는 USB 서비스도 양 끝의 출처와 연결 한도를 낸다", () => {
+  const f = conflictingUsb(), scene = f.load(), r = evaluate(scene, plugins);
+  const rows = r.outcomes.flatMap((o,i) => o.subjectKind === "connection" && o.domain === "data" && o.direction === "forward" ? [i] : []);
+  assert.equal(rows.length, 2);
+  for (const i of rows) {
+    const m = r.metrics.find(m => m.outcome === i && m.kind === "limit")!;
+    assert.deepEqual([m.low,m.high,m.unit],[0,r.outcomes[i]!.pool?.id === "usb2-bulk" ? 53.248 : 450,"MB/s"]);
+    assert.deepEqual(r.possibleVerdicts.filter(v => v.outcome === i).map(v => v.verdict).sort(),["impossible","ok"]);
+    const cited = r.reasonInputs.filter(v => r.reasons[v.reason]!.outcome === i).map(v => v.claim);
+    assert.ok(cited.some(id => scene.claims[id]!.field === "modes" && scene.claims[id]!.conflictGroup !== undefined));
+  }
+});
+
+test("T8 동시 판정이 같아도 단독 충전 판정이 갈리면 판정 퀘스트다", () => {
+  const f = fixture("power","three-ports"), model = f.models.get("supply@1");
+  model.attributes.power = {};
+  Object.assign(model.resources[0].capacity,{value:35,conflicts:[competing(55,"table")]});
+  const scene = f.load(), r = evaluate(scene,plugins);
+  const row = r.outcomes.findIndex(o => o.subjectKind === "workload" && o.subjectRow === 0 && o.scenario === 0);
+  assert.equal(r.outcomes[row]!.verdict,"impossible");
+  assert.deepEqual(r.assessments.filter(a => a.outcome === row && a.run === "solo").map(a => a.verdict).sort(),["conditional","ok"]);
+  assert.ok(r.quests.some(q => q.outcome === row && scene.claims[q.claim]!.field === "capacity" && q.impact === "verdict"));
+});
+
+test("T8 대체 후보도 복제 원본 판본을 저장하고 그 값의 출처에 표시한다", () => {
+  const f = fixture("power","single-port"), model = f.models.get("supply@1");
+  model.resources[0].capacity.conflicts = [{ ...competing(30,"table"), confidence:"inferred", inferredFrom:"supply@old" }];
+  const scene = f.load(), r = evaluate(scene,plugins);
+  assert.match(printResults(scene,r),/충돌 후보 30 W \[inferred\] · 원본 supply@old/u);
+  model.resources[0].capacity.conflicts[0].confidence = "official";
+  assert.throws(f.load,/conflicts\.0\.inferredFrom/u);
+});
+
+test("T8 케이블이 먼저 제한하면 출력 충돌의 두 근거를 보존하고 퀘스트는 만들지 않는다", () => {
+  const f = fixture("power","single-port"), model = f.models.get("supply@1");
+  model.resources[0].capacity.conflicts = [competing(1000,"table")];
+  const scene = f.load(), r = evaluate(scene,plugins);
+  const cap = scene.claims.findIndex(c => c.field === "capacity"), row = r.outcomes.findIndex(o => o.subjectKind === "workload");
+  const m = r.metrics.find(m => m.outcome === row && m.kind === "together")!;
+  assert.deepEqual([m.value,m.low,m.high],[60,60,60]);
+  assert.equal(r.quests.some(q => q.outcome === row && q.claim === cap), false);
+  assert.ok(r.reasonInputs.some(i => i.claim === cap && r.reasons[i.reason]!.outcome === row));
+  assert.deepEqual(scene.claimSources.filter(c => c.claim === cap).map(c => [c.candidate?.value,scene.sources[c.source]!.id]),
+    [[100,"supply"],[1000,"table"]]);
+});

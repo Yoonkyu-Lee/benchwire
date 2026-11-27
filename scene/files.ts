@@ -12,8 +12,9 @@ const revisionRef = z.string().refine(key => {
 const scalar = z.union([z.number(), z.string(), z.boolean()]);
 const conflict = z.strictObject({
   value: scalar, unit: z.string().optional(), confidence: confidence.exclude(["unknown"]),
-  sources: ids, condition: z.string().optional(),
-});
+  sources: ids, condition: z.string().optional(), inferredFrom: revisionRef.optional(),
+}).refine(c => !c.inferredFrom || c.confidence === "inferred",
+  { path: ["inferredFrom"], message: "원본 판본은 복제한 추정값에 붙입니다" });
 const fact = z.strictObject({
   value: scalar.nullable(), unit: z.string().default(""), confidence, sources: ids, condition: z.string().default(""),
   conflicts: z.array(conflict).optional(), inferredFrom: revisionRef.optional(),
