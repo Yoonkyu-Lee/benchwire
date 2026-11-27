@@ -9,17 +9,31 @@ const fact = <T extends z.ZodType>(value: T, unit = "") => z.strictObject({ valu
 const refresh = fact(z.number().positive().lt(1_000_000 / CVT_RB_V2_MIN_VERTICAL_BLANK_US), "Hz");
 const dscBpp = z.number().positive().max(Number.MAX_SAFE_INTEGER);
 
-export const params = z.strictObject({
-  version: fact(z.string().min(1)).optional(),
-  // maxRate와 frlCode 상한은 그보다 낮은 링크 모드도 지원한다는 주장이다.
-  maxRate: fact(z.enum(DP_LINK_RATES.map(row => row.rate))).optional(),
-  lanes: fact(z.literal([1, 2, DP_MAX_LANES])).optional(),
-  pin: fact(z.enum(DP_ALT_MODE_PIN_ASSIGNMENTS.map(row => row.pin))).optional(),
-  tmdsVersion: fact(z.enum(HDMI_TMDS_VERSION_LIMITS.map(row => row.version))).optional(),
-  frlCode: fact(z.literal([0, ...HDMI_21_FRL_LINK_RATES.map(row => row.code)])).optional(),
-  // 해당 설정의 인코더나 디코더에서 확인한 DSC 목표. 0은 지원하지 않음이다.
-  dscBpp: fact(z.union([z.literal(0), dscBpp]), "bpp").optional(),
+// 해당 설정의 인코더나 디코더에서 확인한 DSC 목표. 0은 지원하지 않음이다.
+const dscCapability = fact(z.union([z.literal(0), dscBpp]), "bpp");
+const dpParams = z.strictObject({
+  version: fact(z.string().min(1)),
+  // 링크 속도 상한은 하위 속도도 지원한다는 주장이다.
+  maxRate: fact(z.enum(DP_LINK_RATES.map(row => row.rate))),
+  lanes: fact(z.literal([1, 2, DP_MAX_LANES])),
+  dscBpp: dscCapability,
 });
+const altModeParams = dpParams.extend({ pin: fact(z.enum(DP_ALT_MODE_PIN_ASSIGNMENTS.map(row => row.pin))) });
+const hdmiParams = z.strictObject({
+  tmdsVersion: fact(z.enum(HDMI_TMDS_VERSION_LIMITS.map(row => row.version))),
+  frlCode: fact(z.literal([0, ...HDMI_21_FRL_LINK_RATES.map(row => row.code)])),
+  dscBpp: dscCapability,
+});
+
+export const params = z.strictObject({});
+export function paramsFor(protocol: string) {
+  switch (protocol) {
+    case "DP": return dpParams;
+    case "DP Alt Mode": return altModeParams;
+    case "HDMI": return hdmiParams;
+    default: return undefined;
+  }
+}
 
 export const request = z.strictObject({
   width: fact(z.int().positive(), "px"),

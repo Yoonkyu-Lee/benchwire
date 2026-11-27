@@ -1,5 +1,6 @@
 // 합성 장면을 로더부터 판정까지 실행해 영상 경로와 주장·규격 출처를 확인한다.
 import assert from "node:assert/strict";
+import { cpSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { test } from "node:test";
 import { loadScene } from "../../cli/load.ts";
@@ -7,9 +8,9 @@ import { display } from "../../domains/display/display.ts";
 import type { Scene, Value } from "../../engine/contract.ts";
 import { evaluate } from "../../engine/evaluate.ts";
 
-function load() {
+function load(modelsDir = import.meta.dirname) {
   return loadScene(join(import.meta.dirname, "scene.json"), {
-    modelsDir: import.meta.dirname, connectorsFile: join(import.meta.dirname, "connectors.json"),
+    modelsDir, connectorsFile: join(import.meta.dirname, "connectors.json"),
   }, [display]);
 }
 
@@ -25,6 +26,13 @@ function portClaim(scene: Scene, itemId: string, portId: string, field: string) 
 
 function setPortValue(scene: Scene, itemId: string, portId: string, field: string, value: Value) {
   scene.claims[portClaim(scene, itemId, portId, field)]!.value = value;
+}
+
+function setWorkloadValue(scene: Scene, id: string, field: string, value: Value) {
+  const owner = scene.workloads.findIndex(work => work.id === id);
+  const claim = scene.claims.find(c => c.ownerKind === "workload" && c.owner === owner && c.field === field);
+  assert.ok(claim, `${id}.${field}`);
+  claim.value = value;
 }
 
 function inspect(scene: Scene, id: string) {
@@ -48,7 +56,8 @@ function inspect(scene: Scene, id: string) {
   const claims = result.reasonInputs.filter(r => rows.has(r.reason)).map(r => r.claim);
   const specs = result.reasonSpecs.filter(r => rows.has(r.reason)).map(r => result.specSources[r.source]?.id);
   assert.ok(specs.includes("cvt-rb-v2"));
-  return { result, outcome, reasons, claims, specs, option, demand, steps, metrics: result.metrics.filter(m => m.outcome === index) };
+  return { result, outcome, reasons, claims, specs, option, demand, steps, metrics: result.metrics.filter(m => m.outcome === index),
+    quests: result.quests.filter(q => q.outcome === index), possible: result.possibleVerdicts.filter(v => v.outcome === index).map(v => v.verdict).sort() };
 }
 
 test("T1 DP 1.4와 DP 2.1이 HBR3로 연결되며 양 끝 판본과 수신기의 미사용 성능을 설명한다", () => {
@@ -177,4 +186,128 @@ test("HDMI는 공통 FRL 한도 또는 경로가 선언한 TMDS 한도로 영상
   assert.ok(tmds.reasons.some(reason => reason.stage === "negotiate" && reason.rule.includes("TMDS")));
   assert.ok(tmds.specs.includes("hdmi-tmds"));
   assert.ok(tmds.claims.includes(portClaim(scene, "hdmi", "hdmi", "tmdsVersion")));
+});
+
+test("HDMI의 FRL 미확인은 TMDS로 충분한 작업과 FRL 상한을 넘는 작업의 판정을 바꾸지 않는다", () => {
+  const scene = load();
+  const claim = portClaim(scene, "hdmi", "hdmi", "frlCode");
+  scene.claims[claim]!.value = null;
+  for (const [refresh, verdict] of [[60, "ok"], [144, "unknown"], [300, "impossible"]] as const) {
+    setWorkloadValue(scene, "hdmi", "refresh", refresh);
+    const r = inspect(scene, "hdmi");
+    assert.equal(r.outcome.verdict, verdict, `${refresh} Hz`);
+    assert.equal(r.option.limit, null);
+    assert.deepEqual(r.option.bounds, { low: 14.4, high: 32 * (16 / 18) });
+    assert.ok(r.claims.includes(claim));
+    assert.ok(r.specs.includes("hdmi-tmds") && r.specs.includes("hdmi-frl"));
+    const metric = r.metrics.find(m => m.kind === "together")!;
+    if (verdict === "unknown") {
+      assert.deepEqual(r.possible, ["impossible", "ok"]);
+      assert.deepEqual([metric.low, metric.high], [0, r.demand.requested]);
+      assert.ok(r.quests.some(q => q.claim === claim && q.instruction === display.quest("frlCode")));
+    } else {
+      const value = verdict === "ok" ? 7.0377 : 0;
+      assert.deepEqual([metric.value, metric.low, metric.high], [value, value, value]);
+      assert.deepEqual(r.quests, []);
+    }
+  }
+  setWorkloadValue(scene, "hdmi", "refresh", 60);
+  for (const code of [0, 1, 2, 3, 4, 5, 6]) {
+    scene.claims[claim]!.value = code;
+    const r = inspect(scene, "hdmi");
+    assert.equal(r.outcome.verdict, "ok", `FRL ${code}`);
+    assert.equal(r.metrics.find(m => m.kind === "together")?.value, 7.0377);
+  }
+});
+
+test("HDMI의 DSC 모드는 TMDS 보장 한도 대신 FRL 경계를 쓴다", () => {
+  const scene = load();
+  const owner = scene.workloads.findIndex(w => w.id === "hdmi");
+  const dsc = scene.workloads.findIndex(w => w.id === "dsc");
+  const target = scene.claims.find(c => c.ownerKind === "workload" && c.owner === dsc && c.field === "dscBpp")!;
+  scene.claims.push({ ...target, owner });
+  setPortValue(scene, "host", "hdmi", "dscBpp", 12);
+  setPortValue(scene, "hdmi", "hdmi", "dscBpp", 12);
+  setPortValue(scene, "hdmi", "hdmi", "frlCode", null);
+  setWorkloadValue(scene, "hdmi", "refresh", 144);
+  const pending = inspect(scene, "hdmi");
+  const compressed = pending.result.options.find(o => o.direction === "forward" &&
+    o.connection === pending.option.connection && o.mode === "dsc:12");
+  assert.equal(pending.outcome.verdict, "unknown");
+  assert.deepEqual(compressed?.bounds, { low: 0, high: 32 * (16 / 18) });
+  assert.ok(pending.quests.some(q => q.claim === portClaim(scene, "hdmi", "hdmi", "frlCode")));
+
+  setPortValue(scene, "hdmi", "hdmi", "frlCode", 1);
+  const known = inspect(scene, "hdmi");
+  assert.equal(known.outcome.verdict, "conditional");
+  assert.equal(known.outcome.mode, "dsc:12");
+  assert.equal(known.option.limit, 8);
+  assert.ok(known.reasons.some(r => r.stage === "negotiate" && r.rule.includes("FRL") && r.rule.includes("8 Gbps")));
+});
+
+test("DP 레인 수와 속도가 미확인이어도 알려진 포트와 규격이 경계를 제한한다", () => {
+  const scene = load();
+  setPortValue(scene, "host", "dp", "lanes", null);
+  const lanes = inspect(scene, "native");
+  assert.equal(lanes.outcome.verdict, "unknown");
+  assert.deepEqual(lanes.option.bounds, { low: 6.48, high: 25.92 });
+  assert.ok(lanes.quests.some(q => q.claim === portClaim(scene, "host", "dp", "lanes")));
+
+  setPortValue(scene, "host", "dp", "lanes", 4);
+  setPortValue(scene, "host", "dp", "maxRate", null);
+  setPortValue(scene, "host", "dp", "version", "1.2");
+  const rate = inspect(scene, "native");
+  assert.equal(rate.outcome.verdict, "unknown");
+  assert.deepEqual(rate.option.bounds, { low: 1.62 * 4 * 0.8, high: 17.28 });
+  assert.ok(rate.quests.some(q => q.claim === portClaim(scene, "host", "dp", "maxRate")));
+
+  setWorkloadValue(scene, "native", "refresh", 15);
+  const guaranteed = inspect(scene, "native");
+  assert.equal(guaranteed.outcome.verdict, "ok");
+  assert.deepEqual(guaranteed.quests, []);
+  setWorkloadValue(scene, "native", "refresh", 90);
+  const blocked = inspect(scene, "native");
+  assert.equal(blocked.outcome.verdict, "impossible");
+  assert.deepEqual(blocked.quests, []);
+});
+
+test("모델에 DP 레인 수 필드가 없으면 로드 위치에서 거절하고 명시적인 null에는 퀘스트를 낸다", t => {
+  const work = join(import.meta.dirname, "../../work");
+  mkdirSync(work, { recursive: true });
+  const modelsDir = mkdtempSync(join(work, "영상입력시험-"));
+  t.after(() => rmSync(modelsDir, { recursive: true, force: true }));
+  for (const name of ["video-sink@1.json", "video-wire@1.json"])
+    cpSync(join(import.meta.dirname, name), join(modelsDir, name));
+  const name = "video-source@1.json";
+  const model = JSON.parse(readFileSync(join(import.meta.dirname, name), "utf8"));
+  const params = model.ports[0].interfaces[0].params;
+  const lanes = params.lanes;
+  const file = join(modelsDir, name);
+  delete params.lanes;
+  writeFileSync(file, JSON.stringify(model));
+  assert.throws(() => load(modelsDir), /video-source@1\.json#ports\.0\.interfaces\.0\.params\.lanes/);
+  params.lanes = { ...lanes, value: null, confidence: "unknown" };
+  writeFileSync(file, JSON.stringify(model));
+  const scene = load(modelsDir);
+  const r = inspect(scene, "native");
+  assert.equal(r.outcome.verdict, "unknown");
+  assert.ok(r.quests.some(q => q.claim === portClaim(scene, "host", "dp", "lanes")));
+});
+
+test("DP·Alt Mode·HDMI 입력은 각자의 필수 칸에 명시적인 null을 허용한다", () => {
+  const dp = { version: { value: null, unit: "" }, maxRate: { value: null, unit: "" },
+    lanes: { value: null, unit: "" }, dscBpp: { value: null, unit: "bpp" } };
+  const hdmi = { tmdsVersion: { value: null, unit: "" }, frlCode: { value: null, unit: "" }, dscBpp: dp.dscBpp };
+  const alt = { ...dp, pin: { value: null, unit: "" } };
+  for (const [protocol, fields] of [["DP", dp], ["DP Alt Mode", alt], ["HDMI", hdmi]] as const) {
+    const schema = display.paramsFor?.(protocol) ?? display.params;
+    assert.ok(schema.safeParse(fields).success, protocol);
+    for (const field of Object.keys(fields)) {
+      const missing = Object.fromEntries(Object.entries(fields).filter(([name]) => name !== field));
+      const parsed = schema.safeParse(missing);
+      assert.equal(parsed.success, false, `${protocol}.${field}`);
+      assert.ok(!parsed.success && parsed.error.issues.some(issue => issue.path[0] === field));
+    }
+  }
+  assert.equal((display.paramsFor?.("DP") ?? display.params).safeParse({ ...dp, frlCode: hdmi.frlCode }).success, false);
 });

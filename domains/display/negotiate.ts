@@ -1,7 +1,10 @@
 // 방향에 맞는 공통 영상 규격을 찾아 양 끝과 모든 중간 포트의 한도를 적용한다.
 // 부품은 같은 프로토콜의 통과 포트로 취급하며, 한도에는 채널 인코딩까지만 반영한다.
 import { effectiveClaim, type Link, type Option, type Value, type Verdict } from "../../engine/contract.ts";
-import { DP_ALT_MODE_PIN_ASSIGNMENTS, DP_LINK_RATES, DP_VERSION_MAX_LINK_RATES, HDMI_TMDS_VERSION_LIMITS } from "./constants.ts";
+import {
+  DP_ALT_MODE_PIN_ASSIGNMENTS, DP_LINK_RATES, DP_MAX_LANES, DP_VERSION_MAX_LINK_RATES, HDMI_21_FRL_LINK_RATES,
+  HDMI_TMDS_VERSION_LIMITS,
+} from "./constants.ts";
 import { dscTarget, DSC_PREFIX, SUBSAMPLED, UNCOMPRESSED, VIDEO_UNIT } from "./demand.ts";
 import {
   dpAltModeCapacityGbps, dpLinkCapacityGbps, hdmiFrlCapacityGbps, hdmiTmdsCapacityGbps,
@@ -11,13 +14,14 @@ import { DP_ALT_MODE, DP_RATES, DP_VERSIONS, DSC, HDMI_FRL, HDMI_TMDS } from "./
 
 const PROTOCOLS = ["DP", "DP Alt Mode", "HDMI"] as const;
 
-interface Capacity {
-  limit: number | null;
+type Limit = Pick<Option, "limit" | "bounds">;
+
+interface Capacity extends Limit {
   unused?: number;
   specs: string[];
   rule: string;
   verdict: Verdict;
-  dscTransport?: Verdict;
+  dscTransport?: Limit & Pick<Option, "rule" | "verdict">;
   subsampled?: Verdict;
 }
 
@@ -28,8 +32,8 @@ function dpCapacity(read: (row: number, field: string) => Value, rows: number[],
     const lanes = read(row, "lanes") as number | null;
     const rank = DP_LINK_RATES.findIndex(r => r.rate === maxRate);
     const ceiling = DP_VERSION_MAX_LINK_RATES.find(r => r.version === version);
-    const conflict = ceiling !== undefined && rank > DP_LINK_RATES.findIndex(r => r.rate === ceiling.maxRate);
-    return { rank, lanes, conflict };
+    const highestRank = ceiling === undefined ? DP_LINK_RATES.length - 1 : DP_LINK_RATES.findIndex(r => r.rate === ceiling.maxRate);
+    return { rank, lanes, highestRank };
   });
   const specs = [DP_RATES, DP_VERSIONS];
   let pin: DpAltModePin | null = null;
@@ -46,20 +50,28 @@ function dpCapacity(read: (row: number, field: string) => Value, rows: number[],
     label = "DP Alt Mode 핀 " + pin;
   }
 
-  if (ports.some(p => p.conflict))
+  if (ports.some(p => p.rank > p.highestRank))
     return { limit: null, verdict: "unknown", rule: label + " 판본과 지원 링크 속도 주장이 충돌함", specs };
-  if (ports.some(p => p.rank < 0 || p.lanes === null))
-    return { limit: null, verdict: "unknown", rule: label + " 경로의 지원 링크 속도 또는 레인 수 미확인", specs };
 
-  const rate = DP_LINK_RATES[Math.min(...ports.map(p => p.rank))]!.rate;
-  const pinLanes = DP_ALT_MODE_PIN_ASSIGNMENTS.find(p => p.pin === pin)?.maxDpLanes ?? Infinity;
-  const lanes = Math.min(pinLanes, ...ports.map(p => p.lanes!));
-  const limit = dpLinkCapacityGbps(rate, lanes);
-  const unused = Math.max(...[ports[0]!, ports.at(-1)!].map(p => {
+  const pinLanes = DP_ALT_MODE_PIN_ASSIGNMENTS.find(p => p.pin === pin)?.maxDpLanes ?? DP_MAX_LANES;
+  const lowRate = DP_LINK_RATES[Math.min(...ports.map(p => Math.max(0, p.rank)))]!.rate;
+  const highRate = DP_LINK_RATES[Math.min(...ports.map(p => p.rank < 0 ? p.highestRank : p.rank))]!.rate;
+  const lowLanes = Math.min(pinLanes, ...ports.map(p => p.lanes ?? 1));
+  const lanes = Math.min(pinLanes, ...ports.map(p => p.lanes ?? DP_MAX_LANES));
+  const low = dpLinkCapacityGbps(lowRate, lowLanes);
+  const limit = dpLinkCapacityGbps(highRate, lanes);
+  if (low !== limit) return {
+    limit: null, bounds: { low, high: limit }, verdict: "unknown", specs,
+    rule: `${label} 지원 속도·레인 수에 따른 인코딩 후 한도 ${low}–${limit} Gbps`,
+  };
+
+  const rate = highRate;
+  const ends = [ports[0]!, ports.at(-1)!];
+  const unused = ends.every(p => p.rank >= 0 && p.lanes !== null) ? Math.max(...ends.map(p => {
     const rate = DP_LINK_RATES[p.rank]!.rate;
     const cap = dpLinkCapacityGbps(rate, p.lanes!);
     return pin === null ? cap : Math.min(cap, dpAltModeCapacityGbps(rate, pin));
-  })) - limit;
+  })) - limit : 0;
   return { limit, ...(unused > 0 ? { unused } : {}), specs, verdict: "ok",
     rule: `${label} 공통 ${rate} × ${lanes}레인 인코딩 후 한도 ${limit} Gbps` };
 }
@@ -67,18 +79,29 @@ function dpCapacity(read: (row: number, field: string) => Value, rows: number[],
 function hdmiCapacity(read: (row: number, field: string) => Value, rows: number[]): Capacity {
   const frl = rows.map(row => read(row, "frlCode") as HdmiFrlCode | 0 | null);
   const tmds = rows.map(row => read(row, "tmdsVersion") as HdmiTmdsVersion | null);
+  const maxFrl = HDMI_21_FRL_LINK_RATES.at(-1)!.code;
+  const commonFrl = Math.min(...frl.map(code => code ?? maxFrl)) as HdmiFrlCode | 0;
+  const frlHigh = commonFrl === 0 ? 0 : hdmiFrlCapacityGbps(commonFrl);
+  const frlLow = frl.includes(null) ? 0 : frlHigh;
+  const maxTmds = Math.max(...HDMI_TMDS_VERSION_LIMITS.map(row => hdmiTmdsCapacityGbps(row.version)));
+  const tmdsCapacities = tmds.map(version => version === null ? null : hdmiTmdsCapacityGbps(version));
+  const tmdsLow = Math.min(...tmdsCapacities.map(limit => limit ?? 0));
+  const tmdsHigh = Math.min(...tmdsCapacities.map(limit => limit ?? maxTmds));
+  const low = Math.max(frlLow, tmdsLow);
+  const high = Math.max(frlHigh, tmdsHigh);
   const specs = [HDMI_FRL, HDMI_TMDS];
-  if (!frl.includes(0) && frl.includes(null))
-    return { limit: null, verdict: "unknown", rule: "HDMI 경로의 FRL 지원 미확인", specs };
-  const frlCap = frl.includes(0) ? null : hdmiFrlCapacityGbps(Math.min(...frl as HdmiFrlCode[]) as HdmiFrlCode);
-  const tmdsCap = tmds.includes(null) ? null : Math.min(...(tmds as HdmiTmdsVersion[]).map(hdmiTmdsCapacityGbps));
-  if (frlCap !== null && tmdsCap === null && frlCap < Math.max(...HDMI_TMDS_VERSION_LIMITS.map(row => hdmiTmdsCapacityGbps(row.version))))
-    return { limit: null, verdict: "unknown", rule: "HDMI 경로의 공통 TMDS 한도 미확인", specs };
-  const limit = frlCap === null ? tmdsCap : Math.max(frlCap, tmdsCap ?? 0);
-  const dscTransport = frl.includes(0) ? "impossible" : frlCap === null || frlCap !== limit ? "unknown" : "ok";
-  if (limit === null) return { limit, verdict: "unknown", rule: "HDMI 경로의 공통 TMDS 또는 FRL 한도 미확인", specs, dscTransport };
-  const name = limit === frlCap ? "FRL" : "TMDS";
-  return { limit, verdict: "ok", rule: `HDMI ${name} 공통 인코딩 후 한도 ${limit} Gbps`, specs,
+  const dscTransport: Capacity["dscTransport"] = frlHigh === 0
+    ? { limit: 0, verdict: "impossible", rule: "HDMI 경로의 FRL 미지원" }
+    : frlLow === frlHigh
+      ? { limit: frlHigh, verdict: "ok", rule: `HDMI FRL 공통 인코딩 후 한도 ${frlHigh} Gbps` }
+      : { limit: null, bounds: { low: frlLow, high: frlHigh }, verdict: "unknown",
+        rule: `HDMI FRL 공통 인코딩 후 한도 ${frlLow}–${frlHigh} Gbps` };
+  if (low !== high) return {
+    limit: null, bounds: { low, high }, verdict: "unknown", specs, dscTransport, subsampled: "unknown",
+    rule: `HDMI TMDS·FRL 공통 인코딩 후 한도 ${low}–${high} Gbps`,
+  };
+  const name = high === frlLow ? "FRL" : "TMDS";
+  return { limit: high, verdict: "ok", rule: `HDMI ${name} 공통 인코딩 후 한도 ${high} Gbps`, specs,
     dscTransport, subsampled: "unknown" };
 }
 
@@ -113,12 +136,14 @@ export function negotiateDisplay({ scene, connection, ports }: Link): Option[] {
       : { limit: null, verdict: "impossible", rule: "이 방향의 공통 영상 프로토콜 없음", specs: [] };
   }
 
-  const base = { limit: capacity.limit, unit: VIDEO_UNIT, rule: capacity.rule,
+  const base = { unit: VIDEO_UNIT, rule: capacity.rule,
     ...(capacity.unused === undefined ? {} : { unused: capacity.unused }) };
-  const options: Option[] = [{ ...base, mode: UNCOMPRESSED, verdict: capacity.verdict, inputs: [...inputs], specs: capacity.specs, condition: "" }];
-  const subsampled = capacity.subsampled ?? capacity.verdict;
-  options.push({ ...options[0]!, mode: SUBSAMPLED, verdict: subsampled,
-    rule: subsampled === "unknown" && capacity.verdict === "ok" ? "HDMI의 크로마 서브샘플링 전송 한도 미확인" : capacity.rule });
+  const plain = { ...base, limit: capacity.limit, verdict: capacity.verdict, inputs: [...inputs], specs: capacity.specs, condition: "" };
+  const uncompressed = { ...plain, mode: UNCOMPRESSED, ...(capacity.bounds ? { bounds: capacity.bounds } : {}) };
+  const subsampled = capacity.subsampled === "unknown"
+    ? { ...plain, mode: SUBSAMPLED, verdict: "unknown" as const, rule: "HDMI의 크로마 서브샘플링 전송 한도 미확인" }
+    : { ...uncompressed, mode: SUBSAMPLED };
+  const options: Option[] = [uncompressed, subsampled];
 
   const endpoints = chosen ? [read(rows[0]!, "dscBpp"), read(rows.at(-1)!, "dscBpp")] : [];
   const targets = new Map<number | null, number[]>();
@@ -133,13 +158,18 @@ export function negotiateDisplay({ scene, connection, ports }: Link): Option[] {
     }
   });
   for (const [target, targetInputs] of targets) {
-    const transport = capacity.dscTransport ?? capacity.verdict;
+    const transport = capacity.dscTransport ?? capacity;
     const blocked = endpoints.includes(0) || target !== null && endpoints.some(bpp => bpp !== null && bpp !== target);
-    const verdict = blocked || transport === "impossible" ? "impossible"
-      : transport === "unknown" || target === null || endpoints.includes(null) ? "unknown" : "conditional";
-    const condition = verdict === "conditional" ? `양 끝이 DSC ${target} bpp로 동작할 때 · ${capacity.rule}` : "";
-    const rule = blocked ? "송신과 수신에 공통 DSC 목표가 없음" : verdict === "unknown" ? "DSC 전송 조건 또는 목표 bpp 미확인" : capacity.rule;
-    options.push({ ...base, mode: DSC_PREFIX + (target ?? "unknown"), verdict, condition, rule, inputs: [...inputs, ...targetInputs], specs: [...capacity.specs, DSC] });
+    const codecKnown = target !== null && !endpoints.includes(null);
+    const verdict = blocked || transport.verdict === "impossible" ? "impossible"
+      : transport.verdict === "unknown" || !codecKnown ? "unknown" : "conditional";
+    const bounds = transport.bounds && !codecKnown ? { low: 0, high: transport.bounds.high } : transport.bounds;
+    const condition = verdict === "conditional" || codecKnown && bounds && verdict === "unknown"
+      ? `양 끝이 DSC ${target} bpp로 동작할 때 · ${transport.rule}` : "";
+    const rule = blocked ? "송신과 수신에 공통 DSC 목표가 없음" : verdict === "unknown" ? "DSC 전송 조건 또는 목표 bpp 미확인" : transport.rule;
+    options.push({ ...base, mode: DSC_PREFIX + (target ?? "unknown"), limit: transport.limit, ...(bounds ? { bounds } : {}),
+      verdict, condition, rule,
+      inputs: [...inputs, ...targetInputs], specs: [...capacity.specs, DSC] });
   }
   return options;
 }
