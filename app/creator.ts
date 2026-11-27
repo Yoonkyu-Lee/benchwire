@@ -2,6 +2,7 @@
 import charger from "../catalog/templates/usb-c-charger.json" with { type: "json" };
 import { domains, type DomainRegistration } from "../domains/registry.ts";
 import { modelFile, parseDocument } from "../scene/files.ts";
+import { modeClaim } from "../scene/mode-sets.ts";
 import { missingModelAttributes } from "../scene/load.ts";
 import { researchQuery } from "../scene/research-query.ts";
 import type { ResearchConfig, ResearchStatus } from "../server/research.ts";
@@ -531,13 +532,13 @@ export function mountCreator(dialog: HTMLDialogElement, documents: Documents, sa
     };
   }
 
-  function known(value: FieldValue["value"] | undefined): value is Candidate["value"] {
-    return value != null && value !== "" && (typeof value !== "number" || Number.isFinite(value));
-  }
-
   function claimEditor(box: HTMLElement, label: string, seed: Claim | undefined, path: string,
     main: (root: HTMLElement) => () => FieldValue | undefined,
-    alternate: (root: HTMLElement, initial: Candidate | undefined, path: string) => () => FieldValue["value"]) {
+    alternate: (root: HTMLElement, initial: Candidate | undefined, path: string) => () => FieldValue["value"],
+    emptySet = false) {
+    function known(value: FieldValue["value"] | undefined): value is Candidate["value"] {
+      return value != null && (value !== "" || emptySet) && (typeof value !== "number" || Number.isFinite(value));
+    }
     const editor = el("div");
     const primary = el("div");
     primary.className = "creator-claim";
@@ -609,13 +610,15 @@ export function mountCreator(dialog: HTMLDialogElement, documents: Documents, sa
 
   function factField(box: HTMLElement, key: string, schema: JSONSchema | boolean, required: boolean, unknown: boolean, path: string, seed?: Claim) {
     if (typeof schema !== "object") throw new Error("주장 필드의 값 스키마가 필요합니다: " + key);
+    const order = schema.modeOrder;
+    if (seed && Array.isArray(order)) seed = modeClaim(seed, order);
     const label = schema.title ?? key;
     return claimEditor(box, label, seed, path,
       root => claimInput(root, key, schema, required, seed ?? (unknown ? { value: null } : undefined), path).read,
       (root, initial, at) => {
         const { read } = claimInput(root, "후보 값", { ...schema, title: "후보 값" }, true, initial, at, true);
         return () => read()!.value;
-      });
+      }, Array.isArray(order));
   }
 
   function factFields(box: HTMLElement, schema: JSONSchema, unknownPrefixes: readonly string[], path: string, seed?: Record<string, Claim>) {
@@ -932,6 +935,14 @@ export function mountCreator(dialog: HTMLDialogElement, documents: Documents, sa
   form.onsubmit = async event => {
     event.preventDefault();
     if (submit.disabled) return;
+    const invalid = form.querySelector<HTMLSelectElement>("select:invalid");
+    if (invalid) {
+      for (let parent = invalid.parentElement; parent; parent = parent.parentElement)
+        if (parent instanceof HTMLDetailsElement) parent.open = true;
+      invalid.focus();
+      invalid.closest(".scenario-field")?.scrollIntoView({ block: "center" });
+      return;
+    }
     form.querySelectorAll(".scenario-error").forEach(row => { row.textContent = ""; });
     submit.disabled = close.disabled = body.inert = true;
     submit.textContent = "저장 중…";

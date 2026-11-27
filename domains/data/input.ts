@@ -1,5 +1,5 @@
 // USB 포트의 지원 모드, 케이블 등급과 전송 요청을 파일 경계에서 검사한다.
-import { modeSets } from "../../engine/contract.ts";
+import { canonicalModeSet, modeSets } from "../../engine/contract.ts";
 import { z } from "zod";
 import { USB_2_HIGH_SPEED_MODE, USB_3_2_PROTOCOL_ESTIMATES, USB4_LINK_MODES, USB_C_CABLE_DATA_RATINGS_GBPS } from "./constants.ts";
 
@@ -11,23 +11,20 @@ export const USB = "USB";
 export const USB4 = "USB4";
 
 const fact = <T extends z.ZodType>(value: T, unit = "") => z.strictObject({ value: value.nullable(), unit: z.literal(unit) });
-const modeList = (names: readonly string[]) => z.string().refine(value => {
-  const modes = parseModes(value);
-  return modes.length === new Set(modes).size && modes.every(mode => names.includes(mode));
-}, "지원 모드를 중복 없이 쉼표로 구분하세요").meta({enum:modeSets(names)});
+const modeList = (names: readonly string[], title: string) => fact(z.string().refine(
+  value => canonicalModeSet(value, names) !== undefined, "지원 모드를 중복 없이 쉼표로 구분하세요",
+).meta({ enum: modeSets(names) })).meta({ title, modeOrder: names });
 
-export function parseModes(value: string): string[] {
-  return value.trim() ? value.split(",").map(mode => mode.trim()) : [];
-}
+export { parseModes } from "../../engine/contract.ts";
 
 const usb3Modes = USB_3_2_PROTOCOL_ESTIMATES.map(row => row.mode);
 export const observations = z.strictObject({
   usbMode: fact(z.enum([USB_2_HIGH_SPEED_MODE, ...usb3Modes])).meta({ title: "현재 USB 벌크 협상 모드" }),
 });
-const usbParams = z.strictObject({ modes: fact(modeList([USB_2_HIGH_SPEED_MODE, ...usb3Modes])).meta({ title: "지원 USB 모드" }) });
+const usbParams = z.strictObject({ modes: modeList([USB_2_HIGH_SPEED_MODE, ...usb3Modes], "지원 USB 모드") });
 const usb4Params = z.strictObject({
-  modes: fact(modeList(USB4_LINK_MODES.map(row => row.mode))).meta({ title: "지원 USB4 모드" }),
-  usb3Modes: fact(modeList(usb3Modes)).meta({ title: "지원 USB 3.x 터널 모드" }),
+  modes: modeList(USB4_LINK_MODES.map(row => row.mode), "지원 USB4 모드"),
+  usb3Modes: modeList(usb3Modes, "지원 USB 3.x 터널 모드"),
   pcie: fact(z.boolean()).meta({ title: "PCIe 터널 지원" }),
   tunnelGbps: fact(z.number().nonnegative(), "Gbps").meta({ title: "터널 한도", unit: "Gbps" }),
 });

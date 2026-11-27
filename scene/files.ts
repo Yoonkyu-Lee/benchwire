@@ -35,6 +35,25 @@ const fact = z.strictObject({
   });
 });
 export type Fact = z.infer<typeof fact>;
+// 같은 값의 다른 표기가 한 후보로 합쳐져도 각 출처는 남긴다.
+export function canonicalFact<T extends z.input<typeof fact>>(fact: T,
+  convert: (value: z.infer<typeof scalar>) => z.infer<typeof scalar>): T {
+  // 모델 출처와 실물 검증의 범위가 섞인 후보는 합치기 전에 로더가 원래 위치에서 거절한다.
+  if (fact.conflicts?.some(c => (c.confidence === "user_verified") !== (fact.confidence === "user_verified"))) return fact;
+  const value = fact.value === null ? null : convert(fact.value);
+  if (value === fact.value && !fact.conflicts?.some(c => convert(c.value) !== c.value)) return fact;
+  const current = { ...fact, value };
+  delete current.conflicts;
+  const conflicts: NonNullable<T["conflicts"]>[number][] = [];
+  for (const candidate of fact.conflicts ?? []) {
+    const value = convert(candidate.value);
+    const same = current.value === value ? current : conflicts.find(row => row.value === value);
+    if (same) same.sources = [...new Set([...same.sources, ...candidate.sources])];
+    else conflicts.push({ ...candidate, value });
+  }
+  if (conflicts.length) current.conflicts = conflicts;
+  return current;
+}
 const evidence = fact.refine(f => f.value === true && !f.unit && !f.condition && !f.conflicts?.length, "구조 근거에는 무조건 성립하는 참값이 필요합니다");
 const fields = z.record(id, fact);
 const sources = z.array(z.strictObject({ id, title: id, locator: id, retrievedAt: z.iso.date() }));

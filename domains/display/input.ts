@@ -11,8 +11,9 @@ const dscBpp = z.number().positive().max(Number.MAX_SAFE_INTEGER);
 
 // 해당 설정의 인코더나 디코더에서 확인한 DSC 목표. 0은 지원하지 않음이다.
 const dscCapability = fact(z.union([z.literal(0), dscBpp]), "bpp").meta({ title: "지원 DSC 목표", unit: "bpp" });
+const dpVersions = DP_VERSION_MAX_LINK_RATES.map(row => row.version);
 const dpParams = z.strictObject({
-  version: fact(z.enum(DP_VERSION_MAX_LINK_RATES.map(row=>row.version))).meta({ title: "DisplayPort 판본" }),
+  version: fact(z.enum(dpVersions, { error: "허용하는 DisplayPort 판본은 " + dpVersions.join(", ") + "입니다" })).meta({ title: "DisplayPort 판본" }),
   // 링크 속도 상한은 하위 속도도 지원한다는 주장이다.
   maxRate: fact(z.enum(DP_LINK_RATES.map(row => row.rate))).meta({ title: "최고 링크 속도 등급" }),
   lanes: fact(z.literal([1, 2, DP_MAX_LANES])).meta({ title: "영상 레인 수" }),

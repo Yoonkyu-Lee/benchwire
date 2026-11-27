@@ -297,8 +297,6 @@ test("로드아웃과 슬롯 교체에서 배선의 방향을 표시한다",asyn
   }finally{await page.close();}
 });
 
-
-
 test("복제한 초안을 템플릿으로 바꾸기 전에 확인하고 취소하면 그대로 둔다", async () => {
   const { page, errors } = await edge.newPage("/");
   try {
@@ -329,5 +327,56 @@ test("복제한 초안을 템플릿으로 바꾸기 전에 확인하고 취소�
     assert.equal(await form.getByRole("group", { name: "포트 2", exact: true }).count(), 0);
     assert.deepEqual(await form.getByLabel("제목", { exact: true }).evaluateAll(fields => fields.map(f => (f as HTMLInputElement).value)), [""]);
     assert.deepEqual(errors, []);
+  } finally { await page.close(); }
+});
+
+test("모델 복제는 기존 지원 집합을 보존하고 목록 밖 값은 해당 칸에서 고쳐 저장한다", async () => {
+  const { page } = await edge.newPage("/");
+  try {
+    const library = await get<Library>(page, "/api/library");
+    const original = structuredClone(library.models.find(m => m.modelId === "network-host")!);
+    original.modelId = "old-support-list";
+    const support = original.ports[0]!.interfaces[0]!.params.baseTModes!;
+    support.value = "2.5GBASE-T,1000BASE-T";
+    support.conflicts = [{ value: "3GBASE-T", sources: support.sources, confidence: "inferred" }];
+    const dp = structuredClone(library.models.flatMap(m => m.ports.flatMap(p => p.interfaces))
+      .find(i => typeof i.params.version?.value === "string" && i.domain === "display")!);
+    dp.params.version!.value = "1.3";
+    const proof = original.ports[0]!.interfaces[0]!.evidence;
+    dp.evidence = proof;
+    for (const fact of Object.values(dp.params)) fact.sources = proof.sources;
+    original.ports[0]!.interfaces.push(dp);
+    await page.route("**/api/library", route => route.fulfill({json:{
+      ...library, models: [...library.models, original],
+    }}));
+    await page.reload();
+    await button(page, "새 아이템").click();
+    const form = panel(page, "새 아이템");
+    await form.getByLabel("복제할 모델 판본").selectOption("old-support-list@1");
+    await button(form, "모델 복제").click();
+    const modes = form.getByLabel("지원 BASE-T 모드", { exact: true });
+    assert.equal(await modes.inputValue(), "1000BASE-T,2.5GBASE-T");
+    const version = form.getByLabel("DisplayPort 판본", { exact: true });
+    const error = form.locator('[data-path="ports.0.interfaces.1.params.version"]');
+    assert.match(await error.textContent() ?? "", /1\.3.*허용.*1\.2.*1\.4.*2\.0.*2\.1/);
+    await button(form, "저장하고 배치").click();
+    assert(await form.isVisible());
+    const candidate = form.locator('[data-path="ports.0.interfaces.0.params.baseTModes.conflicts.0"]');
+    assert.match(await candidate.textContent() ?? "", /3GBASE-T.*허용.*1000BASE-T/);
+    const fix = candidate.locator("..").getByLabel("후보 값", { exact: true });
+    await fix.selectOption({ label: "지원 모드 없음" });
+    await button(form, "저장하고 배치").click();
+    assert(await error.isVisible());
+    await page.screenshot({ path: "work/모델복제-판본오류.png" });
+    await version.selectOption("1.4");
+    assert.equal(await error.textContent(), "");
+    await page.unroute("**/api/library");
+    const saved = page.waitForRequest(req => req.method() === "PUT" && req.url().includes("/api/models/"));
+    await button(form, "저장하고 배치").click();
+    const model = (await saved).postDataJSON() as typeof original;
+    const fact = model.ports[0]!.interfaces[0]!.params.baseTModes!;
+    assert.deepEqual([fact.value, fact.inferredFrom], ["1000BASE-T,2.5GBASE-T","old-support-list@1"]);
+    assert.deepEqual(fact.conflicts?.map(c => c.value), [""]);
+    await form.waitFor({ state: "hidden" });
   } finally { await page.close(); }
 });

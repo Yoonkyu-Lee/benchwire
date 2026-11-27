@@ -423,3 +423,80 @@ test("실물 재시도와 모델 재저장은 멱등이며 고정한 판본과 �
     [[model.name, "1"], [model.name, "2"]]);
   assert.equal(library.inventory.filter(i => i.instanceId === item.instanceId).length, 1);
 });
+
+test("지원 모드 집합은 로드·모델 저장·개인 검증 저장에서 같은 규격 순서와 출처를 갖는다", async t => {
+  const files = workspace(t);
+  const app = await files.open();
+  const lib = await (await app.get("/api/library")).json() as LibraryDocument;
+  const source = JSON.parse(readFileSync("fixtures/data/usb-endpoint@1.json", "utf8"));
+  const model = structuredClone(lib.models.find(m => m.modelId === "network-host")!);
+  model.modelId = "mode-set-copy";
+  const port = model.ports[0]!;
+  port.interfaces.push(...source.ports[0].interfaces);
+  model.sources.push(...source.sources);
+  const [ethernet, usb, usb4] = port.interfaces;
+  const samples = [
+    [ethernet!.params.baseTModes!, "2.5GBASE-T,1000BASE-T", "1000BASE-T,2.5GBASE-T"],
+    [usb!.params.modes!, "Gen 2x1, High Speed", "High Speed,Gen 2x1"],
+    [usb4!.params.modes!, "Gen 3x2,Gen 2x2", "Gen 2x2,Gen 3x2"],
+    [usb4!.params.usb3Modes!, "Gen 2x2, Gen 1x1", "Gen 1x1,Gen 2x2"],
+  ] as const;
+  for (const [fact, input] of samples) fact.value = input;
+  const base = samples[0][0];
+  base.conflicts = [{ value: samples[0][2], sources: ["endpoint"], confidence: "official" }];
+  const instance = { instanceId: "unit", modelId: model.modelId, revision: "1" };
+  const key = model.modelId + "@1";
+  const scene = { sceneId: "mode-set-test", sources: source.sources, items: [instance], connections: [], workloads: [], scenarios: [],
+    personal: [{ instanceId: instance.instanceId, ownerKind: "interface", ownerId: "lan", domain: "network", field: "baseTModes",
+      claim: { value: "5GBASE-T,100BASE-TX", confidence: "user_verified", sources: ["endpoint"] } }] };
+  const loaded = loadSceneDocuments(scene, { connectors: lib.connectors, models: new Map([[key, model]]) }, plugins);
+  const rows = loaded.claims.filter(c => ["baseTModes", "modes", "usb3Modes"].includes(c.field));
+  assert.deepEqual(rows.map(c => c.value), [...samples.map(s => s[2]), "100BASE-TX,5GBASE-T"]);
+  const path = "/api/models/" + model.modelId + "/1";
+  const extra = structuredClone(model);
+  Object.assign(extra.ports[0]!.interfaces[0]!.params, { constructor: base });
+  const unexpectedField = await app.put(path, extra);
+  assert.equal(unexpectedField.status, 422);
+  assert.equal((await unexpectedField.json() as { path: string }).path, "ports.0.interfaces.0.params");
+  const invalid = structuredClone(model);
+  invalid.ports[0]!.interfaces[0]!.params.baseTModes!.conflicts![0]!.confidence = "user_verified";
+  const rejected = await app.put(path, invalid);
+  assert.equal(rejected.status, 422);
+  assert.match((await rejected.json() as { path: string }).path, /baseTModes\.conflicts\.0\.confidence/);
+  assert.equal((await app.put(path, model)).status, 201);
+  const saved = JSON.parse(readFileSync(join(files.dataDir, "models", "model-" + key + ".json"), "utf8")).ports[0].interfaces;
+  assert.deepEqual([saved[0].params.baseTModes.value, saved[1].params.modes.value, saved[2].params.modes.value,
+    saved[2].params.usb3Modes.value], samples.map(s => s[2]));
+  assert.deepEqual(saved[0].params.baseTModes.sources, ["network-host","endpoint"]);
+  assert.equal(saved[0].params.baseTModes.conflicts, undefined);
+  delete base.conflicts;
+  base.sources.push("endpoint");
+  for (const [fact,, canonical] of samples) fact.value = canonical;
+  assert.equal((await app.put(path, model)).status, 204);
+  assert.equal((await app.put("/api/scenes/" + scene.sceneId, scene)).status, 201);
+  const savedScene = await (await app.get("/api/scenes/" + scene.sceneId)).json() as SceneDocument;
+  assert.equal(savedScene.personal![0]!.claim.value, "100BASE-TX,5GBASE-T");
+});
+
+test("목록 밖 DP 판본은 로더와 저장 API에서 필드 위치와 허용 판본을 한국어로 알린다", async t => {
+  const app = await workspace(t).open();
+  const lib = await (await app.get("/api/library")).json() as LibraryDocument;
+  const model = structuredClone(lib.models.find(m => m.modelId === "network-host")!);
+  model.modelId = "bad-dp-version";
+  const source = JSON.parse(readFileSync("fixtures/display/video-source@1.json", "utf8"));
+  model.sources.push(...source.sources);
+  const iface = source.ports[0].interfaces[0];
+  iface.params.version.value = "1.3";
+  model.ports[0]!.interfaces = [iface];
+  const item = { instanceId: "dp", modelId: model.modelId, revision: "1" };
+  const field = "ports.0.interfaces.0.params.version.value";
+  const reason = /허용.*1\.2.*1\.4.*2\.0.*2\.1/;
+  assert.throws(() => loadSceneDocuments({ sceneId: "dp", sources: [], items: [item], connections: [], workloads: [], scenarios: [] },
+    { connectors: lib.connectors, models: new Map([[model.modelId + "@1", model]]) }, plugins),
+    (error: Error) => error.message.includes(field) && reason.test(error.message));
+  const response = await app.put("/api/models/" + model.modelId + "/1", model);
+  assert.equal(response.status, 422);
+  const body = await response.json() as { path: string; message: string };
+  assert.equal(body.path, field);
+  assert.match(body.message, reason);
+});

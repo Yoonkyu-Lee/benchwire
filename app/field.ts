@@ -1,6 +1,6 @@
 // 스키마의 한 필드를 표시하고 미선언·미확인·명시값을 구별해 읽는다.
 import { z } from "zod";
-import type { InputSchema } from "../engine/contract.ts";
+import { canonicalModeSet, type InputSchema } from "../engine/contract.ts";
 
 export type JSONSchema = z.core.JSONSchema.JSONSchema;
 type Value = string | number | boolean | null;
@@ -82,19 +82,33 @@ export function claimInput(form: HTMLElement, key: string, property: JSONSchema 
   const unit = fieldUnit(property) || initial?.unit || "";
   const options = known.map(schema => schema.enum ?? (schema.const !== undefined ? [schema.const] : schema.type === "boolean" ? [true, false] : undefined));
   const choices = options.every(choice => choice !== undefined) ? options.flatMap(choice => choice!) : undefined;
+  let invalidMessage: (() => string) | undefined;
   let read: () => Value;
   let control: HTMLSelectElement | HTMLInputElement;
   if (choices?.length) {
     const select = document.createElement("select");
-    select.append(...choices.map(choice => new Option(choice === true ? "예" : choice === false ? "아니요" : String(choice))));
+    const order = property.modeOrder;
+    select.append(...choices.map(choice => choice === "" && Array.isArray(order) ? new Option("지원 모드 없음", "")
+      : new Option(choice === true ? "예" : choice === false ? "아니요" : String(choice))));
+    const offset = Number(verified);
     if (verified) {
-      const blank = new Option("확인한 값 선택", "", true, true);
+      const blank = new Option("확인한 값 선택", "");
       blank.disabled = true;
       select.prepend(blank);
-      select.selectedIndex = choices.indexOf(initial?.value ?? null) + 1;
-    } else select.selectedIndex = Math.max(0, choices.indexOf(initial?.value ?? null));
+    }
+    const value = typeof initial?.value === "string" && Array.isArray(order)
+      ? canonicalModeSet(initial.value, order) ?? initial.value : initial?.value;
+    const index = choices.indexOf(value ?? null);
+    let invalid: HTMLOptionElement | undefined;
+    if (value != null && index < 0) {
+      invalid = new Option(String(value), String(value));
+      select.add(invalid);
+      invalid.selected = true;
+      const allowed = Array.isArray(order) ? order : choices;
+      invalidMessage = () => invalid?.selected ? "목록에 없는 값 “" + value + "”. 허용값은 " + allowed.join(", ") + "입니다." : "";
+    } else select.selectedIndex = index < 0 ? 0 : index + offset;
     control = select;
-    read = () => choices[select.selectedIndex - Number(verified)] ?? null;
+    read = () => invalid?.selected ? value! : choices[select.selectedIndex - offset] ?? null;
   } else {
     const input = document.createElement("input");
     const numeric = known.every(schema => schema.type === "number" || schema.type === "integer" || typeof schema.const === "number");
@@ -117,8 +131,18 @@ export function claimInput(form: HTMLElement, key: string, property: JSONSchema 
   if (canBeUnknown) mode.append(new Option("미확인", "unknown"));
   if (!required) mode.append(new Option("미지정", "omit"));
   mode.value = initial === undefined && !required ? "omit" : canBeUnknown && initial?.value === null ? "unknown" : "value";
-  control.disabled = mode.value !== "value";
-  mode.addEventListener("change", () => { control.disabled = mode.value !== "value"; });
+  function updateMode() {
+    control.disabled = mode.value !== "value";
+    if (!invalidMessage) return;
+    const message = control.disabled ? "" : invalidMessage();
+    control.setCustomValidity(message);
+    control.setAttribute("aria-invalid", String(Boolean(message)));
+    const error = row.querySelector(".scenario-error");
+    if (error) error.textContent = message;
+  }
+  updateMode();
+  mode.addEventListener("change", updateMode);
+  if (invalidMessage) control.addEventListener("change", updateMode);
   if (canBeUnknown || !required) {
     row.classList.add("scenario-request");
     row.insertBefore(mode, row.querySelector(".scenario-error"));

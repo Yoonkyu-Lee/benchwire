@@ -10,6 +10,18 @@ export function modeSets(names:readonly string[]) {
   return sets;
 }
 
+export function parseModes(value: string): string[] {
+  return value.trim() ? value.split(",").map(member => member.trim()) : [];
+}
+
+// 허용하지 않는 표기는 원래 필드의 검증 오류로 남긴다.
+export function canonicalModeSet(value: string, order: readonly string[]): string | undefined {
+  const members = parseModes(value);
+  const selected = new Set(members);
+  if (selected.size !== members.length || members.some(member => !order.includes(member))) return undefined;
+  return order.filter(member => selected.has(member)).join(",");
+}
+
 export type Verdict = "ok" | "conditional" | "impossible" | "unknown";
 export type Direction = "forward" | "reverse";
 export interface Trace { rule: string; inputs: number[]; specs: string[] }

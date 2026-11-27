@@ -1,5 +1,6 @@
 // 고정한 모델 판본을 실물별로 펼치고 저장 ID를 행 번호로 바꾼다. 입력 오류는 파일과 필드를 가리킨다.
 import { connectionPorts, MAX_GRID_WORLDS } from "../engine/scene.ts";
+import { parseModelDocument, personalModeClaim } from "./mode-sets.ts";
 import { z } from "zod";
 import type { Scene, Claim, DomainPlugin, InputSchema, MeasurementContext } from "../engine/contract.ts";
 import { connectorsFile, modelFile, sceneFile, parseDocument, scenarioName, type Fact } from "./files.ts";
@@ -267,7 +268,7 @@ export function loadSceneDocuments(document: unknown, library: { connectors: unk
     let pinned = models.get(key);
     if (!pinned) {
       if (!library.models.has(key)) fail(instanceAt + ".revision", "모델 판본을 찾을 수 없습니다: " + modelPath);
-      const model = parseDocument(modelFile, library.models.get(key), modelPath);
+      const model = parseModelDocument(library.models.get(key), modelPath, plugins);
       if (model.modelId !== modelId || model.revision !== revision) fail(instanceAt + ".revision", "요청과 파일 판본이 다릅니다: " + modelPath);
       const { kind, name, brand, category } = model;
       pinned = { model, row: scene.models.push({ id: modelId, revision, kind, name, brand, category }) - 1, citations: sources(model.sources, modelPath + "#") };
@@ -375,6 +376,7 @@ export function loadSceneDocuments(document: unknown, library: { connectors: unk
     if (placed.has(instanceId)) fail(at, "중복 배치: " + instanceId);
     placed.add(instanceId);
   });
+  for (const row of saved.personal) row.claim = personalModeClaim(row, saved.items, key => models.get(key)?.model, plugins);
   readDistinct(saved.personal,(p, i) => {
     const at = file + "#personal." + i;
     const local = ref(instances, p.instanceId, at + ".instanceId");

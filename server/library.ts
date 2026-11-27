@@ -6,7 +6,8 @@ import { dirname, join } from "node:path";
 import { isDeepStrictEqual } from "node:util";
 import { z } from "zod";
 import { plugins } from "../domains/registry.ts";
-import { connectorsFile, modelFile, parseDocument, sceneFile, type Fact } from "../scene/files.ts";
+import { parseModelDocument, personalModeClaim } from "../scene/mode-sets.ts";
+import { canonicalFact, connectorsFile, modelFile, parseDocument, sceneFile, type Fact } from "../scene/files.ts";
 import { loadSceneDocuments } from "../scene/load.ts";
 
 export const sceneIdPattern = /^[a-z0-9_-]{1,80}$/;
@@ -117,38 +118,23 @@ function mergeRow<T>(rows: Map<string, T>, key: string, row: T, file: string, la
 }
 
 // 예전 영상 예제의 형태 ID는 사용자 문서 입구에서 공용 ID로 읽는다.
-function connectorId(value: Fact["value"]) {
-  return value === "usb-c-plug" ? "c-plug" : value === "usb-c-receptacle" ? "c-receptacle" : value;
-}
-
 function canonicalConnector(fact: Fact): Fact {
-  const value = connectorId(fact.value);
-  if (value === fact.value && !fact.conflicts?.some(c => connectorId(c.value) !== c.value)) return fact;
-  const { conflicts: alternatives, ...base } = fact;
-  const current = { ...base, value };
-  const conflicts: NonNullable<Fact["conflicts"]> = [];
-  for (const candidate of alternatives ?? []) {
-    const value = connectorId(candidate.value)!;
-    const same = current.value === value ? current : conflicts.find(row => row.value === value);
-    if (same) same.sources = [...new Set([...same.sources, ...candidate.sources])];
-    else conflicts.push({ ...candidate, value });
-  }
-  return conflicts.length ? { ...current, conflicts } : current;
+  return canonicalFact(fact, value => value === "usb-c-plug" ? "c-plug" : value === "usb-c-receptacle" ? "c-receptacle" : value);
 }
 
 function canonicalModel(model: z.output<typeof modelFile>) {
   return { ...model, ports: model.ports.map(port => ({ ...port, connector: canonicalConnector(port.connector) })) };
 }
 
-function canonicalScene(body: unknown) {
+function canonicalScene(body: unknown, models: ReadonlyMap<string, z.output<typeof modelFile>>) {
   const personal = (body as z.input<typeof sceneFile> | null)?.personal;
-  if (!Array.isArray(personal) || !personal.some(row => row?.ownerKind === "port" && row.field === "connector")) return body;
+  if (!Array.isArray(personal) || !personal.some(row => row?.ownerKind === "interface" || row?.ownerKind === "port" && row.field === "connector")) return body;
   const parsed = sceneFile.safeParse(body);
   if (!parsed.success) return body;
   let changed = false;
   const updated = parsed.data.personal.map(row => {
-    if (row.ownerKind !== "port" || row.field !== "connector") return row;
-    const claim = canonicalConnector(row.claim);
+    const claim = row.ownerKind === "port" && row.field === "connector" ? canonicalConnector(row.claim)
+      : personalModeClaim(row, parsed.data.items, key => models.get(key), plugins);
     if (claim === row.claim) return row;
     changed = true;
     return { ...row, claim };
@@ -171,7 +157,7 @@ export function openLibrary(root: string, dataDir: string) {
   for (const dir of [...fixtureDirs, catalogDir, modelsDir]) for (const name of filesIn(dir)) {
     if (!name.includes("@") || !name.endsWith(".json") || dir === modelsDir && !name.startsWith("model-")) continue;
     const file = join(dir, name);
-    const parsed = parseDocument(modelFile, JSON.parse(readFileSync(file, "utf8")), file);
+    const parsed = parseModelDocument(JSON.parse(readFileSync(file, "utf8")), file, plugins);
     const model = dir === modelsDir ? canonicalModel(parsed) : parsed;
     const key = model.modelId + "@" + model.revision;
     if (name !== (dir === modelsDir ? "model-" : "") + key + ".json") throw new Error(`${file} — 모델 판본 이름이 ${key}와 다릅니다`);
@@ -204,9 +190,9 @@ export function openLibrary(root: string, dataDir: string) {
     if (example) return example.saved;
     const text = readOptional(scenePath(id));
     if (text === undefined) return undefined;
-    if (!/usb-c-(?:plug|receptacle)/u.test(text)) return snapshot(text);
+    if (!text.includes('"personal"')) return snapshot(text);
     const body: unknown = JSON.parse(text);
-    const compatible = canonicalScene(body);
+    const compatible = canonicalScene(body, models);
     return snapshot(compatible === body ? text : JSON.stringify(compatible, null, 2) + "\n");
   }
 
@@ -244,7 +230,7 @@ export function openLibrary(root: string, dataDir: string) {
       if (before && ifMatch === undefined) throw new LibraryError(428, "If-Match", "현재 장면의 ETag가 필요합니다");
       if (ifMatch !== undefined && before?.etag !== ifMatch) throw new LibraryError(412, "If-Match", "장면이 바뀌었습니다. 다시 열어 주세요");
 
-      const compatible = canonicalScene(body);
+      const compatible = canonicalScene(body, models);
       const scene = validate(() => loadSceneDocuments(compatible, documents, plugins));
       if (scene.id !== id) throw new LibraryError(422, "sceneId", "URL과 장면 ID가 다릅니다");
       const saved = compatible as z.input<typeof sceneFile>;
@@ -259,7 +245,7 @@ export function openLibrary(root: string, dataDir: string) {
       return { id: target, created: exampleCopy || before === undefined, ...stored };
     },
     saveModel(id: string, revision: string, body: unknown) {
-      const model = validate(() => canonicalModel(parseDocument(modelFile, body, "model.json")));
+      const model = validate(() => canonicalModel(parseModelDocument(body, "model.json", plugins)));
       if (model.modelId !== id) throw new LibraryError(422, "modelId", "URL과 모델 ID가 다릅니다");
       if (model.revision !== revision) throw new LibraryError(422, "revision", "URL과 판본이 다릅니다");
       const key = model.modelId + "@" + model.revision;
@@ -273,7 +259,7 @@ export function openLibrary(root: string, dataDir: string) {
       try { writeAtomic(file, text, true); }
       catch (error) {
         if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
-        sameRevision(canonicalModel(parseDocument(modelFile, JSON.parse(readFileSync(file, "utf8")), file)), model);
+        sameRevision(canonicalModel(parseModelDocument(JSON.parse(readFileSync(file, "utf8")), file, plugins)), model);
         models.set(key, model);
         return false;
       }
