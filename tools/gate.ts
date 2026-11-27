@@ -13,6 +13,8 @@ const BINARY = /\.(png|jpe?g|gif|ico|webp|woff2?)$/i;
 const GRAB_BAGS = new Set(["common", "utils", "util", "helpers", "helper", "shared", "misc"]);
 // 플러그인이 엔진에서 읽는 유일한 파일(SPEC 5.2, T10).
 const CONTRACT = "engine/contract.ts";
+// 플러그인도 엔진과 함께 브라우저에서 돈다. 가져올 수 있는 패키지는 이 목록뿐이다.
+const DOMAIN_PACKAGES = new Set(["zod"]);
 const EXCUSE = /\b(TODO|FIXME|HACK|XXX|for now|workaround)\b|일단|임시로|나중에/i;
 // 키 모양. 이 파일이 스스로 걸리지 않게 나눠 쓴다.
 const SECRET = new RegExp("sk-" + "ant-[A-Za-z0-9_-]{16,}");
@@ -47,6 +49,8 @@ export function checkImports(path: string, text: string): Finding[] {
       out.push({ level: "FAIL", path, line, message: `엔진이 '${target}'를 가져온다. 엔진은 엔진 안의 파일만 읽는다` });
     if (domain !== undefined && spec.startsWith(".") && target !== CONTRACT && !target.startsWith(`domains/${domain}/`))
       out.push({ level: "FAIL", path, line, message: `영역 '${domain}'이 '${target}'를 가져온다. 플러그인은 ${CONTRACT}와 자기 폴더만 읽는다` });
+    if (domain !== undefined && !isTest && !spec.startsWith(".") && !DOMAIN_PACKAGES.has(spec))
+      out.push({ level: "FAIL", path, line, message: `영역 '${domain}'이 '${spec}'를 가져온다. 플러그인은 브라우저에서도 돌므로 ${[...DOMAIN_PACKAGES].join(", ")}만 가져온다` });
   }
   return out;
 }

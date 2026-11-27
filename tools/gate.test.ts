@@ -34,6 +34,13 @@ test("영역 플러그인은 엔진 계약(engine/contract.ts)과 자기 폴더�
   assert.equal(fails(checkImports("domains/power/rules.ts", 'import { usb } from "../data/rules.ts";')), 1);
 });
 
+test("영역 플러그인은 브라우저에서도 돌므로 허용한 패키지만 가져온다: node: 모듈 · 그 밖의 패키지 금지 (시험 파일은 예외)", () => {
+  assert.equal(fails(checkImports("domains/power/rules.ts", 'import { readFileSync } from "node:fs";')), 1);
+  assert.equal(fails(checkImports("domains/power/rules.ts", 'import _ from "lodash";')), 1);
+  assert.equal(fails(checkImports("domains/power/rules.ts", 'import { z } from "zod";')), 0);
+  assert.equal(fails(checkImports("domains/power/rules.test.ts", 'import { test } from "node:test";')), 0);
+});
+
 test("카탈로그의 기기 이름이 엔진 · 플러그인 코드에 나오면 막는다", () => {
   const names = ["Contoso Dock 9"];
   assert.equal(fails(checkDeviceNames("domains/data/rules.ts", 'if (model === "contoso dock 9") {}', names)), 1);
