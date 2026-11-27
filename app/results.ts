@@ -1,31 +1,26 @@
 // 엔진의 판정·경로·자원 표를 화면에서 선택할 행과 방향별 배선으로 바꾼다.
+import { domainNames, workloadKindName } from "../domains/registry.ts";
 import type { Direction, Interval, Scene, Verdict } from "../engine/contract.ts";
 import type { Results, Run } from "../engine/results.ts";
 import type { Layer } from "./layers.ts";
 
 export const verdictText = { ok: "✅ 성립", conditional: "⚠️ 조건부", impossible: "❌ 불가", unknown: "❓ 미확인" };
 const verdictIcon = { ok: "✅", conditional: "⚠️", impossible: "❌", unknown: "❓" };
-const domains: Record<Layer, string> = { display: "영상", data: "데이터", storage: "저장", network: "네트워크", power: "전력" };
-const workloadKinds = new Map([
-  ["storage:copy", "저장 복사"], ["power:charge", "충전"], ["network:power", "PoE 전력"], ["network:traffic", "이더넷 전송"],
-  ["display:video", "영상 출력"], ["data:bulk", "데이터 전송"],
-]);
 const MAX_WIRE_WIDTH = 5;
 
 export interface WireMark {
-  kind: "negotiation" | "flow"; direction: Direction | null; layer: Layer | "unclassified"; verdict: Verdict | null;
+  kind: "negotiation" | "flow"; direction: Direction | null; layer: Layer; verdict: Verdict | null;
   text: string; title: string; unit: string; pool?: string; width?: number; dashed?: boolean; workload?: string;
 }
 export type Selection = { kind: "connection" | "workload"; id: string } | { kind: "resource"; row: number };
 type Outcome = Results["outcomes"][number];
 
-export function domainName(domain: string) {
-  return Object.hasOwn(domains, domain) ? domains[domain as Layer] : domain || "물리 연결";
+function domainName(domain: string) {
+  return domainNames.get(domain) ?? (domain || "물리 연결");
 }
 
 function layerFor(domain: string, unit: string): WireMark["layer"] {
-  if (domain === "network" && unit === "W") return "power";
-  return Object.hasOwn(domains, domain) ? domain as Layer : "unclassified";
+  return unit === "W" ? "power" : domain || "unclassified";
 }
 
 const decimal = new Intl.NumberFormat("ko-KR", { maximumFractionDigits: 3, useGrouping: false });
@@ -114,7 +109,7 @@ function workloadView(scene: Scene, result: Results, row: number, o: Outcome, ru
   const path = run === "solo" ? o.soloPath ?? o.path : o.path;
   const steps = result.steps.filter(s => s.path === path && s.kind === "connection").sort((a, b) => a.order - b.order);
   const carriers = new Set(steps.flatMap(s => s.carrier && s.carrier.domain !== o.domain ? [domainName(s.carrier.domain)] : []));
-  const name = workloadKinds.get(o.domain + ":" + workload.kind) ?? `${domainName(o.domain)} ${workload.kind}`;
+  const name = workloadKindName(o.domain, workload.kind);
   const metric = result.metrics.find(m => m.outcome === row && m.kind === run);
   const qualifiers = [metric?.basis === "assumed" ? "가정" : "", metric?.range === "conservative" ? "보수적 경계" : ""].filter(Boolean);
   const range = metric ? interval(metric, metric.unit) : "미확인";

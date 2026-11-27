@@ -302,6 +302,101 @@ test("포인터와 키보드로 연결하고 취소하거나 거절한 포트는
   } finally { await page.close(); }
 });
 
+test("Mbps·W 작업, 멤버, 우선순위, 미확인 요청을 고쳐 문서 왕복 후 다시 연다", async () => {
+  const { page, errors } = await newPage("/testbed.html?example");
+  try {
+    const panel = page.locator(".scenario-panel");
+    await panel.locator("summary").click();
+    const selector = panel.getByLabel("현재 시나리오", { exact: true });
+    const submitScenario = panel.getByRole("button", { name: "시나리오 적용", exact: true });
+    const name = panel.getByLabel("시나리오 이름", { exact: true });
+    await panel.getByRole("button", { name: "새 시나리오", exact: true }).click();
+    await name.fill("작업 시험");
+    await panel.getByRole("button", { name: "시나리오 만들기", exact: true }).click();
+    assert.equal(await selector.inputValue(), "작업 시험");
+    async function newWorkload(preset: string, label: string, value: string) {
+      await panel.getByRole("button", { name: "새 작업", exact: true }).click();
+      await panel.getByLabel("작업 프리셋", { exact: true }).selectOption({ label: preset });
+      await panel.getByLabel("출발 실물", { exact: true }).selectOption("pse");
+      await panel.getByLabel("출발 포트", { exact: true }).selectOption({ label: "pse" });
+      await panel.getByLabel("도착 실물", { exact: true }).selectOption("pd");
+      await panel.getByLabel("도착 포트", { exact: true }).selectOption({ label: "pd" });
+      await panel.getByLabel(label, { exact: true }).fill(value);
+      await panel.getByRole("button", { name: "작업 만들기", exact: true }).click();
+    }
+    await newWorkload("이더넷 전송", "요청 처리량 (Mbps)", "525");
+    await newWorkload("PoE 전력 공급", "요청 전력 (W)", "8");
+    assert.match((await page.locator('.wire-result[data-workload="power-1"]').textContent())!, /PoE 전력 공급/);
+
+    const chooseWorkload = panel.getByLabel("작업", { exact: true });
+    const submitWorkload = panel.getByRole("button", { name: "작업 적용", exact: true });
+    await chooseWorkload.selectOption("traffic-1");
+    const throughput = panel.getByLabel("요청 처리량 (Mbps)", { exact: true });
+    await throughput.fill("-1");
+    const invalidRequest = panel.locator('[data-path="workloads.2.request.throughput"]');
+    await submitWorkload.click();
+    assert.match((await invalidRequest.textContent())!, /number|0/);
+    assert.equal(await page.evaluate(() => window.benchwire.changes()), 3);
+    assert.equal(await page.evaluate(() => window.benchwire.read().workloads[2]!.request.throughput!.value), 525);
+    await throughput.fill("625");
+    await submitWorkload.click();
+    assert(await invalidRequest.isHidden());
+
+    await chooseWorkload.selectOption("power-1");
+    const mode = panel.getByLabel("요청 전력 (W) 상태", { exact: true });
+    await mode.selectOption("unknown");
+    await submitWorkload.click();
+    assert.equal(await mode.inputValue(), "unknown");
+
+    const traffic = panel.getByRole("checkbox", { name: "이더넷 전송 · traffic-1", exact: true });
+    const power = panel.getByRole("checkbox", { name: "PoE 전력 공급 · power-1", exact: true });
+    const rank = panel.getByLabel("traffic-1 우선순위", { exact: true });
+    await rank.fill("1.25");
+    await submitScenario.click();
+    const invalidPriority = rank.locator("..").locator(".scenario-error");
+    assert.match((await invalidPriority.textContent())!, /단위 없는 정수/);
+    assert.equal(await page.evaluate(() => window.benchwire.changes()), 5);
+    await rank.fill("2");
+    await power.uncheck();
+    await name.fill("이더넷 우선");
+    await submitScenario.click();
+    assert.equal(await selector.inputValue(), "이더넷 우선");
+    assert(await traffic.isChecked());
+    assert(!(await power.isChecked()));
+
+    await selector.selectOption("poe-and-ethernet");
+    assert(!(await traffic.isChecked()));
+    assert.equal(await page.evaluate(() => window.benchwire.changes()), 6);
+    const saved = await page.evaluate(() => JSON.stringify(window.benchwire.read()));
+    const parsed = JSON.parse(saved) as ReturnType<Window["benchwire"]["read"]>;
+    const [ethernet, poe] = parsed.workloads.slice(-2);
+    assert.deepEqual(ethernet?.from, { instanceId: "pse", id: "supply" });
+    assert.deepEqual(ethernet?.to, { instanceId: "pd", id: "load" });
+    assert.equal(ethernet?.request.throughput?.value, 625);
+    const watts = poe?.request.watts;
+    assert.equal(watts?.value, null);
+    assert.equal(watts.confidence, "unknown");
+    const members = parsed.scenarios[1]!.members;
+    assert.equal(members.length, 1);
+    assert.deepEqual(members[0], { workload: "traffic-1", priority: { value: 2, unit: "",
+      confidence: "inferred", sources: watts.sources } });
+    assert.equal(parsed.sources.find(source => source.id === watts.sources[0])?.locator, "canvas:scenario");
+    await page.evaluate(json => window.benchwire.open(JSON.parse(json)), saved);
+    await panel.locator("summary").click();
+    await selector.selectOption("이더넷 우선");
+    assert(await traffic.isChecked());
+    assert(!(await power.isChecked()));
+    assert.equal(await rank.inputValue(), "2");
+    await chooseWorkload.selectOption("power-1");
+    assert.equal(await mode.inputValue(), "unknown");
+    await chooseWorkload.selectOption("traffic-1");
+    assert.equal(await throughput.inputValue(), "625");
+    assert.equal(await page.evaluate(() => JSON.stringify(window.benchwire.read())), saved);
+    await page.screenshot({ path: "work/m3-scenario.png" });
+    assert.deepEqual(errors, []);
+  } finally { await page.close(); }
+});
+
 type Motion = "drag" | "pan" | "zoom";
 const duration = 2000;
 

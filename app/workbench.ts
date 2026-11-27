@@ -9,6 +9,7 @@ import { INVENTORY_DRAG, mountInventory } from "./inventory.ts";
 import { mountLayers } from "./layers.ts";
 import { CARD_WIDTH } from "./layout.ts";
 import { resultView, type ResultView } from "./results.ts";
+import { mountScenario } from "./scenario.ts";
 
 export function mountWorkbench(root: HTMLElement, initial: SceneDocument, library: Library, options: {
   title?: string;
@@ -35,7 +36,11 @@ export function mountWorkbench(root: HTMLElement, initial: SceneDocument, librar
       <div class="layers" role="group" aria-label="영역 레이어"></div>
     </header>
     <div class="workspace">
-      <aside class="inventory" aria-label="인벤토리"><h2>인벤토리</h2><div class="inventory-content"></div></aside>
+      <aside class="inventory" aria-label="인벤토리">
+        <h2>인벤토리</h2>
+        <details class="scenario-panel" hidden><summary>시나리오 · 작업</summary><div></div></details>
+        <div class="inventory-content"></div>
+      </aside>
       <main class="stage" aria-label="장면 작업 공간">
         <div class="viewport"></div>
         <div class="view-controls" role="group" aria-label="캔버스 보기">
@@ -56,6 +61,11 @@ export function mountWorkbench(root: HTMLElement, initial: SceneDocument, librar
   const status = root.querySelector<HTMLElement>(".status")!;
   const error = root.querySelector<HTMLElement>(".assessment-error")!;
   const setStatus = (text: string) => { status.textContent = text; };
+  const scenarioPanel = root.querySelector<HTMLDetailsElement>(".scenario-panel")!;
+  const renderScenario = mountScenario(scenarioPanel.querySelector("div")!, documents, intent => {
+    if (intent.kind === "select-scenario") setScenario(intent.scenarioId);
+    else editScenario(intent.document, intent.scenarioId);
+  });
   const panel = mountEvidence(root.querySelector<HTMLElement>(".results-panel")!, {
     run(next) { run = next; redrawResults(); },
     variant(index) { variant = index; redrawResults(); },
@@ -98,6 +108,10 @@ export function mountWorkbench(root: HTMLElement, initial: SceneDocument, librar
     count.textContent = `실물 ${scene.items.length} · 연결 ${scene.connections.length}`;
     canvas.render(scene, view?.wires);
     inventory(scene, cable?.instanceId);
+    if (assessment) {
+      scenarioPanel.hidden = false;
+      renderScenario({ document: scene, scenarioId: readScenario() });
+    }
   }
 
   function redrawResults(preserveSelection = true) {
@@ -107,8 +121,8 @@ export function mountWorkbench(root: HTMLElement, initial: SceneDocument, librar
     panel.render(view, variants, variant, preserveSelection);
   }
 
-  function load(next: SceneDocument) {
-    const loaded = assessDocument(next, documents, readScenario());
+  function load(next: SceneDocument, scenarioId = readScenario()) {
+    const loaded = assessDocument(next, documents, scenarioId);
     if ("error" in loaded) { error.textContent = loaded.error; return undefined; }
     error.textContent = "";
     return loaded;
@@ -175,23 +189,30 @@ export function mountWorkbench(root: HTMLElement, initial: SceneDocument, librar
     return assessment ? scenario === null ? null : assessment.scene.scenarios[scenario]!.id : options.scenarioId ?? null;
   }
 
+  function setScenario(id: string) {
+    const row = assessment?.scene.scenarios.findIndex(s => s.id === id);
+    if (row === undefined || row < 0) return false;
+    if (row !== scenario) {
+      scenario = row;
+      variant = 0;
+      redrawResults(false);
+      options.onSelectScenario?.(id);
+    }
+    return true;
+  }
+
+  function editScenario(next: SceneDocument, scenarioId = readScenario()) {
+    const loaded = load(next, scenarioId);
+    return loaded ? commit(next, { kind: "edit-scenario" }, loaded) : false;
+  }
+
   const loaded = load(initial);
   if (loaded) use(loaded);
   return {
     documents,
     readDocument: () => scene,
     readScenario,
-    setScenario(id: string) {
-      const row = assessment?.scene.scenarios.findIndex(s => s.id === id);
-      if (row === undefined || row < 0) return false;
-      if (row !== scenario) {
-        scenario = row;
-        variant = 0;
-        redrawResults(false);
-        options.onSelectScenario?.(id);
-      }
-      return true;
-    },
+    setScenario,
     replaceDocument(next: SceneDocument) {
       const loaded = load(next);
       if (!loaded) return false;
@@ -199,7 +220,7 @@ export function mountWorkbench(root: HTMLElement, initial: SceneDocument, librar
       use(loaded);
       return true;
     },
-    editScenario(next: SceneDocument) { return commit(next, { kind: "edit-scenario" }); },
+    editScenario,
   };
 }
 

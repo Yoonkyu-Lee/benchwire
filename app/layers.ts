@@ -1,33 +1,22 @@
-// 결과 표시와 독립인 영역 이름, 레이어 토글과 초기 배선 분류를 제공한다.
+// 등록한 영역에서 레이어 토글을 만들고 평가 전에는 양쪽 포트의 공통 영역을 그린다.
+import { domainNames } from "../domains/registry.ts";
 import type { Port } from "./document.ts";
 
-const labels = {
-  display: "영상", data: "데이터", storage: "저장", network: "네트워크", power: "전력",
-} as const;
-export type Layer = keyof typeof labels;
-const domains = Object.keys(labels) as Layer[];
-
-function portDomains(port: Port) {
-  const layers = new Set<string>();
-  for (const i of port.interfaces) {
-    if (i.domain === "network" && i.protocol?.startsWith("PoE")) layers.add("power");
-    else layers.add(i.domain);
-  }
-  return layers;
-}
+export type Layer = string;
 
 export function wireLayers(from: Port, to: Port): Layer[] {
-  const a = portDomains(from), b = portDomains(to);
-  return domains.filter(domain => a.has(domain) && b.has(domain));
+  const fromDomains = new Set(from.interfaces.map(iface => iface.domain));
+  const toDomains = new Set(to.interfaces.map(iface => iface.domain));
+  return [...fromDomains.intersection(toDomains)];
 }
 
 export function mountLayers(root: HTMLElement, change: (layer: Layer, visible: boolean) => void) {
-  for (const layer of domains) {
+  for (const [layer, name] of domainNames) {
     const button = document.createElement("button");
     button.type = "button";
     button.dataset.layerToggle = layer;
     button.setAttribute("aria-pressed", "true");
-    button.textContent = labels[layer];
+    button.textContent = name;
     button.addEventListener("click", () => {
       const visible = button.getAttribute("aria-pressed") === "false";
       button.setAttribute("aria-pressed", String(visible));
