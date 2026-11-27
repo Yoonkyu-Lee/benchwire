@@ -1,0 +1,20 @@
+{
+  "sceneId": "single-port",
+  "sources": [
+    {"id":"scene","title":"합성 장면과 전력 요청","locator":"fixture:power/scene","retrievedAt":"2026-11-26"}
+  ],
+  "items": [
+    {"instanceId":"supply","modelId":"supply","revision":"1"},
+    {"instanceId":"a","modelId":"receiver","revision":"1"},
+    {"instanceId":"wire-a","modelId":"cable-3a","revision":"1"}
+  ],
+  "connections": [
+    {"id":"a","from":{"instanceId":"supply","id":"a"},"to":{"instanceId":"a","id":"in"},"evidence":{"value":true,"confidence":"inferred","sources":["scene"]},"parts":[{"instanceId":"wire-a","entry":"first","exit":"second"}]}
+  ],
+  "workloads": [
+    {"id":"idle","domain":"power","kind":"charge","from":{"instanceId":"supply","id":"root"},"to":{"instanceId":"a","id":"end"},"request":{"requestedW":{"value":80,"unit":"W","confidence":"inferred","sources":["scene"]},"loadW":{"value":20,"unit":"W","confidence":"inferred","sources":["scene"]},"targetW":{"value":30,"unit":"W","confidence":"inferred","sources":["scene"]}}}
+  ],
+  "scenarios": [
+    {"id":"single","members":["idle"]}
+  ]
+}

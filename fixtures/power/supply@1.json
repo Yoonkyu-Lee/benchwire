@@ -1,0 +1,28 @@
+{
+  "modelId": "supply",
+  "revision": "1",
+  "kind": "device",
+  "brand": "합성",
+  "name": "supply",
+  "category": "시험",
+  "sources": [
+    {"id":"supply","title":"supply 합성 모델","locator":"fixture:power/supply","retrievedAt":"2026-11-26"},
+    {"id":"table","title":"출력 포트의 접속 조합별 정격","locator":"fixture:power/table","retrievedAt":"2026-11-26"}
+  ],
+  "nodes": [
+    {"id":"root","label":"root","kind":"junction"},
+    {"id":"out","label":"out","kind":"junction"}
+  ],
+  "ports": [
+    {"id":"a","label":"a","connector":{"value":"c-receptacle","confidence":"inferred","sources":["supply"]},"attachment":{"value":"out","confidence":"inferred","sources":["supply"]},"interfaces":[{"id":"a-power","domain":"power","protocol":"USB PD","role":"source","evidence":{"value":true,"confidence":"inferred","sources":["supply"]},"params":{"maxW":{"value":100,"unit":"W","confidence":"inferred","sources":["supply"]},"pdo20":{"value":5,"unit":"A","confidence":"inferred","sources":["supply"]}}}]},
+    {"id":"b","label":"b","connector":{"value":"c-receptacle","confidence":"inferred","sources":["supply"]},"attachment":{"value":"out","confidence":"inferred","sources":["supply"]},"interfaces":[{"id":"b-power","domain":"power","protocol":"USB PD","role":"source","evidence":{"value":true,"confidence":"inferred","sources":["supply"]},"params":{"maxW":{"value":100,"unit":"W","confidence":"inferred","sources":["supply"]},"pdo20":{"value":5,"unit":"A","confidence":"inferred","sources":["supply"]}}}]},
+    {"id":"c","label":"c","connector":{"value":"c-receptacle","confidence":"inferred","sources":["supply"]},"attachment":{"value":"out","confidence":"inferred","sources":["supply"]},"interfaces":[{"id":"c-power","domain":"power","protocol":"USB PD","role":"source","evidence":{"value":true,"confidence":"inferred","sources":["supply"]},"params":{"maxW":{"value":100,"unit":"W","confidence":"inferred","sources":["supply"]},"pdo20":{"value":5,"unit":"A","confidence":"inferred","sources":["supply"]}}}]}
+  ],
+  "edges": [
+    {"id":"feed","from":"root","to":"out","evidence":{"value":true,"confidence":"inferred","sources":["supply"]},"uses":[{"resource":"total","evidence":{"value":true,"confidence":"inferred","sources":["supply"]}}]}
+  ],
+  "resources": [
+    {"id":"total","kind":"power","domain":"power","unit":"W","capacity":{"value":100,"unit":"W","confidence":"inferred","sources":["supply"]},"policy":{"value":"max-min","confidence":"inferred","sources":["supply"]}}
+  ],
+  "attributes": {"power":{"budget:a+b+c:a":{"value":50,"unit":"W","confidence":"inferred","sources":["table"]},"budget:a+b+c:b":{"value":30,"unit":"W","confidence":"inferred","sources":["table"]},"budget:a+b+c:c":{"value":20,"unit":"W","confidence":"inferred","sources":["table"]},"budget:a:a":{"value":100,"unit":"W","confidence":"inferred","sources":["table"]}}}
+}

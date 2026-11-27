@@ -18,19 +18,6 @@ export const USB_PD_FIXED_SOURCE_LIMITS = [
 // 출처: USB Power Delivery r3.2 v1.2 (2026-08) §3.2.4·§3.2.5.3, 표 3.1·3.5 (신뢰도: official)
 export const USB_PD_POWER_LIMITS_W = { SPR: 100, EPR: 240 } as const;
 
-// Source가 광고하는 범위다. 2026-08 판본은 PPS 하한으로 5 V를 요구하며 3.3 V는 폐기된 값으로 표시한다. AVS 전압 상한은 제공되는 고정 PDO에 달려 있다.
-// 출처: USB Power Delivery r3.2 v1.2 (2026-08) 표 3.2·3.4·3.5·6.13·6.15·6.16, RDO 정의 p. 138 (신뢰도: official)
-export const USB_PD_ADJUSTABLE_SOURCE_RANGES = [
-  { mode: "SPR PPS", minVoltageV: 5, maxVoltageV: 11, voltageRequestStepMv: 20 },
-  { mode: "SPR PPS", minVoltageV: 5, maxVoltageV: 16, voltageRequestStepMv: 20 },
-  { mode: "SPR PPS", minVoltageV: 5, maxVoltageV: 21, voltageRequestStepMv: 20 },
-  { mode: "SPR AVS", minVoltageV: 9, maxVoltageV: 15, voltageRequestStepMv: 100 },
-  { mode: "SPR AVS", minVoltageV: 9, maxVoltageV: 20, voltageRequestStepMv: 100 },
-  { mode: "EPR AVS", minVoltageV: 15, maxVoltageV: 28, voltageRequestStepMv: 100 },
-  { mode: "EPR AVS", minVoltageV: 15, maxVoltageV: 36, voltageRequestStepMv: 100 },
-  { mode: "EPR AVS", minVoltageV: 15, maxVoltageV: 48, voltageRequestStepMv: 100 },
-] as const;
-
 // 출처: USB Type-C Cable and Connector Specification Release 2.5 §3.1.2 및 표 3-1 (신뢰도: official)
 export const USB_C_CABLE_CURRENT_RATINGS_A = [3, 5] as const;
 

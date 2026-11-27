@@ -1,0 +1,34 @@
+{
+  "sceneId": "three-ports",
+  "sources": [
+    {"id":"scene","title":"합성 장면과 전력 요청","locator":"fixture:power/scene","retrievedAt":"2026-11-26"}
+  ],
+  "items": [
+    {"instanceId":"supply","modelId":"supply","revision":"1"},
+    {"instanceId":"a","modelId":"receiver","revision":"1"},
+    {"instanceId":"wire-a","modelId":"cable-3a","revision":"1"},
+    {"instanceId":"b","modelId":"receiver","revision":"1"},
+    {"instanceId":"wire-b","modelId":"cable-3a","revision":"1"},
+    {"instanceId":"c","modelId":"receiver","revision":"1"},
+    {"instanceId":"wire-c","modelId":"cable-3a","revision":"1"}
+  ],
+  "connections": [
+    {"id":"a","from":{"instanceId":"supply","id":"a"},"to":{"instanceId":"a","id":"in"},"evidence":{"value":true,"confidence":"inferred","sources":["scene"]},"parts":[{"instanceId":"wire-a","entry":"first","exit":"second"}]},
+    {"id":"b","from":{"instanceId":"supply","id":"b"},"to":{"instanceId":"b","id":"in"},"evidence":{"value":true,"confidence":"inferred","sources":["scene"]},"parts":[{"instanceId":"wire-b","entry":"first","exit":"second"}]},
+    {"id":"c","from":{"instanceId":"supply","id":"c"},"to":{"instanceId":"c","id":"in"},"evidence":{"value":true,"confidence":"inferred","sources":["scene"]},"parts":[{"instanceId":"wire-c","entry":"first","exit":"second"}]}
+  ],
+  "workloads": [
+    {"id":"idle","domain":"power","kind":"charge","from":{"instanceId":"supply","id":"root"},"to":{"instanceId":"a","id":"end"},"request":{"requestedW":{"value":80,"unit":"W","confidence":"inferred","sources":["scene"]},"loadW":{"value":20,"unit":"W","confidence":"inferred","sources":["scene"]},"targetW":{"value":30,"unit":"W","confidence":"inferred","sources":["scene"]}}},
+    {"id":"normal","domain":"power","kind":"charge","from":{"instanceId":"supply","id":"root"},"to":{"instanceId":"a","id":"end"},"request":{"requestedW":{"value":80,"unit":"W","confidence":"inferred","sources":["scene"]},"loadW":{"value":45,"unit":"W","confidence":"inferred","sources":["scene"]},"targetW":{"value":30,"unit":"W","confidence":"inferred","sources":["scene"]}}},
+    {"id":"max","domain":"power","kind":"charge","from":{"instanceId":"supply","id":"root"},"to":{"instanceId":"a","id":"end"},"request":{"requestedW":{"value":80,"unit":"W","confidence":"inferred","sources":["scene"]},"loadW":{"value":70,"unit":"W","confidence":"inferred","sources":["scene"]},"targetW":{"value":30,"unit":"W","confidence":"inferred","sources":["scene"]}}},
+    {"id":"b","domain":"power","kind":"charge","from":{"instanceId":"supply","id":"root"},"to":{"instanceId":"b","id":"end"},"request":{"requestedW":{"value":30,"unit":"W","confidence":"inferred","sources":["scene"]},"loadW":{"value":0,"unit":"W","confidence":"inferred","sources":["scene"]}}},
+    {"id":"c","domain":"power","kind":"charge","from":{"instanceId":"supply","id":"root"},"to":{"instanceId":"c","id":"end"},"request":{"requestedW":{"value":20,"unit":"W","confidence":"inferred","sources":["scene"]},"loadW":{"value":0,"unit":"W","confidence":"inferred","sources":["scene"]}}}
+  ],
+  "scenarios": [
+    {"id":"idle","members":["idle","b","c"]},
+    {"id":"normal","members":["normal","b","c"]},
+    {"id":"max","members":["max","b","c"]},
+    {"id":"only-a","members":["max"]},
+    {"id":"same-port","members":["idle","normal","b","c"]}
+  ]
+}

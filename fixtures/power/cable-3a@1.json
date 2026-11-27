@@ -1,0 +1,24 @@
+{
+  "modelId": "cable-3a",
+  "revision": "1",
+  "kind": "cable",
+  "brand": "합성",
+  "name": "cable-3a",
+  "category": "시험",
+  "sources": [
+    {"id":"cable-3a","title":"cable-3a 합성 모델","locator":"fixture:power/cable-3a","retrievedAt":"2026-11-26"}
+  ],
+  "nodes": [
+    {"id":"first","label":"first","kind":"junction"},
+    {"id":"second","label":"second","kind":"junction"}
+  ],
+  "ports": [
+    {"id":"first","label":"first","connector":{"value":"c-plug","confidence":"inferred","sources":["cable-3a"]},"attachment":{"value":"first","confidence":"inferred","sources":["cable-3a"]},"interfaces":[{"id":"first-power","domain":"power","protocol":"USB-C cable","role":"cable","evidence":{"value":true,"confidence":"inferred","sources":["cable-3a"]},"params":{"currentA":{"value":3,"unit":"A","confidence":"inferred","sources":["cable-3a"]},"eMarked":{"value":false,"confidence":"inferred","sources":["cable-3a"]},"eprVoltage":{"value":0,"unit":"V","confidence":"inferred","sources":["cable-3a"]}}}]},
+    {"id":"second","label":"second","connector":{"value":"c-plug","confidence":"inferred","sources":["cable-3a"]},"attachment":{"value":"second","confidence":"inferred","sources":["cable-3a"]},"interfaces":[{"id":"second-power","domain":"power","protocol":"USB-C cable","role":"cable","evidence":{"value":true,"confidence":"inferred","sources":["cable-3a"]},"params":{"currentA":{"value":3,"unit":"A","confidence":"inferred","sources":["cable-3a"]},"eMarked":{"value":false,"confidence":"inferred","sources":["cable-3a"]},"eprVoltage":{"value":0,"unit":"V","confidence":"inferred","sources":["cable-3a"]}}}]}
+  ],
+  "edges": [
+    {"id":"forward","from":"first","to":"second","evidence":{"value":true,"confidence":"inferred","sources":["cable-3a"]},"uses":[]},
+    {"id":"reverse","from":"second","to":"first","evidence":{"value":true,"confidence":"inferred","sources":["cable-3a"]},"uses":[]}
+  ],
+  "resources": []
+}

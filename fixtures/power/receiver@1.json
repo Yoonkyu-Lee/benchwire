@@ -1,0 +1,19 @@
+{
+  "modelId": "receiver",
+  "revision": "1",
+  "kind": "device",
+  "brand": "합성",
+  "name": "receiver",
+  "category": "시험",
+  "sources": [
+    {"id":"receiver","title":"receiver 합성 모델","locator":"fixture:power/receiver","retrievedAt":"2026-11-26"}
+  ],
+  "nodes": [
+    {"id":"end","label":"end","kind":"junction"}
+  ],
+  "ports": [
+    {"id":"in","label":"in","connector":{"value":"c-receptacle","confidence":"inferred","sources":["receiver"]},"attachment":{"value":"end","confidence":"inferred","sources":["receiver"]},"interfaces":[{"id":"in-power","domain":"power","protocol":"USB PD","role":"sink","evidence":{"value":true,"confidence":"inferred","sources":["receiver"]},"params":{"maxW":{"value":80,"unit":"W","confidence":"inferred","sources":["receiver"]},"accepts20":{"value":true,"confidence":"inferred","sources":["receiver"]}}}]}
+  ],
+  "edges": [],
+  "resources": []
+}

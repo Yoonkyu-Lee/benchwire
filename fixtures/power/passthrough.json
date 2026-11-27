@@ -1,0 +1,25 @@
+{
+  "sceneId": "passthrough",
+  "sources": [
+    {"id":"scene","title":"합성 장면과 전력 요청","locator":"fixture:power/scene","retrievedAt":"2026-11-26"}
+  ],
+  "items": [
+    {"instanceId":"supply","modelId":"supply","revision":"1"},
+    {"instanceId":"relay","modelId":"relay","revision":"1"},
+    {"instanceId":"a","modelId":"receiver","revision":"1"},
+    {"instanceId":"up","modelId":"cable-3a","revision":"1"},
+    {"instanceId":"down","modelId":"cable-3a","revision":"1"}
+  ],
+  "connections": [
+    {"id":"up","from":{"instanceId":"supply","id":"a"},"to":{"instanceId":"relay","id":"in"},"evidence":{"value":true,"confidence":"inferred","sources":["scene"]},"parts":[{"instanceId":"up","entry":"first","exit":"second"}]},
+    {"id":"down","from":{"instanceId":"relay","id":"out"},"to":{"instanceId":"a","id":"in"},"evidence":{"value":true,"confidence":"inferred","sources":["scene"]},"parts":[{"instanceId":"down","entry":"first","exit":"second"}]}
+  ],
+  "workloads": [
+    {"id":"primary","domain":"power","kind":"charge","from":{"instanceId":"supply","id":"root"},"to":{"instanceId":"a","id":"end"},"request":{"requestedW":{"value":80,"unit":"W","confidence":"inferred","sources":["scene"]},"loadW":{"value":0,"unit":"W","confidence":"inferred","sources":["scene"]}}},
+    {"id":"secondary","domain":"power","kind":"charge","from":{"instanceId":"supply","id":"root"},"to":{"instanceId":"a","id":"end"},"request":{"requestedW":{"value":80,"unit":"W","confidence":"inferred","sources":["scene"]},"loadW":{"value":0,"unit":"W","confidence":"inferred","sources":["scene"]}}}
+  ],
+  "scenarios": [
+    {"id":"solo","members":["primary"]},
+    {"id":"shared","members":["primary","secondary"]}
+  ]
+}

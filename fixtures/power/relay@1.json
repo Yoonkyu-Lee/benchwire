@@ -1,0 +1,23 @@
+{
+  "modelId": "relay",
+  "revision": "1",
+  "kind": "device",
+  "brand": "합성",
+  "name": "relay",
+  "category": "시험",
+  "sources": [
+    {"id":"relay","title":"relay 합성 모델","locator":"fixture:power/relay","retrievedAt":"2026-11-26"}
+  ],
+  "nodes": [
+    {"id":"entry","label":"entry","kind":"junction"},
+    {"id":"exit","label":"exit","kind":"junction"}
+  ],
+  "ports": [
+    {"id":"in","label":"in","connector":{"value":"c-receptacle","confidence":"inferred","sources":["relay"]},"attachment":{"value":"entry","confidence":"inferred","sources":["relay"]},"interfaces":[{"id":"in-power","domain":"power","protocol":"USB PD","role":"sink","evidence":{"value":true,"confidence":"inferred","sources":["relay"]},"params":{"maxW":{"value":100,"unit":"W","confidence":"inferred","sources":["relay"]},"accepts20":{"value":true,"confidence":"inferred","sources":["relay"]},"reserveW":{"value":10,"unit":"W","confidence":"inferred","sources":["relay"]}}}]},
+    {"id":"out","label":"out","connector":{"value":"c-receptacle","confidence":"inferred","sources":["relay"]},"attachment":{"value":"exit","confidence":"inferred","sources":["relay"]},"interfaces":[{"id":"out-power","domain":"power","protocol":"USB PD","role":"source","evidence":{"value":true,"confidence":"inferred","sources":["relay"]},"params":{"maxW":{"value":100,"unit":"W","confidence":"inferred","sources":["relay"]},"pdo20":{"value":5,"unit":"A","confidence":"inferred","sources":["relay"]}}}]}
+  ],
+  "edges": [
+    {"id":"through","from":"entry","to":"exit","evidence":{"value":true,"confidence":"inferred","sources":["relay"]},"uses":[]}
+  ],
+  "resources": []
+}
