@@ -286,3 +286,20 @@ test("T9 같은 연결 옵션도 영상과 허브만의 시나리오 저장 순�
   assert.deepEqual(b.result.choices.map(c => c.profile),["2레인","4레인"]);
   assert.deepEqual(compare(a,b),[]);
 });
+
+test("T2 미확인 설정 후보 257개로 고정 선택을 확인할 수 없으면 기본 결과만 낸다", () => {
+  const {scene,plugin,option,demand} = setup([100]);
+  const evidence = scene.connections[0]!.evidence;
+  const claim = scene.claims.push({...scene.claims[evidence]!, ownerKind:"item",owner:scene.ports[scene.connections[0]!.from]!.item,
+    domain:plugin.id,field:"configuration",value:null,confidence:"unknown"})-1;
+  scene.claimSources.push(...scene.claimSources.filter(s => s.claim === evidence).map(s => ({...s,claim})));
+  plugin.profileValues = c => c.field === "configuration" ? Array.from({length:257},(_,i) => i) : [];
+  plugin.negotiate = () => ["A","B"].map((p,i) => ({...option("bulk",100-i*50,p),inputs:[claim]}));
+  plugin.demand = () => [demand("bulk",100,true)];
+  const variants = engine.evaluateVariants(scene,[plugin],0);
+  assert.equal(variants.length,1);
+  assert.deepEqual(variants[0]!.choices,[]);
+  const {result} = variants[0]!;
+  assert.deepEqual(result,engine.evaluate(scene,[plugin]));
+  assert.ok(result.quests.some(q => q.claim === claim));
+});

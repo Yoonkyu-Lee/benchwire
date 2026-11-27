@@ -1,5 +1,5 @@
 // 단독 후보를 검산하고 시나리오의 연결 설정·동시 모드를 선택해 판정과 대안을 낸다.
-import type { Choice, DomainPlugin, Scene } from "./contract.ts";
+import type { Choice, Demand, DomainPlugin, Scene } from "./contract.ts";
 import { allocationGroup, type Flow, type Use } from "./allocate.ts";
 import { assessWork } from "./assess.ts";
 import { negotiate, verdictOrder } from "./negotiate.ts";
@@ -14,6 +14,24 @@ import { recordUsage, type GrossLimits } from "./resource-usage.ts";
 import { reserveStanding } from "./standing.ts";
 import { combinations, compareScores, MAX_COMBINATIONS, planModes, profileGroups, reservationAlternatives, type Candidate, type Plan } from "./selection.ts";
 import { resolveUnknowns } from "./unknown.ts";
+
+// 내부 자원이 쓰이는 간선의 운반 단위로 공정 몫을 비교한다. 실제 점유 비용은 consume의 계수를 따른다.
+function internalConversion(scene: Scene, steps: Results["steps"], demand: Demand, resource: number) {
+  if (!demand.carriers || demand.carriers.length === 1) return demand.carriers?.[0]?.conversion;
+  if (!demand.carriers.some(c => c.conversion)) return;
+  const edges = new Set(scene.resourceUses.filter(u => u.resource === resource).map(u => u.edge));
+  const local = steps.filter(s => s.kind === "edge" && edges.has(s.row)).map(s => s.carrier?.conversion);
+  // 장치 전체에 부과한 비용에도 선택 경로에서 환산을 하나로 정할 수 있으면 같은 기준을 쓴다.
+  const path = local.length ? local : demand.carriers.map(c => c.conversion);
+  const matching = path.filter(c => (c?.unit ?? demand.unit) === scene.resources[resource]!.unit);
+  const uses = matching.length ? matching : path;
+  const unit = uses[0]?.unit ?? demand.unit;
+  if (!uses.every(c => (c?.unit ?? demand.unit) === unit)) return;
+  const rate = uses[0]?.perUnit ?? 1;
+  if (uses.every(c => (c?.perUnit ?? 1) === rate)) return uses[0];
+  if (!local.length) return;
+  return { unit, perUnit: uses.reduce((sum, c) => sum + (c?.perUnit ?? 1) / uses.length, 0) };
+}
 
 function candidatesFor(scene: Scene, plugins: readonly DomainPlugin[], result: Results, routeInputs: RouteInputs[], choices: Choice[]): Candidate[][] {
   const start = result.paths.length;
@@ -32,18 +50,19 @@ function candidatesFor(scene: Scene, plugins: readonly DomainPlugin[], result: R
           const coefficient = checkedQuantity(result, w.domain, "consume", path, "coefficient", trace.coefficient);
           const unknown = fixed === null || coefficient === null;
           unknownConsumption ||= unknown;
-          const u = { ...trace, fixed: fixed ?? 0, coefficient: coefficient ?? 0, unknown };
+          const u = { ...trace, fixed: fixed ?? 0, coefficient: coefficient ?? 0, unknown,
+            conversion: internalConversion(scene, steps, d, raw.resource) };
           return !d.elastic && d.requested !== null ? { ...u, fixed: u.fixed + u.coefficient * d.requested, coefficient: 0 } : u;
         })
         .filter(u => u.coefficient > 0 || u.fixed > 0 || u.unknown);
       for (const s of steps) if (s.option !== null && p.verdict !== "impossible") {
         const o = result.options[s.option]!;
         const rate = s.carrier?.conversion?.perUnit ?? 1;
-        uses.push({ resource: scene.resources.length + (o.serviceResource ?? o.linkResource), option: s.option, serviceRate: rate, coefficient: d.elastic ? rate : 0,
+        uses.push({ resource: scene.resources.length + (o.serviceResource ?? o.linkResource), option: s.option, conversion: s.carrier?.conversion, coefficient: d.elastic ? rate : 0,
           fixed: d.elastic ? 0 : (d.requested ?? 0) * rate, rule: "같은 방향의 링크 한도", inputs: o.inputs, specs: o.specs });
         if (o.poolResource !== undefined) {
           const pool = result.linkResources[o.poolResource]!.pool!, scale = rate * o.pool!.perUnit;
-          uses.push({ resource: scene.resources.length + o.poolResource, option: s.option, pool: o.poolResource, serviceRate: rate,
+          uses.push({ resource: scene.resources.length + o.poolResource, option: s.option, pool: o.poolResource, conversion: s.carrier?.conversion,
             coefficient: d.elastic ? scale : 0, fixed: d.elastic ? 0 : (d.requested ?? 0) * scale,
             rule: pool.rule, inputs: pool.inputs, specs: pool.specs });
         }
@@ -205,8 +224,12 @@ function evaluatePlans(scene: Scene, plugins: readonly DomainPlugin[], scenario?
   // 임시 기본 설정이 후보마다 바뀌면, 그 설정을 고정한 결과도 사용자가 선택할 수 있는 별도 대안이다.
   const alternatives = scenarios[scenario]!.filter(p => p.confirmed && (p !== primary[scenario] ||
     p.choices.some(c => !first.choices.some(other => other.connection === c.connection && other.profile === c.profile))));
-  return [first, ...alternatives.map((plan,i) => solve(primary.map((p,j) => j === scenario ? plan : p),true,
-    i === alternatives.length - 1 ? prepared.result : structuredClone(prepared.result)))];
+  return [first, ...alternatives.flatMap((plan,i) => {
+    const variant = solve(primary.map((p,j) => j === scenario ? plan : p),true,
+      i === alternatives.length - 1 ? prepared.result : structuredClone(prepared.result));
+    // 설정을 전제로 만든 대안은 선택할 설정이 남아야 한다. 모드나 예약만 고르는 대안도 있다.
+    return plan.choices.length && !variant.choices.length ? [] : [variant];
+  })];
 }
 
 export function evaluate(scene: Scene, plugins: readonly DomainPlugin[]): Results {

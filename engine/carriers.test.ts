@@ -370,3 +370,117 @@ test("T4 환산 뒤 표현 가능한 극소 처리량도 두 작업에 같은 �
     carriers:[{domain:carrier.id,mode:"bulk",conversion:{unit:"MB/s",perUnit:0.5}}]}));
   assert.deepEqual(run().values("together"), [Number.MIN_VALUE,Number.MIN_VALUE]);
 });
+
+type RateUnit = readonly [unit: string, perUnit: number];
+type RateBudget = "직결" | "운반" | "내부 자원" | "공용 예산";
+
+function rateScene(budget: RateBudget) {
+  const { scene, carrier, client, requests, run } = setup([120,120,120], budget === "공용 예산" ? 0.64 : 8);
+  const internal = scene.resourceUses[0]!;
+  const edge = scene.edges[internal.edge]!;
+  if (budget === "내부 자원") for (const [resource,r] of scene.resources.entries()) {
+    r.unit = "MB/s";
+    const cap = scene.claims.find(c => c.ownerKind === "resource" && c.owner === resource && c.field === "capacity")!;
+    Object.assign(cap, { unit: r.unit, value: 80 });
+  }
+  const negotiate = carrier.negotiate;
+  carrier.negotiate = link => negotiate(link).slice(0,1).map(({pool,...o}) => ({
+    ...o, limit:budget === "직결" || budget === "운반" ? 80 : 1000, ...(budget === "공용 예산" ? {pool} : {}),
+  }));
+  if (budget !== "공용 예산") delete carrier.pools;
+  const owner = budget === "직결" ? carrier : client;
+  for (const w of scene.workloads) w.domain = owner.id;
+  const [first, second, extra] = scene.workloads;
+  first!.from = second!.from = edge.from;
+  extra!.id = "0-독립";
+  const branch = scene.connections[1]!;
+  const branchItem = scene.ports[branch.to]!.item;
+  const otherEnd = scene.edges.find(e => e.item === branchItem)!.to;
+
+  return (units: readonly [RateUnit, RateUnit], independent: "없음" | "역방향" | "다른 자원", amounts = [120,120]) => {
+    const encodings: RateUnit[] = [...units, ["X",0.5]];
+    owner.demand = (s,w) => {
+      const [unit,perUnit] = encodings[w]!;
+      const request = s.claims[requests[w]!]!;
+      const direct = owner === carrier && unit === "MB/s" && perUnit === 1;
+      return [{ mode:owner === carrier ? "bulk" : "copy", unit, requested:request.value as number, via:[],
+        ...(direct ? {} : { carriers:[{domain:carrier.id, mode:"bulk", conversion:{unit:"MB/s",perUnit}}] }),
+        elastic:true, preference:0, rule:"모델에 지정된 운반량", inputs:[requests[w]!], specs:[] }];
+    };
+    owner.consume = (s,w,steps) => budget !== "내부 자원" ? [] : steps.flatMap(step => step.kind !== "edge" ? [] : s.resourceUses
+      .filter(u => u.edge === step.row)
+      .map(u => ({resource:u.resource, coefficient:encodings[w]![1], fixed:0, rule:"내부 전송 경로", inputs:[u.evidence], specs:[]})));
+    for (const [w,[unit,perUnit]] of encodings.entries())
+      Object.assign(scene.claims[requests[w]!]!, {unit,value:(amounts[w] ?? 120) / perUnit});
+    extra!.from = independent === "다른 자원" ? edge.to : first!.to;
+    extra!.to = independent === "다른 자원" ? otherEnd : edge.to;
+    scene.members = scene.workloads.flatMap((_,workload) => workload < 2 || independent !== "없음" ? [{scenario:0,workload}] : []);
+    const {r,row} = run();
+    const delivered = scene.members.map(({workload}) => r.metrics.find(m => m.outcome === row(workload) && m.kind === "together")!.value);
+    const transport = delivered.map((rate,i) => rate === null ? null : rate * encodings[i]![1]);
+    return {r,row,delivered,transport,internal};
+  };
+}
+
+test("T4 80 MB/s 내부 자원은 공통 운반 단위로 40 X와 20 Y를 배분한다", () => {
+  const {r,row,delivered,internal} = rateScene("내부 자원")([["X",1],["Y",2]],"없음");
+  assert.deepEqual(delivered,[40,20]);
+  assert.deepEqual(r.errors,[]);
+  for (const w of [0,1]) {
+    assert.equal(r.outcomes[row(w)]!.verdict,"conditional");
+    assert.ok(r.bindings.some(b => b.workload === w && b.run === "together" && b.resourceKind === "scene" && b.resource === internal.resource));
+    assert.ok(r.reasonInputs.some(i => i.claim === internal.evidence && r.reasons[i.reason]!.outcome === row(w)));
+  }
+});
+
+test("T4 직결·운반·내부 자원·공용 예산의 배분은 요청 단위 표현과 독립 작업에 불변이다", () => {
+  const natural = [["MB/s",1],["MB/s",1]] as const;
+  const representations = [natural, [["MB/s",1],["Y",2]], [["X",1],["Y",1]], [["X",1],["Y",2]], [["X",1],["X",2]], [["X",0.5],["Y",4]]] as const;
+  for (const budget of ["직결","운반","내부 자원","공용 예산"] as const) {
+    const read = rateScene(budget);
+    for (const amounts of [[120,120],[20,120]]) {
+      const expected = read(natural,"없음",amounts).transport;
+      assert.deepEqual(expected, amounts[0] === 20 ? [20,60] : [40,40], budget);
+      for (const units of representations) for (const extra of ["없음","역방향","다른 자원"] as const) {
+        const answer = read(units,extra,amounts);
+        const description = JSON.stringify([budget,units,extra,amounts]);
+        assert.deepEqual(answer.transport.slice(0,2),expected,description);
+        if (extra !== "없음") assert.equal(answer.transport[2],budget === "내부 자원" && extra === "역방향" ? 120 : 80,description);
+        assert.deepEqual(answer.r.errors,[],description);
+      }
+    }
+  }
+});
+
+test("T4 내부 병목은 그 자원을 지나는 구간의 운반률과 실제 소비 비용을 구별한다", () => {
+  const {scene,carrier,client,run} = setup([120,120]);
+  const edge = scene.edges.find(e => e.from === scene.workloads[0]!.to)!;
+  const medium = scene.resourceUses.find(u => scene.edges[u.edge] === edge)!;
+  scene.resources[medium.resource]!.unit = "MB/s";
+  const capacity = scene.claims.find(c => c.ownerKind === "resource" && c.owner === medium.resource && c.field === "capacity")!;
+  Object.assign(capacity,{unit:"MB/s",value:90});
+  for (const w of scene.workloads) w.to = edge.to;
+  const demand = client.demand;
+  client.demand = (s,w) => demand(s,w).map(d => ({...d, unit:w === 0 ? "X" : "Y", via:[edge.from],
+    carriers:(w === 0 ? [4,1] : [1,2]).map(perUnit => ({domain:carrier.id,mode:"bulk",conversion:{unit:"MB/s",perUnit}}))}));
+  // 첫 작업은 내부에서 운반량의 두 배를 소비한다. 두 번째 작업은 1 Y당 2 MB를 운반한다.
+  client.consume = () => [{resource:medium.resource,coefficient:2,fixed:0,rule:"매체 점유",inputs:[medium.evidence],specs:[]}];
+  const {values,r} = run();
+  assert.deepEqual(values("together"),[30,15]);
+  assert.deepEqual(r.errors,[]);
+});
+
+test("T4 장치 전체의 내부 자원 단위는 한 작업의 요청과 다른 작업의 운반 단위로도 일치한다", () => {
+  const {scene,carrier,client,capacity,run} = setup([120,60]);
+  scene.resources[0]!.unit = "MB/s";
+  Object.assign(scene.claims[capacity]!, {unit:"MB/s",value:80});
+  const negotiate = carrier.negotiate, demand = client.demand;
+  carrier.negotiate = link => negotiate(link).map(({pool,...service}) => service);
+  client.demand = (s,w) => demand(s,w).map(d => w === 0 ? {...d, unit:"MB/s",
+    carriers:[{domain:carrier.id,mode:"video",conversion:{unit:"Gbps",perUnit:0.008}}]}
+    : {...d, unit:"Y", carriers:[{domain:carrier.id,mode:"bulk",conversion:{unit:"MB/s",perUnit:2}}]});
+  client.consume = (_s,w) => [{resource:0,coefficient:w === 0 ? 1 : 2,fixed:0,rule:"장치 내부 전송량",inputs:[capacity],specs:[]}];
+  const {values,r} = run();
+  assert.deepEqual(values("together"),[40,20]);
+  assert.deepEqual(r.errors,[]);
+});

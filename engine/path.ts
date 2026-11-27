@@ -59,7 +59,7 @@ function connectionArcs(scene: Scene, result: Results, plugin: DomainPlugin, dem
     for (const edges of variants) {
       for (const from of pending.get(start) ?? [a.node!]) for (const to of pending.get(end) ?? [b.node!]) {
         const steps: PathStep[] = [{ kind: "connection", row: connection, from, to, direction, option: best.row, carrier },
-          ...edges.map((row): PathStep => ({ kind: "edge", row, from: scene.edges[row]!.from, to: scene.edges[row]!.to, direction: "forward", option: null }))];
+          ...edges.map((row): PathStep => ({ kind: "edge", row, from: scene.edges[row]!.from, to: scene.edges[row]!.to, direction: "forward", option: null, carrier }))];
         const attachmentUnknown = a.node === null || b.node === null;
         const key = JSON.stringify([c.id, direction, scene.nodes[from]!.id, scene.nodes[to]!.id, edges.map(e => scene.edges[e]!.id)]);
         arcs.push({ from, to, steps, truncated, key,
@@ -152,7 +152,10 @@ export function paths(scene: Scene, plugins: readonly DomainPlugin[], result: Re
         result.paths.push({ workload, demand, verdict: "unknown", key: "", truncated: false });
         continue;
       }
-      const legs = carriers.map(carrier => [...internal, ...connectionArcs(scene, result, plugin, demand, carrier, choices)]);
+      const legs = carriers.map(carrier => {
+        const edges = carrier.conversion ? internal.map(a => ({ ...a, steps: [{ ...a.steps[0]!, carrier }] })) : internal;
+        return [...edges, ...connectionArcs(scene, result, plugin, demand, carrier, choices)];
+      });
       const { found, truncated, disconnected, disconnectedEdges } = through(scene, legs, stops);
       const relevant = new Set(found.filter(route => route.every(a => a.verdict !== "impossible")).flat());
       if (truncated) {

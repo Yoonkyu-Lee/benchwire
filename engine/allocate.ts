@@ -1,5 +1,5 @@
 // 고정 예약과 반복 소비를 한 예산에 모으고 실제 처리량을 낼 수 있는 작업끼리 max-min으로 배분한다.
-import type { Consumption, PolicyLimit, Scene, Verdict } from "./contract.ts";
+import type { Carrier, Consumption, PolicyLimit, Scene, Verdict } from "./contract.ts";
 import type { Results } from "./results.ts";
 import { resourceCapacity } from "./standing.ts";
 import { resourceFacts } from "./scene.ts";
@@ -11,7 +11,7 @@ function tied(a: number, b: number) {
 }
 
 // 배분 안에서만 장면 자원 뒤에 링크 자원의 번호를 이어 붙인다.
-export interface Use extends Consumption { option?: number; pool?: number; serviceRate?: number; unknown?: boolean }
+export interface Use extends Consumption { option?: number; pool?: number; conversion?: Carrier["conversion"]; unknown?: boolean }
 function linkLimit(result: Results, u: Use) {
   return u.pool === undefined ? result.options[u.option!]! : result.linkResources[u.pool]!.pool!;
 }
@@ -46,19 +46,24 @@ export function allocationGroup(flows: readonly Flow[], start: Flow): Flow[] {
 }
 
 // 같은 예산에서만 작업률을 비교한다. 공용 예산의 오버헤드와 구간을 여러 번 지나는 비용은 소비 계수에 남긴다.
-function sharingWeights(result: Results, flows: readonly Flow[], resource: number, users: number[]) {
+function sharingWeights(result: Results, flows: readonly Flow[], resource: number, resourceUnit: string, users: number[]) {
   const services = users.map(i => {
     const flow = flows[i]!;
     const request = flow.path === null ? "" : result.demands[result.paths[flow.path]!.demand]!.unit;
     const uses = flow.uses.filter(u => u.resource === resource && u.coefficient > 0);
-    const units = new Set(uses.map(u => u.option === undefined ? request : result.options[u.option]!.unit));
-    if (units.size !== 1 || uses[0]!.option === undefined) return { request, unit: request, rate: 1 };
-    const rate = uses.reduce((sum, u) => sum + (u.serviceRate ?? 1) / uses.length, 0);
-    return { request, unit: result.options[uses[0]!.option]!.unit, rate };
+    const unit = uses[0]?.conversion?.unit ?? request;
+    if (!uses.every(u => (u.conversion?.unit ?? request) === unit)) return { request, unit: request, rate: 1 };
+    const rate = uses.reduce((sum, u) => sum + (u.conversion?.perUnit ?? 1) / uses.length, 0);
+    return { request, unit, rate };
   });
-  const sameService = services.every(s => s.unit === services[0]!.unit);
-  if (!sameService && !services.every(s => s.request === services[0]!.request)) return null;
-  return new Map(users.map((i, j) => [i, sameService ? 1 / services[j]!.rate : 1]));
+  const first = services[0];
+  if (!first) return new Map<number, number>();
+  // 직결 작업의 요청 단위가 이웃 작업의 운반 단위일 수도 있다.
+  const common = [...new Set([first.unit, first.request])].filter(unit => services.every(s => s.unit === unit || s.request === unit));
+  const unit = services.every(s => s.unit === first.unit) ? first.unit
+    : common.includes(resourceUnit) ? resourceUnit : common.length === 1 ? common[0] : undefined;
+  if (unit === undefined) return null;
+  return new Map(users.map((i, j) => [i, services[j]!.unit === unit ? 1 / services[j]!.rate : 1]));
 }
 
 function fill(scene: Scene, result: Results, flows: readonly Flow[], fair: ReadonlySet<number>) {
@@ -104,7 +109,7 @@ function fill(scene: Scene, result: Results, flows: readonly Flow[], fair: Reado
     for (const i of p.coefficients.keys()) if (!active.has(i)) p.coefficients.delete(i);
     const users = new Set([...p.fixed.keys(), ...p.coefficients.keys()]);
     const weighted = [...p.coefficients.keys()];
-    const weights = sharingWeights(result, flows, row, weighted);
+    const weights = sharingWeights(result, flows, row, p.unit, weighted);
     if (weights) p.weights = weights;
     else for (const i of weighted) {
       uncertain.add(i);
@@ -273,7 +278,8 @@ function guaranteedFloor(scene: Scene, lower: Results, flow: Flow, group: Flow[]
     if (remaining < 0) return 0;
     if (flow.uses.some(u => u.resource === row && u.coefficient > 0)) {
       const slopes = group.map(f => f.uses.filter(u => u.resource === row).reduce((sum,u) => sum + u.coefficient,0));
-      const weights = sharingWeights(lower,group,row,slopes.flatMap((s,i) => s > 0 ? [i] : []));
+      const unit = option === undefined ? scene.resources[row]!.unit : linkLimit(lower, uses[0]!).unit;
+      const weights = sharingWeights(lower, group, row, unit, slopes.flatMap((s,i) => s > 0 ? [i] : []));
       if (!weights) return 0;
       const slope = [...weights].reduce((sum,[i,w]) => sum + slopes[i]! * w,0);
       rate = Math.min(rate,remaining / slope * weights.get(index)!);
