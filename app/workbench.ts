@@ -1,12 +1,12 @@
 // 장면 문서 편집을 확정하고 캔버스·인벤토리·외부 결합 판정기를 연결한다.
-import { mountCanvas } from "./canvas.ts";
+import { mountCanvas, type CanvasLibrary } from "./canvas.ts";
 import { occupiedPorts, type ConnectionCheck } from "./connection.ts";
-import { addConnection, modelKey, place, portKey, type InventoryItem, type Library, type SceneDocument, type SceneIntent } from "./document.ts";
+import { addConnection, modelKey, place, portKey, type InventoryItem, type SceneDocument, type SceneIntent } from "./document.ts";
 import { INVENTORY_DRAG, mountInventory } from "./inventory.ts";
 import { mountLayers } from "./layers.ts";
 import { CARD_WIDTH } from "./layout.ts";
 
-export function mountWorkbench(root: HTMLElement, initial: SceneDocument, library: Library, options: {
+export function mountWorkbench(root: HTMLElement, initial: SceneDocument, library: CanvasLibrary, options: {
   title?: string;
   checkConnection?: ConnectionCheck;
   onChange?: (document: SceneDocument, intent: SceneIntent) => void;
@@ -126,5 +126,8 @@ export function mountWorkbench(root: HTMLElement, initial: SceneDocument, librar
   }
 
   render();
-  return { readDocument: () => scene };
+  return {
+    readDocument: () => scene,
+    replaceDocument(document: SceneDocument) { scene = document; render(); },
+  };
 }

@@ -1,4 +1,4 @@
-<!-- 예제 장면을 여는 Vite 작업대의 진입 페이지다. -->
+<!-- 로컬 라이브러리를 여는 작업대의 진입 페이지다. -->
 <!doctype html>
 <html lang="ko">
 <head>
@@ -8,6 +8,10 @@
 </head>
 <body>
   <div id="app"></div>
+  <div id="storage-status" class="status" role="status" hidden>
+    <span></span>
+    <button type="button" hidden>다시 열기</button>
+  </div>
   <script type="module" src="./main.ts"></script>
 </body>
 </html>

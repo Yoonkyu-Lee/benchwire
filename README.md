@@ -8,7 +8,14 @@ Node.js 26 LTS 이상이 필요하다.
 
 ```sh
 npm ci
+npm start
+```
+
+`npm start`는 캔버스를 `dist/app/`에 빌드하고 `http://127.0.0.1:3210/`을 기본 브라우저에서 연다. 설치 뒤에는 인터넷 없이 실행할 수 있다. 처음에는 한 케이블에서 PoE와 이더넷이 함께 흐르는 예제를 연다. 편집은 자동 저장되며 예제의 첫 편집은 `userdata/`에 사본을 만든다. 다시 시작하면 마지막으로 저장한 장면이 열린다.
+
+```sh
 npm run check   # 형 검사(tsc), 전체 시험(node --test), 게이트(tools/gate.ts)
+npm run test:ui # 설치된 Edge에서 실제 서버와 화면 검증
 ```
 
 ## 의존성

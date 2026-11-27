@@ -6,7 +6,7 @@ import { mountWorkbench } from "./workbench.ts";
 const source = { id: "ui", title: "화면 시험", locator: "fixture:ui", retrievedAt: "2026-11-27" };
 const evidence = { value: true, confidence: "inferred", sources: [source.id] };
 const connectorIds = ["rj45", "usb-c", "hdmi", "displayport"];
-const connectors = connectorIds.map(id => ({ id, glyph: id }));
+const connectors = { connectors: connectorIds.map(id => ({ id, glyph: id })) };
 const testInterfaces = [{ domain: "network", protocol: "Ethernet" }, { domain: "network", protocol: "PoE PD" }];
 const testPorts = Array.from({ length: 3 }, (_, i): Port => ({
   id: `p${i}`, label: `포트 ${i + 1}`, connector: { value: i === 2 ? "test-connector" : "rj45" },

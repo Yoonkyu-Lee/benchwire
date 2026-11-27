@@ -39,8 +39,11 @@ const MIN_ZOOM = 0.14;
 const MAX_ZOOM = 2.6;
 const DRAG_DISTANCE = 3;
 
+export type CanvasLibrary = Pick<Library, "inventory" | "models"> & {
+  connectors: { connectors: readonly { id: string; glyph?: string | undefined }[] };
+};
 
-export function mountCanvas(root: HTMLElement, library: Library,
+export function mountCanvas(root: HTMLElement, library: CanvasLibrary,
   actions: { intent: (intent: SceneIntent) => void; status: (text: string) => void; selectConnection?: ((id: string) => void) | undefined }) {
   const surface = svg("svg", { class: "surface", "aria-label": "장면 캔버스", tabindex: "0" });
   const world = svg("g", { class: "world" });
@@ -52,7 +55,7 @@ export function mountCanvas(root: HTMLElement, library: Library,
   root.append(surface);
 
   const models = new Map(library.models.map(m => [modelKey(m), m]));
-  const connectors = new Map(library.connectors.map(c => [c.id, c.glyph]));
+  const connectors = new Map(library.connectors.connectors.map(c => [c.id, c.glyph]));
   const cards = new Map<string, Card>();
   const sockets = new Map<string, Socket>();
   const wires = new Map<string, Wire>();

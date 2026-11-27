@@ -1,32 +1,47 @@
 // 설치된 Edge에서 작업대의 편집 동작과 50기기 장면의 프레임 시간을 검증한다.
 import assert from "node:assert/strict";
-import { mkdir, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import type { Server } from "node:http";
 import { join, resolve } from "node:path";
 import { after, before, test } from "node:test";
 import { setTimeout as sleep } from "node:timers/promises";
-import { chromium, type Browser, type Locator, type Page } from "playwright";
-import { build, preview, type PreviewServer } from "vite";
+import { chromium, type Browser, type BrowserContext, type Locator, type Page } from "playwright";
+import { build } from "vite";
+import { startServer } from "../server/http.ts";
 
 const viewport = { width: 1440, height: 900 };
 const root = resolve("app");
 const outDir = resolve("work/ui-dist");
 let browser: Browser;
-let server: PreviewServer;
+let server: Server | undefined;
+let dataDir: string;
 let base: string;
+
+async function openServer() {
+  server = await startServer({ port: 0, dataDir, buildDir: outDir });
+  const address = server.address();
+  assert(address && typeof address === "object");
+  base = `http://127.0.0.1:${address.port}`;
+}
+
+async function closeServer() {
+  const closing = server;
+  server = undefined;
+  if (closing) await new Promise<void>((done, fail) => closing.close(error => error ? fail(error) : done()));
+}
 
 before(async () => {
   await mkdir("work", { recursive: true });
+  dataDir = await mkdtemp(resolve("work/ui-data-"));
   await build({ root, logLevel: "error", build: { outDir, emptyOutDir: true,
     rolldownOptions: { input: [join(root, "index.html"), join(root, "testbed.html")] } } });
-  server = await preview({ root, logLevel: "error", build: { outDir }, preview: { host: "127.0.0.1", port: 0 } });
-  const address = server.httpServer.address();
-  assert(address && typeof address === "object");
-  base = `http://127.0.0.1:${address.port}`;
+  await openServer();
   browser = await chromium.launch({ channel: "msedge", headless: true });
 });
 
 after(async () => {
-  await Promise.all([browser?.close(), server?.close()]);
+  await Promise.all([browser?.close(), closeServer()]);
+  if (dataDir) await rm(dataDir, { recursive: true, force: true });
 });
 
 async function center(locator: Locator) {
@@ -35,8 +50,8 @@ async function center(locator: Locator) {
   return { x: box.x + box.width / 2, y: box.y + box.height / 2 };
 }
 
-async function newPage(path: string) {
-  const page = await browser.newPage({ viewport, deviceScaleFactor: 1 });
+async function newPage(path: string, context?: BrowserContext) {
+  const page = context ? await context.newPage() : await browser.newPage({ viewport, deviceScaleFactor: 1 });
   const errors: Error[] = [];
   page.on("pageerror", error => errors.push(error));
   await page.goto(base + path);
@@ -58,6 +73,9 @@ test("예제 한 케이블의 전력과 네트워크 레이어를 독립적으�
   try {
     const wire = page.locator('[data-connection="poe"]');
     assert.equal(await wire.locator(".wire-name").textContent(), "이더넷 케이블");
+    assert.equal(await port(page, "pse", "pse").getAttribute("data-face"), "list");
+    assert.equal(await port(page, "pse", "pse").locator("path").getAttribute("data-glyph"), "rj45");
+    assert.equal(await page.locator('[data-inventory="spare-wire"] strong').textContent(), "예비 이더넷 케이블");
     const power = wire.locator('[data-layer="power"]');
     const network = wire.locator('[data-layer="network"]');
     const powerToggle = page.getByRole("button", { name: "전력" });
@@ -78,6 +96,87 @@ test("예제 한 케이블의 전력과 네트워크 레이어를 독립적으�
     assert(await network.isVisible());
     await page.screenshot({ path: "work/m3-canvas.png" });
     assert.deepEqual(errors, []);
+  } finally { await page.close(); }
+});
+
+async function movePse(page: Page, dx: number, dy: number) {
+  const card = page.locator('[data-instance="pse"]');
+  const point = await center(card.locator(".device-name"));
+  await page.mouse.move(point.x, point.y);
+  await page.mouse.down();
+  await page.mouse.move(point.x + dx, point.y + dy, { steps: 5 });
+  await page.mouse.up();
+}
+
+test("예제의 자동 저장은 사본으로 이어지고 새로고침·다른 탭·서버 재시작에서도 장면을 지킨다", async () => {
+  const tabs = await browser.newContext({ viewport, deviceScaleFactor: 1 });
+  const { page, errors } = await newPage("/", tabs);
+  const picker = page.getByRole("combobox", { name: "장면" });
+  const card = page.locator('[data-instance="pse"]');
+  const exampleId = await picker.inputValue();
+  const original = await card.getAttribute("transform");
+  let copyId: string;
+  let moved: string | null;
+  try {
+    const creation = page.waitForResponse(response => response.request().method() === "PUT" && response.status() === 201);
+    await movePse(page, 42, 26);
+    const copy = await (await creation).json();
+    await page.getByText("저장됨", { exact: true }).waitFor();
+    copyId = await picker.inputValue();
+    assert.equal(copyId, copy.sceneId);
+    assert.notEqual(copyId, exampleId);
+    assert.notEqual(await card.getAttribute("transform"), original);
+
+    const update = page.waitForResponse(response => response.url().endsWith("/api/scenes/" + copyId) && response.status() === 204);
+    await movePse(page, 27, 14);
+    await update;
+    await page.getByText("저장됨", { exact: true }).waitFor();
+    moved = await card.getAttribute("transform");
+    await page.reload();
+    await card.waitFor();
+    assert.equal(await picker.inputValue(), copyId);
+    assert.equal(await card.getAttribute("transform"), moved);
+
+    const second = (await newPage("/", tabs)).page;
+    const newer = page.waitForResponse(response => response.url().endsWith("/api/scenes/" + copyId) && response.status() === 204);
+    await movePse(page, 25, -18);
+    await newer;
+    await page.getByText("저장됨", { exact: true }).waitFor();
+    moved = await card.getAttribute("transform");
+    await movePse(second, -18, 30);
+    await second.getByText("다른 곳에서 장면을 저장했습니다. 다시 열어 주세요.").waitFor();
+    await second.getByRole("button", { name: "다시 열기" }).click();
+    await second.waitForFunction(expected => document.querySelector('[data-instance="pse"]')?.getAttribute("transform") === expected, moved);
+    assert.deepEqual(errors, []);
+  } finally {
+    await tabs.close();
+  }
+
+  await closeServer();
+  await openServer();
+  const restarted = (await newPage("/")).page;
+  try {
+    assert.equal(await restarted.getByRole("combobox", { name: "장면" }).inputValue(), copyId);
+    assert.equal(await restarted.locator('[data-instance="pse"]').getAttribute("transform"), moved);
+    await restarted.getByRole("combobox", { name: "장면" }).selectOption(exampleId);
+    await restarted.waitForFunction(expected => document.querySelector('[data-instance="pse"]')?.getAttribute("transform") === expected, original);
+  } finally { await restarted.close(); }
+});
+
+test("잘못된 장면은 서버가 가리킨 필드를 표시하고 마지막 유효한 카드 위치를 되돌린다", async () => {
+  const { page } = await newPage("/");
+  try {
+    const card = page.locator('[data-instance="pse"]');
+    const saved = await card.getAttribute("transform");
+    await page.route("**/api/scenes/*", async route => {
+      if (route.request().method() !== "PUT") { await route.continue(); return; }
+      const draft = route.request().postDataJSON();
+      draft.layout.placements[0].instanceId = "missing";
+      await route.continue({ postData: JSON.stringify(draft) });
+    }, { times: 1 });
+    await movePse(page, 33, -12);
+    await page.getByText(/layout\.placements\.0\.instanceId/).waitFor();
+    assert.equal(await card.getAttribute("transform"), saved);
   } finally { await page.close(); }
 });
 

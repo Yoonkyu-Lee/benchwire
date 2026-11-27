@@ -5,7 +5,7 @@ export const INVENTORY_DRAG = "application/x-benchwire-item";
 const tabs = { owned: "보유", candidate: "후보", recommended: "추천" } as const;
 type Tab = keyof typeof tabs;
 
-export function mountInventory(root: HTMLElement, library: Library, actions: {
+export function mountInventory(root: HTMLElement, library: Pick<Library, "inventory" | "models">, actions: {
   add: (item: InventoryItem) => void;
   cable: (item: InventoryItem) => void;
 }) {

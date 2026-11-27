@@ -6,11 +6,11 @@
     "node": ">=26"
   },
   "scripts": {
+    "start": "npm run build:app && node server/http.ts",
     "check": "npm run typecheck && npm test && npm run gate",
     "typecheck": "tsc --noEmit -p . && tsc --noEmit -p tsconfig.app.json",
     "test": "node --test \"**/*.test.ts\"",
     "gate": "node tools/gate.ts",
-    "dev": "vite app --host 127.0.0.1",
     "build:app": "vite build app --outDir ../dist/app --emptyOutDir",
     "test:ui": "node --test app/canvas.ui.ts"
   },
