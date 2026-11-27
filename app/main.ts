@@ -83,7 +83,10 @@ function mergeScenario(before: Scenario, wanted: Scenario, latest: Scenario) {
   const id = mergeField(before.id, wanted.id, latest.id);
   const membersById = (s: Scenario) => new Map(s.members.map(m => [typeof m === "string" ? m : m.workload, m]));
   const members = mergeFields(membersById(before), membersById(wanted), membersById(latest));
-  return id === CONFLICT || members === CONFLICT ? CONFLICT : { id, members: [...members.values()] };
+  const budget = mergeField(before.budget, wanted.budget, latest.budget);
+  const purchases = mergeField(before.purchases, wanted.purchases, latest.purchases);
+  return id === CONFLICT || members === CONFLICT || budget === CONFLICT || purchases === CONFLICT ? CONFLICT
+    : { id, members: [...members.values()], ...(budget !== undefined && {budget}), ...(purchases && {purchases}) };
 }
 
 function mergeWorkload(before: Workload, wanted: Workload, latest: Workload) {

@@ -2,6 +2,7 @@
 import type { Results, Run } from "../engine/results.ts";
 import { evaluateInWorker, loadAssessment, type Assessment, type Documents, type Variants } from "./assessment.ts";
 import { mountCanvas } from "./canvas.ts";
+import { mountBudget } from "./budget.ts";
 import { mountCollector } from "./collector.ts";
 import { mountCreator, persistModel } from "./creator.ts";
 import { occupiedPorts, requiredMateCapabilities } from "./connection.ts";
@@ -132,6 +133,9 @@ export function mountWorkbench(root: HTMLElement, initial: SceneDocument, librar
   const trigger = root.querySelector<HTMLButtonElement>(".creator-open")!;
   const dialog = root.querySelector<HTMLDialogElement>("dialog:not(.quest-dialog)")!;
   if (options.onChange) mountCollector(root, () => scene.sceneId);
+  const renderBudget = options.onChange && mountBudget(root,library,documents,
+    () => ({doc:scene,id:readScenario(),view:assessment === evaluated ? view : undefined}),editScenario,
+    id => panel.choose({kind:"connection",id}));
   let openCreator: () => void;
   if (options.onChange) trigger.hidden = false;
   trigger.onclick = () => {
@@ -213,6 +217,7 @@ export function mountWorkbench(root: HTMLElement, initial: SceneDocument, librar
     panel.render(view, variants, variant, preserveSelection);
     questTrigger.hidden = !options.onChange;
     if (options.onChange) renderQuests(view, scene);
+    renderBudget?.();
   }
 
   async function loadVariants() {

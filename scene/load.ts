@@ -336,6 +336,11 @@ export function loadSceneDocuments(document: unknown, library: { connectors: unk
   saved.scenarios.forEach((s, scenario) => {
     const at = file + "#scenarios." + scenario;
     unique(scenarios, s.id, scenario, at + ".id");
+    s.purchases?.forEach((p, i) => {
+      const where = at + ".purchases." + i;
+      if ("instanceId" in p) ref(instances, p.instanceId, where + ".instanceId");
+      if (p.need) ref(connectionIds, p.need.connection, where + ".need.connection");
+    });
     scene.scenarios.push({ id: s.id });
     const members = new Map<string, number>();
     s.members.forEach((entry, i) => {

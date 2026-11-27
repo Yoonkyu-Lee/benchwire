@@ -9,6 +9,7 @@ import { collect } from "./collect.ts";
 import { evidence, unusedEvidence } from "./evidence.ts";
 import { LibraryError, openLibrary, sceneIdPattern } from "./library.ts";
 import { configuredResearchClient, openResearch } from "./research.ts";
+import { openPrices } from "./prices.ts";
 
 const HOST = "127.0.0.1";
 const PORT = 3210;
@@ -71,6 +72,7 @@ function staticFile(buildDir: string, path: string, response: ServerResponse): b
 export async function startServer({ port = PORT, dataDir = join(ROOT, "userdata"), buildDir = join(ROOT, "dist", "app"),
   researchClient = configuredResearchClient(ROOT) } = {}) {
   const library = openLibrary(ROOT, dataDir);
+  const prices = openPrices(dataDir);
   const { connectors } = library.describe();
   const research = openResearch(dataDir, connectors, researchClient);
   async function handle(request: IncomingMessage, response: ServerResponse) {
@@ -91,6 +93,15 @@ export async function startServer({ port = PORT, dataDir = join(ROOT, "userdata"
       const unused = unusedEvidence(dataDir, scenes, selection);
       if (method === "GET") response.writeHead(200, { "Content-Type": JSON_TYPE }).end(JSON.stringify(unused));
       else response.writeHead(204).end();
+      return;
+    }
+    if ((path === "/api/prices" || path === "/api/prices/preferences") && (method === "PUT" || method === "GET" && path === "/api/prices")) {
+      if (method === "PUT") {
+        const body = await readJson(request, origin);
+        if (path === "/api/prices") prices.saveManual(body);
+        else prices.prefer(body);
+      }
+      response.writeHead(200, { "Content-Type": JSON_TYPE }).end(JSON.stringify(prices.book()));
       return;
     }
     if (path.startsWith("/api/evidence") && await evidence(request, response, dataDir, path, origin)) return;

@@ -5,7 +5,7 @@ export const id = z.string().min(1);
 const ids = z.array(id).nonempty();
 const confidence = z.enum(["official", "review", "community", "user_verified", "inferred", "unknown"]);
 const fileId = z.string().regex(/^[\p{L}\p{N}_-]+(?:\.[\p{L}\p{N}_-]+)*$/u, "파일 이름에 쓸 수 없는 ID입니다");
-const revisionRef = z.string().refine(key => {
+export const revisionRef = z.string().refine(key => {
   const parts = key.split("@");
   return parts.length === 2 && parts.every(part => fileId.safeParse(part).success);
 }, "원본 판본은 modelId@revision 형식입니다");
@@ -35,6 +35,15 @@ const evidence = fact.refine(f => f.value === true && !f.unit && !f.condition &&
 const fields = z.record(id, fact);
 const sources = z.array(z.strictObject({ id, title: id, locator: id, retrievedAt: z.iso.date() }));
 const localRef = z.strictObject({ instanceId: id, id });
+export const productRef = z.strictObject({
+  seller: z.string().trim().min(1), productId: z.string().trim().min(1), saleUnit: z.int().positive(),
+});
+const need = z.strictObject({ connection: id, capability: id }).optional();
+const purchase = z.union([
+  z.strictObject({ instanceId: id, need }),
+  z.strictObject({ modelRef: revisionRef, quantity: z.int().positive(), product: productRef.optional(), need }),
+  z.strictObject({ ownedInstanceId: id, modelRef: revisionRef, need }),
+]);
 const measurementContext = { firmware: id.nullable().optional(), measurementCondition: id.nullable().optional() };
 const personalFact = fact.refine(f => f.confidence === "user_verified", "개인 주장에는 사용자 검증이 필요합니다");
 const observation = z.strictObject({
@@ -80,7 +89,9 @@ export const sceneFile = z.strictObject({
     id, from: localRef, to: localRef, evidence, observations: z.array(observation).optional(), parts: z.array(z.strictObject({ instanceId: id, entry: id, exit: id })),
   })),
   workloads: z.array(z.strictObject({ id, domain: id, kind: id, from: localRef, to: localRef, request: fields })),
-  scenarios: z.array(z.strictObject({ id, members: z.array(z.union([id, z.strictObject({ workload: id, priority: fact.refine(f =>
+  scenarios: z.array(z.strictObject({ id, budget: z.number().nonnegative().multipleOf(0.01)
+    .max(Number.MAX_SAFE_INTEGER / 100).optional(), purchases: z.array(purchase).optional(),
+    members: z.array(z.union([id, z.strictObject({ workload: id, priority: fact.refine(f =>
     typeof f.value === "number" && Number.isSafeInteger(f.value) && !f.conflicts?.some(c => !Number.isSafeInteger(c.value)) && !f.unit && !f.condition, "우선순위에는 단위 없는 정수가 필요합니다") })])) })),
 });
 

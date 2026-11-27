@@ -11,6 +11,7 @@ import type { sceneFile } from "../scene/files.ts";
 import { loadSceneDocuments } from "../scene/load.ts";
 import { startServer } from "./http.ts";
 import type { openLibrary } from "./library.ts";
+import { manualProvider, type PriceBook } from "./prices.ts";
 
 type LibraryDocument = ReturnType<ReturnType<typeof openLibrary>["describe"]>;
 type SceneDocument = z.input<typeof sceneFile>;
@@ -49,6 +50,49 @@ function workspace(t: TestContext) {
 
   return { dataDir, buildDir, open };
 }
+
+test("T9 수동 견적·우선순위는 재시작 뒤 유지되고 품절·묶음·판매처가 구별되며 잘못된 입력은 원본을 보존한다", async t => {
+  const files = workspace(t);
+  const first = await files.open();
+  const q = {modelRef:"cable@1", seller:"첫째", productId:"SKU-1", unitPriceCents:2050, saleUnit:1,
+    currency:"USD", stock:"in", retrievedAt:"2026-01-02T01:00:00Z", source:"매장 확인", provider:"manual"};
+  const save = (quote:unknown) => first.put("/api/prices",quote);
+  assert.equal((await first.get("/api/prices")).status,200);
+  for (const row of [q,{...q,saleUnit:2},{...q,seller:"둘째"}]) assert.equal((await save(row)).status,200);
+  assert.equal((await save({...q,stock:"out"})).status,200);
+  assert.equal((await save({...q,retrievedAt:"2025-01-01T01:00:00Z"})).status,409);
+  for (const fields of [{currency:"EUR"},{unitPriceCents:0.1},{saleUnit:0},{discountCents:3000},{url:"file:///hidden"},
+    {retrievedAt:"어제"},{provider:"bestbuy"},{modelRef:"../escape@1"}])
+    assert.equal((await save({...q,...fields})).status,422);
+  assert.equal((await fetch(first.origin+"/api/prices",{method:"PUT",body:JSON.stringify(q)})).status,403);
+  writeFileSync(join(files.dataDir,"settings.json"),JSON.stringify({language:"ko"}));
+  assert.equal((await first.put("/api/prices/preferences",["둘째","첫째"])).status,200);
+  assert.equal((await first.put("/api/prices/preferences",["둘째","둘째"])).status,422);
+  await first.close();
+  const app = await files.open();
+  const book = await (await app.get("/api/prices")).json() as PriceBook;
+  assert.deepEqual(book.preferredSellers,["둘째","첫째"]);
+  assert.equal(book.quotes.length,3);
+  assert.equal(book.quotes[0]!.stock,"out");
+  const manual = manualProvider(book.quotes);
+  const [bundle] = manual.search("sku-1").filter(q => q.saleUnit === 2);
+  assert.ok(bundle);
+  assert.equal(manual.quote(bundle)?.unitPriceCents,2050);
+  assert.equal(JSON.parse(readFileSync(join(files.dataDir,"settings.json"),"utf8")).language,"ko");
+});
+
+test("T9 장면 저장은 없는 실물·연결, 음수 상한, 분수 구매 수량을 필드 위치에서 거절한다", async t => {
+  const app = await workspace(t).open();
+  const doc = await (await app.get("/api/scenes/network")).json() as SceneDocument;
+  for (const [field,value] of [["purchases",[{instanceId:"없는 실물"}]],["budget",-1],
+    ["purchases",[{modelRef:"x@1",quantity:0.5}]],["purchases",[{instanceId:doc.items[0]!.instanceId,
+      need:{connection:"없는 연결",capability:"결합"}}]]] as const) {
+    const res = await app.put("/api/scenes/pricing",{...doc,sceneId:"pricing",
+      scenarios:[{...doc.scenarios[0],[field]:value}]});
+    assert.equal(res.status,422);
+    assert.match((await res.json() as {path:string}).path,new RegExp("scenarios.0."+field));
+  }
+});
 
 test("T7 새 라이브러리의 읽기 전용 예제에서 같은 케이블에 900 Mbps와 12 W가 흐르고 사본은 재시작 뒤에도 열린다", async t => {
   const files = workspace(t);

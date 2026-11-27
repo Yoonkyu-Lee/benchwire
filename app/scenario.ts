@@ -215,7 +215,7 @@ export function mountScenario(root: HTMLElement, documents: Documents, act: (int
         }
         if (scenario?.id === id && members.length === scenario.members.length
           && members.every((member, i) => member === scenario.members[i])) return before;
-        const next = { id, members };
+        const next = { ...scenario, id, members };
         const scenarios = index < 0 ? [...saved.scenarios, next] : saved.scenarios.with(index, next);
         return { ...before, scenarios };
       }, () => { creatingScenario = false; });
