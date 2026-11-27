@@ -16,13 +16,13 @@ export interface RecommendationEdit {
   kind:"insert"|"replace"; target:string; item:InventoryItem; model:Model; document:SceneDocument;
 }
 type WorkState = { verdict: Verdict | null; delivery: Results["metrics"][number] | undefined };
-type WorkRegression = { scenario: string; workload: string; runs: { run: Run; before: WorkState; after: WorkState | null }[] };
+type WorkChange = { scenario: string; workload: string; runs: { run: Run; before: WorkState; after: WorkState | null; regression: boolean }[] };
 type GoalRegression = { scenario: string; goal: string; before: GoalVerdict; after: GoalVerdict | null };
 type Assignments = NonNullable<Results["goalSuccesses"]>[number]["assignments"];
 
 export interface Recommendation {
   edit: RecommendationEdit; achieved: string[];
-  workloadRegressions: WorkRegression[]; goalRegressions: GoalRegression[]; budgetRegression: boolean;
+  workloadChanges: WorkChange[]; goalRegressions: GoalRegression[]; budgetRegression: boolean;
   conditional: { goal: string; assignments: Assignments }[]; incomplete: string[]; cost: bigint | null;
 }
 
@@ -94,7 +94,9 @@ export function recommendationEdits(doc:SceneDocument, documents:Documents, libr
 const verdictRank = { impossible: 0, unknown: 1, conditional: 2, ok: 3 };
 const runs = ["together", "solo"] as const;
 
-function workloadRegressions(before: Snapshot, after: Snapshot): WorkRegression[] {
+function workloadChanges(before: Snapshot, after: Snapshot): WorkChange[] {
+  const exact = (delivery: NonNullable<WorkState["delivery"]>) => delivery.basis === "calculated" && !delivery.range ? delivery.value : null;
+  const decreased = (prior: number | null, next: number | null) => prior !== null && next !== null && compareQuantity(next, prior) < 0;
   function state(result: Results, row: number, run: Run): WorkState {
     return { verdict: outcomeVerdict(result, row, run), delivery: result.metrics.find(m => m.outcome === row && m.kind === run) };
   }
@@ -102,19 +104,20 @@ function workloadRegressions(before: Snapshot, after: Snapshot): WorkRegression[
     if (left === null || !changed.some(key => key === "removed" || key === "verdict" || key === "value" || key === "range")) return [];
     const outcome = before.result.outcomes[left]!;
     if (outcome.subjectKind !== "workload") return [];
-    const losses = runs.flatMap(run => {
+    const changes = runs.flatMap(run => {
       const a = state(before.result, left, run), b = right === null ? null : state(after.result, right, run);
       if (a.verdict === null && !a.delivery) return [];
       const verdictLost = a.verdict !== null && (b?.verdict == null || verdictRank[b.verdict] < verdictRank[a.verdict]);
       const prior = a.delivery, next = b?.delivery;
-      const valueLost = prior && next && prior.unit === next.unit && (["value", "low", "high"] as const).some(field => {
-        const old = prior[field], updated = next[field];
-        return old !== null && updated !== null && compareQuantity(updated, old) < 0;
-      });
-      return b === null || verdictLost || valueLost ? [{ run, before: a, after: b }] : [];
+      let regression = b === null || verdictLost, upperDecreased = false;
+      if (prior && next && prior.unit === next.unit) {
+        regression ||= decreased(prior.low ?? exact(prior), next.low ?? exact(next));
+        upperDecreased = decreased(prior.high ?? exact(prior), next.high ?? exact(next));
+      }
+      return regression || upperDecreased ? [{ run, before: a, after: b, regression }] : [];
     });
-    return losses.length ? [{ scenario: before.scene.scenarios[outcome.scenario!]!.id,
-      workload: before.scene.workloads[outcome.subjectRow]!.id, runs: losses }] : [];
+    return changes.length ? [{ scenario: before.scene.scenarios[outcome.scenario!]!.id,
+      workload: before.scene.workloads[outcome.subjectRow]!.id, runs: changes }] : [];
   });
 }
 
@@ -136,7 +139,7 @@ export function reviewRecommendation(before:Snapshot, after:Snapshot, edit:Recom
   const key = (scenario: string, goal: string) => JSON.stringify([scenario, goal]);
   const next = new Map(after.result.goals.map((g, row) => [key(after.scene.scenarios[g.scenario]!.id, g.id), row]));
   const witnesses = new Map(after.result.goalSuccesses?.map(witness => [witness.goal, witness.assignments]));
-  const reviewed: Recommendation = { edit, achieved: [], workloadRegressions: workloadRegressions(before, after),
+  const reviewed: Recommendation = { edit, achieved: [], workloadChanges: workloadChanges(before, after),
     goalRegressions: [], budgetRegression: false, conditional: [], incomplete: [], cost: edit.item.state === "owned" ? 0n : null };
   for (const goal of before.result.goals) {
     const scenario = before.scene.scenarios[goal.scenario]!.id;
@@ -163,8 +166,12 @@ export function recommendationCost(beforeDoc:SceneDocument,before:Snapshot,after
   if (prior.limitStatus==="within" && next.limitStatus!=="within") card.budgetRegression = true;
   if (card.edit.item.state!=="owned") card.cost=compareBudgets(prior,next);
 }
+export function workloadRegressionCount(card: Recommendation) {
+  return card.workloadChanges.filter(change => change.runs.some(run => run.regression)).length;
+}
+
 export function rankRecommendations(a:Recommendation,b:Recommendation) {
-  const regressions = (card: Recommendation) => card.workloadRegressions.length + card.goalRegressions.length + Number(card.budgetRegression);
+  const regressions = (card: Recommendation) => workloadRegressionCount(card) + card.goalRegressions.length + Number(card.budgetRegression);
   const status = (card: Recommendation) => card.achieved.length ? 0 : card.conditional.length ? 1 : 2;
   return regressions(a)-regressions(b) || status(a)-status(b) ||
     Number(a.cost===null)-Number(b.cost===null) || (a.cost!==null && b.cost!==null && a.cost!==b.cost ? a.cost<b.cost ? -1 : 1 : 0) ||

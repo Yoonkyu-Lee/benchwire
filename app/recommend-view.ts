@@ -9,11 +9,11 @@ import {prices,snapshot,money} from "./swap-view.ts";
 import {goalVerdictText,renderIncompleteGoal} from "./goal-changes.ts";
 import {appendQuestInstructions,claimQuest,questName} from "./quests.ts";
 import {interval,quantity,resultView,verdictText,type ResultView} from "./results.ts";
-import {recommendationEdits,reviewRecommendation,recommendationCost,rankRecommendations,type Recommendation,type RecommendationEdit} from "./recommend.ts";
+import {recommendationEdits,reviewRecommendation,recommendationCost,rankRecommendations,workloadRegressionCount,type Recommendation,type RecommendationEdit} from "./recommend.ts";
 
 interface Input { doc:SceneDocument; before:Snapshot; scenario:string|null; library:Library }
 
-function workText(state: Recommendation["workloadRegressions"][number]["runs"][number]["after"]) {
+function workText(state: Recommendation["workloadChanges"][number]["runs"][number]["after"]) {
   if (!state) return "없음";
   const { verdict, delivery } = state;
   const range = delivery ? interval(delivery, delivery.unit) : "전달량 미확인";
@@ -68,7 +68,7 @@ export function mountRecommendations(documents:Documents, read:()=>Input|undefin
         row.append(title);
         const line=(s:string)=>{const p=document.createElement("p");p.textContent=s;row.append(p);};
         if (card.achieved.length) {
-          const summary = card.workloadRegressions.length ? "목표는 달성, 다른 작업이 깨짐" :
+          const summary = workloadRegressionCount(card) ? "목표는 달성, 다른 작업이 깨짐" :
             card.goalRegressions.length ? "목표는 달성, 기존 목표 회귀" :
             card.budgetRegression ? "목표는 달성, 구매 예산에 영향" : "이 아이템으로 해결";
           line(summary + " · " + card.achieved.map(id => name(id)).join(", "));
@@ -120,9 +120,9 @@ export function mountRecommendations(documents:Documents, read:()=>Input|undefin
             line("확인 퀘스트 · "+label+" · "+instruction);
           }
         }
-        for (const { scenario, workload, runs } of card.workloadRegressions) for (const run of runs) {
+        for (const { scenario, workload, runs } of card.workloadChanges) for (const run of runs) {
           line([scenarioName(scenarios.get(scenario)!), workload, run.run === "together" ? "동시" : "단독",
-            workText(run.before) + " → " + workText(run.after)].join(" · "));
+            !run.regression && "전달량 상한 감소", workText(run.before) + " → " + workText(run.after)].filter(Boolean).join(" · "));
         }
         for (const change of card.goalRegressions) {
           line([scenarioName(scenarios.get(change.scenario)!), name(change.goal, change.scenario),

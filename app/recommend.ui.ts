@@ -2,14 +2,14 @@
 import assert from "node:assert/strict";
 import {test} from "node:test";
 import type { Page } from "playwright";
-import {edgeSession,waitForAssessment} from "./edge-session.ts";
+import {testEdgeSession,waitForAssessment} from "./edge-session.ts";
 import {modelKey,type Library,type Model,type SceneDocument} from "./document.ts";
 import {plugins} from "../domains/registry.ts";
 import {evaluate} from "../engine/evaluate.ts";
 import {loadSceneDocuments} from "../scene/load.ts";
 
-const edge=edgeSession();
-test("추천 탭에서 달성한 목표와 비용을 확인한 사본을 그대로 저장한다",{timeout:30_000},async()=>{
+test("추천 탭에서 달성한 목표와 비용을 확인한 사본을 그대로 저장한다",{timeout:30_000},async t=>{
+  const edge = await testEdgeSession(t);
   const {page,errors}=await edge.newPage("/");
   try {
     const origin=new URL(page.url()).origin;
@@ -52,7 +52,8 @@ test("추천 탭에서 달성한 목표와 비용을 확인한 사본을 그대�
 });
 
 
-test("추천 탭은 최대 여덟 편집을 검산하고 미완료 사유와 퀘스트를 보여 준다", { timeout: 35_000 }, async () => {
+test("추천 탭은 최대 여덟 편집을 검산하고 미완료 사유와 퀘스트를 보여 준다", { timeout: 35_000 }, async t => {
+  const edge = await testEdgeSession(t);
   const { page, errors } = await edge.newPage("/");
   page.setDefaultTimeout(7_000);
   try {
@@ -125,19 +126,26 @@ test("추천 탭은 최대 여덟 편집을 검산하고 미완료 사유와 퀘
 
 
 
-async function reviewCard(page: Page, model: Model, doc: SceneDocument) {
+async function putReviewInputs(page: Page, inputs: readonly (readonly [string, unknown])[]) {
   const origin = new URL(page.url()).origin;
-  const item = { instanceId: "review-" + model.revision, modelId: model.modelId, revision: model.revision, state: "owned" };
-  const inputs = [["/api/models/" + model.modelId + "/" + model.revision, model],
-    ["/api/inventory/" + item.instanceId, item], ["/api/scenes/" + doc.sceneId, doc]] as const;
   for (const [path, data] of inputs) {
     const response = await page.request.put(origin + path, { headers: { Origin: origin }, data });
     assert.ok(response.ok(), await response.text());
   }
+}
+
+async function openReviewScene(page: Page, sceneId: string) {
   await page.reload();
   await page.locator(".surface").waitFor();
-  await page.getByLabel("장면", { exact: true }).selectOption(doc.sceneId);
+  await page.getByLabel("장면", { exact: true }).selectOption(sceneId);
   await waitForAssessment(page);
+}
+
+async function reviewCard(page: Page, model: Model, doc: SceneDocument) {
+  const item = { instanceId: "review-" + model.revision, modelId: model.modelId, revision: model.revision, state: "owned" };
+  await putReviewInputs(page, [["/api/models/" + model.modelId + "/" + model.revision, model],
+    ["/api/inventory/" + item.instanceId, item], ["/api/scenes/" + doc.sceneId, doc]]);
+  await openReviewScene(page, doc.sceneId);
   await page.getByRole("button", { name: "추천", exact: true }).click();
   const panel = page.locator(".recommendations");
   await panel.getByText(/^후보 \d+개 중 \d+개 확인$/).waitFor();
@@ -146,7 +154,8 @@ async function reviewCard(page: Page, model: Model, doc: SceneDocument) {
   return card;
 }
 
-test("추천 카드에 모든 시나리오의 작업 판정과 목표 회귀를 표시한다", { timeout: 30_000 }, async () => {
+test("추천 카드에 모든 시나리오의 작업 판정과 목표 회귀를 표시한다", { timeout: 30_000 }, async t => {
+  const edge = await testEdgeSession(t);
   const { page, errors } = await edge.newPage("/");
   try {
     const origin = new URL(page.url()).origin;
@@ -174,7 +183,8 @@ test("추천 카드에 모든 시나리오의 작업 판정과 목표 회귀를 
   } finally { await page.close(); }
 });
 
-test("조건부 추천에서 값마다 실물과 포트를 확인하는 퀘스트를 연다", { timeout: 30_000 }, async () => {
+test("조건부 추천에서 값마다 실물과 포트를 확인하는 퀘스트를 연다", { timeout: 30_000 }, async t => {
+  const edge = await testEdgeSession(t);
   const { page, errors } = await edge.newPage("/");
   try {
     const origin = new URL(page.url()).origin;
@@ -184,7 +194,9 @@ test("조건부 추천에서 값마다 실물과 포트를 확인하는 퀘스�
     model.revision = "two-links";
     model.name = "시험 포트 둘 스위치";
     for (const [id, value, alternate] of [["lan-a", "1000BASE-T", "100BASE-TX"], ["lan-b", "100BASE-TX", "1000BASE-T"]] as const) {
-      const claim = model.ports.find(p => p.id === id)!.interfaces[0]!.params.baseTModes!;
+      const port = model.ports.find(p => p.id === id)!;
+      port.label = "LAN";
+      const claim = port.interfaces[0]!.params.baseTModes!;
       claim.value = value;
       claim.conflicts = [{ value: alternate, confidence: "review", sources: [...claim.sources] }];
     }
@@ -194,15 +206,88 @@ test("조건부 추천에서 값마다 실물과 포트를 확인하는 퀘스�
     const card = await reviewCard(page, model, doc);
     await card.getByText(/이 조건에서 가능.*전송 확보/).waitFor();
     const text = await card.innerText();
-    assert.match(text, /시험 포트 둘 스위치 · lan-a · Ethernet · 지원 BASE-T 모드 = 1000BASE-T/);
-    assert.match(text, /시험 포트 둘 스위치 · lan-b · Ethernet · 지원 BASE-T 모드 = 100BASE-TX/);
-    const button = card.getByRole("button", { name: /lan-a.*확인 퀘스트/ });
+    assert.match(text, /시험 포트 둘 스위치 · LAN \(lan-a\) · Ethernet · 지원 BASE-T 모드 = 1000BASE-T/);
+    assert.match(text, /시험 포트 둘 스위치 · LAN \(lan-b\) · Ethernet · 지원 BASE-T 모드 = 100BASE-TX/);
+    const button = card.getByRole("button", { name: "시험 포트 둘 스위치 · LAN (lan-a) · Ethernet · 지원 BASE-T 모드 확인 퀘스트", exact: true });
+    assert.equal(await card.getByRole("button", { name: "시험 포트 둘 스위치 · LAN (lan-b) · Ethernet · 지원 BASE-T 모드 확인 퀘스트", exact: true }).count(), 1);
     await button.click();
     const detail = card.getByRole("region", { name: /lan-a.*확인 퀘스트/ });
     await detail.waitFor();
     assert.match(await detail.innerText(), /1000BASE-T/);
     assert.equal(await card.getByRole("region", { name: /lan-b.*확인 퀘스트/ }).count(), 0);
-    await card.screenshot({ path: "work/recommend-condition-targets.png" });
+    await card.screenshot({ path: "work/recommend-duplicate-port-labels.png" });
+
+    const open = structuredClone(model);
+    open.revision = "two-links-unverified";
+    for (const port of open.ports.filter(p => p.label === "LAN")) {
+      const claim = port.interfaces[0]!.params.baseTModes!;
+      Object.assign(claim, { value: null, confidence: "unknown" });
+      delete claim.conflicts;
+    }
+    doc.sceneId = "test-port-checklist";
+    doc.items.find(item => item.instanceId === "router")!.revision = open.revision;
+    await putReviewInputs(page, [["/api/models/" + open.modelId + "/" + open.revision, open], ["/api/scenes/" + doc.sceneId, doc]]);
+    await openReviewScene(page, doc.sceneId);
+    await page.getByRole("button", { name: "목표 체크리스트", exact: true }).click();
+    const checklist = page.getByRole("dialog", { name: "목표 체크리스트" });
+    await checklist.getByRole("button", { name: /LAN \(lan-a\).*지원 BASE-T 모드 확인 퀘스트 열기/ }).click();
+    const quests = page.getByRole("dialog", { name: "검증 퀘스트" });
+    for (const id of ["lan-a", "lan-b"]) {
+      await quests.locator("summary").filter({ hasText: new RegExp("LAN \\(" + id + "\\).*Ethernet") }).waitFor();
+    }
+    assert.deepEqual(errors, []);
+  } finally { await page.close(); }
+});
+
+
+
+test("전달량 상한만 줄면 정보로 표시하고 보장 하한이 줄 때만 순위를 낮춘다", { timeout: 30_000 }, async t => {
+  const edge = await testEdgeSession(t);
+  const { page, errors } = await edge.newPage("/");
+  try {
+    const origin = new URL(page.url()).origin;
+    const library = await (await page.request.get(origin + "/api/library")).json() as Library;
+    const doc = await (await page.request.get(origin + "/api/scenes/network")).json() as SceneDocument;
+    const source = structuredClone(library.models.find(m => m.modelId === "network-router")!);
+    source.revision = "range-before";
+    source.name = "시험 원본 스위치";
+    function addPortLimit(port: string, value: number, upper?: number) {
+      const resource = structuredClone(source.resources[0]!);
+      resource.id = port + "-limit";
+      resource.capacity.value = value;
+      if (upper !== undefined) resource.capacity.conflicts = [{ value: upper, confidence: "review", sources: [...resource.capacity.sources] }];
+      source.resources.push(resource);
+      const edge = source.edges.find(e => e.id === port + "-fabric")!;
+      edge.uses.push({ resource: resource.id, evidence: edge.evidence });
+    }
+    addPortLimit("lan-a", 300);
+    addPortLimit("lan-b", 600, 800);
+    const wide = structuredClone({ ...source, revision: "range-kept", name: "시험 범위 유지 스위치" });
+    wide.resources.find(r => r.id === "lan-a-limit")!.capacity.value = 1000;
+    const narrow = structuredClone({ ...wide, revision: "range-upper", name: "시험 상한 축소 스위치" });
+    narrow.resources.find(r => r.id === "lan-b-limit")!.capacity.conflicts![0]!.value = 700;
+    const lower = structuredClone({ ...wide, revision: "range-lower", name: "시험 하한 축소 스위치" });
+    lower.resources.find(r => r.id === "lan-b-limit")!.capacity.value = 550;
+    const goal = { kind: "metric", metric: "delivery", unit: "Mbps", run: "together" } as const;
+    doc.sceneId = "recommend-ranges";
+    doc.items.find(i => i.instanceId === "router")!.revision = source.revision;
+    doc.scenarios = [
+      { id: "a-use", name: "A 작업", members: ["lan-a"], goals: [{ ...goal, id: "A-800", minimum: 800, workloads: ["lan-a"] }] },
+      { id: "b-use", name: "B 작업", members: ["lan-b"], goals: [{ ...goal, id: "B-500", minimum: 500, workloads: ["lan-b"] }] },
+    ];
+    await putReviewInputs(page, [source, wide, lower].map(model => ["/api/models/" + model.modelId + "/" + model.revision, model]));
+    const card = await reviewCard(page, narrow, doc);
+    const text = await card.innerText();
+    assert.match(text, /이 아이템으로 해결 · A-800/);
+    assert.match(text, /B 작업 · lan-b · 동시 · 전달량 상한 감소 · .*조건부 · 600–800 Mbps → .*조건부 · 600–700 Mbps/);
+    assert.doesNotMatch(text, /다른 작업이 깨짐|B-500|미달/);
+    const cards = page.locator(".recommendations").getByRole("article");
+    assert.match(await cards.first().innerText(), /시험 상한 축소 스위치/);
+    const lowerText = await cards.filter({ hasText: lower.name }).innerText();
+    assert.match(lowerText, /목표는 달성, 다른 작업이 깨짐 · A-800/);
+    assert.match(lowerText, /B 작업 · lan-b · 동시 · .*조건부 · 600–800 Mbps → .*조건부 · 550–800 Mbps/);
+    assert.doesNotMatch(lowerText, /B-500|미달/);
+    await card.screenshot({ path: "work/recommend-upper-bound.png" });
     assert.deepEqual(errors, []);
   } finally { await page.close(); }
 });

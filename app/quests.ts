@@ -85,6 +85,12 @@ function itemName(view: ResultView, index: number) {
   return item.alias || scene.models[item.model]!.name;
 }
 
+function questPortName(view: ResultView, port: ResultView["scene"]["ports"][number]) {
+  const label = port.label || port.id;
+  const duplicate = view.scene.ports.some(other => other.item === port.item && other.id !== port.id && (other.label || other.id) === label);
+  return duplicate ? label + " (" + port.id + ")" : label;
+}
+
 function measurementTarget(view: ResultView, c: Claim) {
   const { scene } = view;
   const registration = domains.find(({ plugin }) => plugin.id === c.domain);
@@ -108,7 +114,7 @@ function measurementTarget(view: ResultView, c: Claim) {
     : shape?.properties?.[c.field] ?? shape?.additionalProperties;
   return {
     property: typeof property === "object" ? property : undefined,
-    subject: [itemName(view, item), port?.label || port?.id || resource?.id, iface?.protocol, c.condition].filter(Boolean).join(" · "),
+    subject: [itemName(view, item), port ? questPortName(view, port) : resource?.id, iface?.protocol, c.condition].filter(Boolean).join(" · "),
     target, template,
   };
 }
@@ -171,7 +177,7 @@ function quests(view: ResultView, saved: SceneDocument) {
       const ends = [connection.from, connection.to].map(p => {
         const item = scene.items.findIndex(i => i.id === p.instanceId);
         const port = scene.ports.find(port => port.item === item && port.id === p.id);
-        return itemName(view, item) + "/" + (port?.label || p.id);
+        return itemName(view, item) + "/" + (port ? questPortName(view, port) : p.id);
       });
       const subject = `${id} · ${ends.join(" → ")}`;
       const affected = observation.mode ? view.workloads.filter(w => w.steps.some(s => {

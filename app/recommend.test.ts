@@ -124,9 +124,10 @@ test("T5 업링크는 그대로인데 동시 작업이 끊긴 교체를 온전�
   const cards = f.edits().edits.map(edit => reviewRecommendation(before, f.snapshot(edit.document), edit, f.scenario.id)!)
     .sort(rankRecommendations);
   assert.deepEqual(cards.map(card => card.edit.model.revision), [fast.revision, broken.revision]);
-  const { workloadRegressions } = cards[1]!;
-  const loss = workloadRegressions.find(r => r.scenario === f.scenario.id && r.workload === "lan-b")!;
+  const { workloadChanges } = cards[1]!;
+  const loss = workloadChanges.find(r => r.scenario === f.scenario.id && r.workload === "lan-b")!;
   const together = loss.runs.find(r => r.run === "together")!;
+  assert.equal(together.regression, true);
   assert.deepEqual([together.before.verdict, together.before.delivery?.value, together.after?.verdict, together.after?.delivery?.value],
     ["conditional", 600, "impossible", 0]);
 });
@@ -143,8 +144,9 @@ test("T5 다른 시나리오에서 같은 목표 ID와 작업의 전달량을 �
   const card = reviewRecommendation(f.snapshot(f.doc), f.snapshot(edit.document), edit, f.scenario.id)!;
   assert.deepEqual(card.goalRegressions, [{ scenario: "b-alone", goal: sharedId,
     before: "ok", after: "impossible" }]);
-  const loss = card.workloadRegressions.find(r => r.scenario === "b-alone" && r.workload === "lan-b")!;
+  const loss = card.workloadChanges.find(r => r.scenario === "b-alone" && r.workload === "lan-b")!;
   const together = loss.runs.find(r => r.run === "together")!;
+  assert.equal(together.regression, true);
   assert.deepEqual([together.before.delivery?.value, together.after?.delivery?.value], [900, 0]);
 });
 
