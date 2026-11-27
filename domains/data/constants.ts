@@ -84,10 +84,6 @@ export const THUNDERBOLT_3_DATA_ONLY_EXAMPLE_GBPS = 22;
 // 출처: USB-IF USB Type-C Cable Logo Usage Guidelines, USB Type-C Spec Release 2.5 표 3-1, USB-IF Compliance Updates “Cables and Connectors” (신뢰도: official)
 export const USB_C_CABLE_DATA_RATINGS_GBPS = [0.48, 5, 10, 20, 40, 80] as const;
 
-// 최신 규격의 5 A 등급은 EPR 대응이다. 실제 사용할 전류는 포트와 PD 협상에 달려 있다.
-// 출처: USB Type-C Cable and Connector Specification Release 2.5 §3.1.2 및 표 3-1 (신뢰도: official)
-export const USB_C_CABLE_CURRENT_RATINGS_A = [3, 5] as const;
-
 // C-to-C 패시브 케이블의 참고 길이다. 적합 여부는 전기적 성능으로 판정한다.
 // 출처: USB Type-C Cable and Connector Specification Release 2.5 표 3-1 및 주 2–3 (신뢰도: official)
 export const USB_C_PASSIVE_CABLE_PRACTICAL_LENGTHS = [
