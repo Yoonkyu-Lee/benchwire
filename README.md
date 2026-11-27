@@ -20,6 +20,8 @@ npm run check   # 형 검사(tsc), 전체 시험(node --test), 게이트(tools/g
 | `typescript` (dev) | 형 검사만 한다. 실행은 Node가 형을 지워서 한다 |
 | `@types/node` (dev) | Node 내장 모듈의 형 |
 | `zod` | 아이템·장면 파일과 영역별 입력을 로드할 때 검증한다 |
+| `vite` (dev) | 브라우저 작업대를 개발 중에 띄우고 배포할 정적 파일을 빌드한다 |
+| `playwright` (dev) | 설치된 Edge에서 캔버스 조작과 프레임 시간을 검증한다 |
 
 ## 기술 스택 (M0, 2026-11-26 승인)
 

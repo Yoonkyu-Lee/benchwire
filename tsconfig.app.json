@@ -1,0 +1,10 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "lib": ["esnext", "dom", "dom.iterable"],
+    "types": ["node", "vite/client"],
+    "resolveJsonModule": true
+  },
+  "include": ["app/**/*.ts"],
+  "exclude": ["node_modules", "work", "userdata", "dist"]
+}

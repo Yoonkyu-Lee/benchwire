@@ -20,5 +20,5 @@
     "skipLibCheck": true
   },
   "include": ["**/*.ts"],
-  "exclude": ["node_modules", "work", "userdata"]
+  "exclude": ["node_modules", "work", "userdata", "dist", "app"]
 }

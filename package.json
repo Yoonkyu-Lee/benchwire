@@ -7,13 +7,18 @@
   },
   "scripts": {
     "check": "npm run typecheck && npm test && npm run gate",
-    "typecheck": "tsc --noEmit -p .",
+    "typecheck": "tsc --noEmit -p . && tsc --noEmit -p tsconfig.app.json",
     "test": "node --test \"**/*.test.ts\"",
-    "gate": "node tools/gate.ts"
+    "gate": "node tools/gate.ts",
+    "dev": "vite app --host 127.0.0.1",
+    "build:app": "vite build app --outDir ../dist/app --emptyOutDir",
+    "test:ui": "node --test app/canvas.ui.ts"
   },
   "devDependencies": {
     "@types/node": "26.6.11",
-    "typescript": "7.0.2"
+    "playwright": "1.65.1",
+    "typescript": "7.0.2",
+    "vite": "8.4.0"
   },
   "dependencies": {
     "zod": "4.6.7"
