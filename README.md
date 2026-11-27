@@ -123,7 +123,7 @@ node fixtures/demo.ts compare fixtures/compare/before.json fixtures/compare/afte
    powershell.exe -NoProfile -File .\collector\collect.ps1 -Out "$env:TEMP\benchwire-collect.json"
    ```
 
-   `-Out`을 생략하면 같은 임시 경로를 쓴다. 기존 파일을 보존하려면 다른 JSON 경로를 지정한다. 정책이 Restricted이거나 AllSigned에서 서명 검사를 통과하지 못하면 장치 관리자와 고급 디스플레이 설정에서 값을 확인해 퀘스트에 입력한다.
+   `-Out`을 생략하면 같은 임시 경로를 쓴다. 출력에는 로컬 드라이브의 절대 `.json` 경로를 지정한다. 기존 파일을 보존하려면 다른 이름을 사용한다. Windows PowerShell 5.1의 `Add-Type`은 C#을 컴파일할 때 시스템 임시 파일을 만들고 컴파일러 프로세스를 실행한다. 정책이 Restricted이거나 AllSigned에서 서명 검사를 통과하지 못하면 장치 관리자와 고급 디스플레이 설정에서 값을 확인해 퀘스트에 입력한다.
 2. **수집 JSON 가져오기**에서 파일을 고른다. 로컬 서버가 검증한 원본을 `userdata/collect/`에 보관한다. 이름·VID/PID·부모·위치 경로로 행을 찾아 장면의 실물과 포트를 직접 고른다. USB 부모와 출력 GPU의 내부 배선을 기록할 때는 측정된 부모 또는 GPU가 선택한 포트에 직접 붙은 내부 노드인지도 확인한다.
 3. 수집 당시와 현재 배선이 같은지 확인한 뒤 끝점과 중간 부품의 펌웨어와 측정 조건을 입력한다. 실제로 적용할 항목이 없는 칸만 **해당 없음**을 고른다. **확인한 측정 적용**으로 장면에 저장한다. 예제는 개인 사본으로 열린다. 같은 파일을 다시 열면 여전히 같은 배선·조건인 맞춤을 보여 준다.
 

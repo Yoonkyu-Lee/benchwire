@@ -89,7 +89,9 @@ test("T7 같은 모델·VID/PID의 NIC 중 지정한 배선만 1 Gbps가 되고 
     assert.equal(delivered,wire.observations ? 1000*(1500/1538) : 2000);
     return [0,1].map(connection=>{
       const option=r.options.find(o=>o.connection===connection && o.domain==="network" && o.mode==="mac" && o.direction==="forward")!;
-      return {limit:option.limit,observed:option.inputs.some(i=>scene.claims[i]!.field==="linkSpeed")};
+      const cited = option.inputs.find(i=>scene.claims[i]!.field==="linkSpeed");
+    assert.equal(option.observation,cited);
+    return {limit:option.limit,observed:cited!==undefined};
     });
   };
   // 같은 관측을 두 번 가져와도 같은 출처 행 하나로 평가한다.

@@ -1308,6 +1308,89 @@ test("이더넷 링크 속도 퀘스트는 선택한 배선만 좁히고 측정 
     assert.deepEqual(obs[0]!.ports.map(p => p.id), ["lan", "a", "b", "lan-a"]);
     assert.deepEqual(obs[0]!.ports.slice(1, 3).map(p => [p.firmware, p.measurementCondition]), [[null, null], [null, null]]);
     assert.equal(saved.connections[1]!.observations, undefined);
+    await open.click();
+    const summary = panel.locator("details.quest-card > summary").filter({ hasText: /^이더넷 링크 속도 · lan-a ·/ });
+    const card = summary.locator("..");
+    if (await card.getAttribute("open") === null) await summary.click();
+    await card.getByLabel("이더넷 링크 속도 (Mbps)", { exact: true }).selectOption({ label: "2500" });
+    await card.getByRole("button", { name: "검증값 저장" }).click();
+    await panel.getByRole("button", { name: "닫기" }).click();
+    await page.getByText("저장됨", { exact: true }).waitFor();
+    const rechecked = (await readStored(page, id)).document;
+    const verified = rechecked.connections[0]!.observations![0]!.claim;
+    const source = rechecked.sources.find(s => s.id === verified.sources[0])!;
+    const comparison = new URLSearchParams(source.locator.slice("verification:".length));
+    assert.equal(verified.value, 2500);
+    assert.equal(comparison.get("prediction"), "2500 Mbps");
+    assert.equal(comparison.get("different"), null);
+    assert.deepEqual(errors, []);
+  } finally { await page.close(); }
+});
+
+test("이더넷 예측은 관측과 함께 입력한 측정 조건에 맞는 주장을 쓴다", async () => {
+  const { page } = await newPage("/");
+  const id = "quest-new-scope";
+  try {
+    const document = JSON.parse(readFileSync("fixtures/network/scene.json", "utf8")) as SceneDocument;
+    document.sceneId = id;
+    for (const item of document.items) {
+      if (item.instanceId !== "lan-b-wire") {
+        item.firmware = null;
+        item.measurementCondition = null;
+      }
+    }
+    document.personal = [{ instanceId: "lan-b-wire", ownerKind: "item", ownerId: "lan-b-wire",
+      domain: "network", field: "length",
+      claim: { value: 150, unit: "m", confidence: "user_verified", sources: [document.sources[0]!.id] } }];
+    await saveFromAnotherTab(page, document);
+    await openStored(page, id);
+    await page.getByRole("button", { name: "검증 퀘스트", exact: true }).click();
+    const panel = page.getByRole("dialog", { name: "검증 퀘스트" });
+    const summary = panel.locator("details.quest-card > summary").filter({ hasText: /^이더넷 링크 속도 · lan-b ·/ });
+    await summary.click();
+    const card = summary.locator("..");
+    await card.getByLabel("현재 펌웨어 · lan-b-wire 상태", { exact: true }).selectOption("none");
+    await card.getByLabel("측정 조건 · lan-b-wire 상태", { exact: true }).selectOption("none");
+    await card.getByLabel("이더넷 링크 속도 (Mbps)", { exact: true }).selectOption({ label: "1000" });
+    await card.getByRole("button", { name: "검증값 저장" }).click();
+    await panel.getByRole("button", { name: "닫기" }).click();
+    await page.getByText("저장됨", { exact: true }).waitFor();
+    const saved = (await readStored(page, id)).document;
+    const observed = saved.connections[1]!.observations![0]!.claim;
+    const source = saved.sources.find(s => s.id === observed.sources[0])!;
+    const comparison = new URLSearchParams(source.locator.slice("verification:".length));
+    assert.equal(comparison.get("prediction"), "1000 Mbps");
+    assert.equal(comparison.get("different"), null);
+  } finally { await page.close(); }
+});
+
+test("검증 퀘스트에서 쓰지 않는 증거를 확인하고 선택한 항목만 지운다", async () => {
+  const { page, errors } = await newPage("/");
+  try {
+    const origin = new URL(page.url()).origin;
+    async function attachNote(note: string) {
+      const response = await page.request.post(origin + "/api/evidence", {
+        headers: { Origin: origin }, multipart: { note },
+      });
+      assert.equal(response.status(), 201);
+    }
+    await attachNote("선택할 검증 메모");
+    await attachNote("남겨둘 검증 메모");
+    await page.getByRole("button", { name: "검증 퀘스트", exact: true }).click();
+    const panel = page.getByRole("dialog", { name: "검증 퀘스트" });
+    await panel.getByText("쓰지 않는 증거 정리", { exact: true }).click();
+    const choice = panel.getByRole("checkbox", { name: "선택할 검증 메모", exact: true });
+    const kept = panel.getByRole("checkbox", { name: "남겨둘 검증 메모", exact: true });
+    const remove = panel.getByRole("button", { name: "선택한 증거 지우기" });
+    await kept.waitFor();
+    assert(await remove.isDisabled());
+    await choice.check();
+    assert(await remove.isEnabled());
+    await page.screenshot({ path: "work/m5-evidence-cleanup.png" });
+    await remove.click();
+    await choice.waitFor({ state: "detached" });
+    await kept.waitFor();
+    assert(await remove.isDisabled());
     assert.deepEqual(errors, []);
   } finally { await page.close(); }
 });

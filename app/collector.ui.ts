@@ -14,6 +14,8 @@ test("같은 VID/PID의 두 어댑터 중 고른 한 행만 예제 사본에 적
     const panel = page.getByRole("dialog",{name:"Windows 수집기"});
     await panel.getByText("실행 방법과 대본 전문").click();
     assert.match(await panel.locator("pre").innerText(),/QueryDisplayConfig/);
+    assert.equal(await panel.getByText(/로컬 드라이브의 절대 .json 경로에 씁니다.*임시 파일.*컴파일러 프로세스/).count(), 1);
+    await page.screenshot({path:resolve("work/m5-collector-disclosure.png")});
     await panel.getByText("실행 방법과 대본 전문").click();
     await panel.locator('input[type="file"]').setInputFiles(file);
     const target = panel.getByRole("combobox",{name:"NIC 회선 속도 USB\\TEST_A"});

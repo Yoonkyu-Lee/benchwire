@@ -141,7 +141,7 @@ test("T8 퀘스트 증거는 같은 출처의 짧은 메모와 제한된 이미�
 });
 
 
-test("실패한 장면 저장의 첨부만 재시작할 때 제거한다", async t => {
+test("T8 재시작 때 저장 중인 증거를 지키고 사용자가 고른 미사용 증거만 정리한다", async t => {
   const files = workspace(t);
   const server = await files.open();
   const png = Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+nm6kAAAAASUVORK5CYII=", "base64");
@@ -163,12 +163,37 @@ test("실패한 장면 저장의 첨부만 재시작할 때 제거한다", async
   assert.equal(saved.status, 201);
   const failed = await server.put("/api/scenes/evidence-kept", { ...scene, sources: [...example.sources, source(orphan)] }, '"expired"');
   assert.equal(failed.status, 412);
+  const pending = await attach("장면 저장 전");
+  const link = await attach("미리보기 후 참조");
   await server.close();
   const restarted = await files.open();
   assert.equal((await restarted.get(kept)).status, 200);
+  assert.equal((await restarted.get(pending)).status, 200);
+  assert.equal((await restarted.get(orphan)).status, 200);
+  const ids = [orphan, link].map(path => path.split("/").at(-1)!);
+  const listing = await restarted.get("/api/evidence/unused");
+  assert.equal(listing.status, 200);
+  const unused = await listing.json() as { id: string; note?: string }[];
+  assert.deepEqual(unused.find(row => row.id === ids[0]), { id: ids[0], note: "장면 저장 실패", photo: true });
+  assert(!unused.some(row => row.id === kept.split("/").at(-1)));
+  const update = await restarted.put("/api/scenes/evidence-kept", { ...scene, sources: [...scene.sources,
+    { ...source(pending), id: "pending" }, { ...source(link), id: "linked-later" }] }, saved.headers.get("ETag")!);
+  assert.equal(update.status, 204);
+  function clean(selected: string[], origin = restarted.origin) {
+    return fetch(restarted.origin + "/api/evidence/unused", { method: "POST", headers: { Origin: origin,
+      "Content-Type": "application/json" }, body: JSON.stringify({ ids: selected }) });
+  }
+  assert.equal((await clean(ids, "https://example.invalid")).status, 403);
+  assert.equal((await clean(["../사진"])).status, 422);
+  assert.equal((await clean(ids)).status, 204);
   assert.equal((await restarted.get(orphan)).status, 404);
-  const hash = kept.split("/").at(-1)!;
-  assert.deepEqual(readdirSync(join(files.dataDir, "evidence")).sort(), [hash, hash + ".txt"]);
+  assert.equal((await restarted.get(link)).status, 200);
+  assert.equal((await restarted.get(pending)).status, 200);
+  const filesKept = [kept, link, pending].flatMap(path => {
+    const id = path.split("/").at(-1)!;
+    return [id, id + ".txt"];
+  });
+  assert.deepEqual(readdirSync(join(files.dataDir, "evidence")).sort(), filesKept.sort());
 });
 
 test("같은 ETag를 읽은 두 탭 중 한 저장만 성공하고 잘못된 장면은 원본을 보존한다", async t => {

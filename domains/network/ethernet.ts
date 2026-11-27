@@ -1,8 +1,8 @@
 // 공통 BASE-T 모드, 설치 채널의 도달 거리와 태그 없는 MAC 페이로드 한도를 협상한다.
-import type { Link, Option } from "../../engine/contract.ts";
+import { effectiveClaim, type Link, type Option } from "../../engine/contract.ts";
 import { COPPER_CATEGORIES, ETHERNET_BASE_T_RATES, ETHERNET_COPPER_CHANNEL_REACH, MAC_PAYLOAD_FRACTION } from "./constants.ts";
 import { channelPortsMatch, networkInterface, readNetworkClaim } from "./evidence.ts";
-import { ETHERNET, MAC, MBPS, parseBaseTModes } from "./input.ts";
+import { ETHERNET, MAC, MBPS, NETWORK, parseBaseTModes } from "./input.ts";
 import { BASE_T, CAT6_REACH, FRAMING, REACH } from "./sources.ts";
 
 type Mode = (typeof ETHERNET_BASE_T_RATES)[number]["mode"];
@@ -59,7 +59,10 @@ export function negotiateEthernet({ scene, connection, ports }: Link): Option {
     length: partialLength,
   };
 
-  const observed = readNetworkClaim(scene,inputs,"connection",connection,"linkSpeed");
+  const observation = effectiveClaim(scene, "connection", connection, NETWORK, "linkSpeed");
+  const observed = observation === undefined ? null : scene.claims[observation]!.value;
+  if (observation !== undefined) inputs.push(observation);
+  const observedOption = typeof observed === "number" && observation !== undefined ? { observation } : {};
   const candidates = ETHERNET_BASE_T_RATES.flatMap(rate => {
     if (typeof observed === "number") return rate.lineMbps === observed
       ? [{...rate,confirmed:"ok" as const,possible:"ok" as const}] : [];
@@ -84,7 +87,7 @@ export function negotiateEthernet({ scene, connection, ports }: Link): Option {
   if (!modeKnown || !measured && best.confirmed !== best.possible) {
     const guaranteed = candidates.findLast(candidate => candidate.confirmed === "ok");
     const low = modeKnown && guaranteed ? guaranteed.lineMbps * MAC_PAYLOAD_FRACTION : 0;
-    return { ...base, limit: null, bounds: { low, high: limit }, verdict: "unknown", specs: [...specs, FRAMING],
+    return { ...base, ...observedOption, limit: null, bounds: { low, high: limit }, verdict: "unknown", specs: [...specs, FRAMING],
       rule: `포트 역할·지원 모드·채널 미확인에서 최대 ${best.mode} ${best.lineMbps} Mbps, MAC 페이로드 한도 ${low}–${limit} Mbps` };
   }
 
@@ -96,6 +99,6 @@ export function negotiateEthernet({ scene, connection, ports }: Link): Option {
   const rule = `${best.mode} (${best.amendment}) 회선 ${best.lineMbps} Mbps · ${channel} · MAC 페이로드 ${limit} Mbps` +
     (unusedLine > 0 ? ` · 포트 미사용 회선 성능 ${unusedLine} Mbps` : "");
   const condition = best.confirmed === "conditional" ? rule + " · 설치 채널의 외래 누화 등 도달 거리 조건 확인 및 필요한 완화 적용" : "";
-  return { ...base, limit, ...(unusedLine > 0 ? { unused: unusedLine * MAC_PAYLOAD_FRACTION } : {}),
+  return { ...base, ...observedOption, limit, ...(unusedLine > 0 ? { unused: unusedLine * MAC_PAYLOAD_FRACTION } : {}),
     condition, rule, verdict: condition ? "conditional" : "ok", specs: [...specs, FRAMING] };
 }

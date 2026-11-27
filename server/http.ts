@@ -6,7 +6,7 @@ import { createServer, type IncomingMessage, type ServerResponse } from "node:ht
 import { extname, join, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { collect } from "./collect.ts";
-import { evidence, removeUnlinkedEvidence } from "./evidence.ts";
+import { evidence, unusedEvidence } from "./evidence.ts";
 import { LibraryError, openLibrary, sceneIdPattern } from "./library.ts";
 import { configuredResearchClient, openResearch } from "./research.ts";
 
@@ -71,7 +71,7 @@ function staticFile(buildDir: string, path: string, response: ServerResponse): b
 export async function startServer({ port = PORT, dataDir = join(ROOT, "userdata"), buildDir = join(ROOT, "dist", "app"),
   researchClient = configuredResearchClient(ROOT) } = {}) {
   const library = openLibrary(ROOT, dataDir);
-  const { scenes, connectors } = library.describe();
+  const { connectors } = library.describe();
   const research = openResearch(dataDir, connectors, researchClient);
   async function handle(request: IncomingMessage, response: ServerResponse) {
     response.setHeader("X-Content-Type-Options", "nosniff");
@@ -82,6 +82,17 @@ export async function startServer({ port = PORT, dataDir = join(ROOT, "userdata"
     const origin = "http://" + host;
     const path = request.url?.split("?", 1)[0] ?? "/";
     const method = request.method;
+    if (path === "/api/evidence/unused" && (method === "GET" || method === "POST")) {
+      const selection = method === "POST" ? await readJson(request, origin) : undefined;
+      const scenes = library.describe().scenes.flatMap(({ id }) => {
+        const scene = library.readScene(id);
+        return scene ? [scene.text] : [];
+      });
+      const unused = unusedEvidence(dataDir, scenes, selection);
+      if (method === "GET") response.writeHead(200, { "Content-Type": JSON_TYPE }).end(JSON.stringify(unused));
+      else response.writeHead(204).end();
+      return;
+    }
     if (path.startsWith("/api/evidence") && await evidence(request, response, dataDir, path, origin)) return;
     if (path === "/api/research" && (method === "GET" || method === "POST")) {
       const result = method === "GET" ? research.config : research.submit(await readJson(request, origin));
@@ -146,15 +157,6 @@ export async function startServer({ port = PORT, dataDir = join(ROOT, "userdata"
   });
   server.listen(port, HOST);
   await once(server, "listening");
-  try {
-    removeUnlinkedEvidence(dataDir, scenes.flatMap(({ id }) => {
-      const scene = library.readScene(id);
-      return scene ? [scene.text] : [];
-    }));
-  } catch (error) {
-    server.close();
-    throw error;
-  }
   return server;
 }
 

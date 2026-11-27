@@ -4,8 +4,9 @@ import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { z } from "zod";
 import { captureFile, type Capture, type Match } from "../collector/capture.ts";
-import { domains } from "../domains/registry.ts";
-import { measurementPorts, recordMeasurement, type MeasurementTarget } from "../scene/measurement.ts";
+import { domains, plugins } from "../domains/registry.ts";
+import { loadSceneDocuments } from "../scene/load.ts";
+import { measurementPorts, measurementPrediction, recordMeasurement, verificationLocator, type MeasurementTarget } from "../scene/measurement.ts";
 import { sceneFile } from "../scene/files.ts";
 import { LibraryError, type openLibrary, sceneIdPattern, writeAtomic } from "./library.ts";
 
@@ -47,7 +48,8 @@ export function collect(dataDir: string, library: ReturnType<typeof openLibrary>
     if (!existsSync(path)) writeAtomic(path,JSON.stringify(capture,null,2)+"\n",true);
   }
   const scene: Scene = JSON.parse(saved.text);
-  const models = new Map(library.describe().models.map(m => [m.modelId+"@"+m.revision,m]));
+  const catalog = library.describe();
+  const models = new Map(catalog.models.map(m => [m.modelId+"@"+m.revision,m]));
   const devices = new Map(capture.devices.map(d => [d.id,d]));
   const picks = new Map(applying ? input.picks.map(p => [p.row,p.key]) : []);
   const contexts = new Map(applying ? input.contexts.map(c => [c.instanceId,c]) : []);
@@ -59,6 +61,8 @@ export function collect(dataDir: string, library: ReturnType<typeof openLibrary>
     const context = contexts.get(i.instanceId);
     return context ? {...i,...context} : i;
   })} : scene;
+  const beforeMeasurement = document;
+  let baseline: ReturnType<typeof loadSceneDocuments> | undefined;
   let additions = 0;
   const rows = capture.readings.map((r,row) => {
     const candidates: Match[] = [];
@@ -106,9 +110,13 @@ export function collect(dataDir: string, library: ReturnType<typeof openLibrary>
           const finalSource = sourcePrefix+matchKey(measured);
           const target:MeasurementTarget = node ? {instanceId:item.instanceId,ownerKind:"port",ownerId:port.id,domain:"",field:"attachment"}
             : {connection,domain,field:r.kind};
-          const source = {id:finalSource,title:"수집기",retrievedAt:capture.capturedAt.slice(0,10),
-            locator:`collect/${captureId}.json#readings/${row} · ${capture.capturedAt} · Windows ${capture.osBuild} · 드라이버 ${device.driver ?? "미확인"}`};
-          const next = recordMeasurement(document,target,{value:node?.id ?? r.value,unit:r.unit},source,"capture");
+          const metadata = new URLSearchParams({ os: "Windows " + capture.osBuild, driver: device.driver ?? "미확인",
+            note: "수집 원본 collect/" + captureId + ".json#readings/" + row + " · " + capture.capturedAt });
+          const source = { id:finalSource, title:"수집기", retrievedAt:capture.capturedAt.slice(0,10), locator:verificationLocator(metadata) };
+          baseline ??= loadSceneDocuments(beforeMeasurement, { connectors:catalog.connectors, models }, plugins);
+          const value = { value:node?.id ?? r.value, unit:r.unit };
+          const prediction = measurementPrediction(baseline, target, value.unit);
+          const next = recordMeasurement(document, target, value, source, "capture", prediction);
           if (!next) throw new LibraryError(409,"picks","같은 대상·조건의 기존 측정과 값이 다릅니다. 장면에서 기존 측정과 수집 당시 조건을 확인하세요.");
           document = next;
           additions++;

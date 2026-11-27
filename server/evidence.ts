@@ -3,6 +3,8 @@ import { createHash } from "node:crypto";
 import { lstatSync, readFileSync, readdirSync, unlinkSync } from "node:fs";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { join } from "node:path";
+import { z } from "zod";
+import { verificationSource } from "../scene/measurement.ts";
 import { sceneFile } from "../scene/files.ts";
 import { LibraryError, writeAtomic } from "./library.ts";
 
@@ -13,6 +15,8 @@ const BODY_LIMIT = LIMIT + 4096;
 const PNG = Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]);
 const JPEG = Buffer.from([255, 216, 255]);
 const FORMATS = ["image/png", "image/jpeg", "image/webp"];
+const storedName = /^([a-f0-9]{64})(\.txt)?$/;
+const removal = z.strictObject({ ids: z.array(z.string().regex(/^[a-f0-9]{64}$/)).nonempty() });
 
 function imageType(bytes: Buffer) {
   if (bytes.length >= 45 && bytes.subarray(0, 8).equals(PNG) && bytes.readUInt32BE(8) === 13
@@ -23,12 +27,15 @@ function imageType(bytes: Buffer) {
   return undefined;
 }
 
-export function removeUnlinkedEvidence(dataDir: string, savedScenes: readonly string[]) {
+export function unusedEvidence(dataDir: string, savedScenes: readonly string[], selection?: unknown) {
+  const selected = selection === undefined ? undefined : removal.safeParse(selection);
+  if (selected && !selected.success) throw new LibraryError(422, "ids", "목록에서 지울 증거를 선택하세요");
+  const ids = selected && new Set(selected.data.ids);
   const root = join(dataDir, "evidence");
   let files;
   try { files = readdirSync(root, { withFileTypes: true }); }
   catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") return;
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return [];
     throw error;
   }
   const linked = new Set<string>();
@@ -37,24 +44,35 @@ export function removeUnlinkedEvidence(dataDir: string, savedScenes: readonly st
     try { json = JSON.parse(text); }
     catch (error) {
       if (!(error instanceof SyntaxError)) throw error;
-      return;
+      throw new LibraryError(409, "증거", "읽을 수 없는 장면이 있어 증거를 정리할 수 없습니다");
     }
     const parsed = sceneFile.safeParse(json);
-    // 읽을 수 없는 장면이 있으면 그 장면의 첨부도 보존한다.
-    if (!parsed.success) return;
+    if (!parsed.success) throw new LibraryError(409, "증거", "읽을 수 없는 장면이 있어 증거를 정리할 수 없습니다");
     for (const { locator } of parsed.data.sources) {
-      if (!locator.startsWith("verification:")) continue;
-      const params = new URLSearchParams(locator.slice("verification:".length));
+      const params = verificationSource(locator);
+      if (!params) continue;
       for (const key of ["photo", "evidence"]) {
         const id = /^\/api\/evidence\/([a-f0-9]{64})$/.exec(params.get(key) ?? "")?.[1];
         if (id) linked.add(id);
       }
     }
   }
+  const unused = new Map<string, { id: string; note: string; photo: boolean }>();
   for (const file of files) {
-    const id = /^([a-f0-9]{64})(?:\.txt)?$/.exec(file.name)?.[1];
-    if (file.isFile() && id && !linked.has(id)) unlinkSync(join(root, file.name));
+    const match = storedName.exec(file.name);
+    const id = match?.[1];
+    if (!file.isFile() || !id || linked.has(id)) continue;
+    const path = join(root, file.name);
+    if (ids) {
+      if (ids.has(id)) unlinkSync(path);
+    } else {
+      const row = unused.get(id) ?? { id, note: "", photo: false };
+      if (match[2]) row.note = readFileSync(path, "utf8").slice(0, NOTE_LIMIT);
+      else row.photo = true;
+      unused.set(id, row);
+    }
   }
+  return [...unused.values()];
 }
 
 export async function evidence(request: IncomingMessage, response: ServerResponse, dataDir: string, path: string, origin: string) {

@@ -1,9 +1,26 @@
-﻿# 현재 장치 트리·링크·화면·배터리를 읽어 지정한 JSON 파일 하나에 쓴다. 저장 경로 기본값은 %TEMP%\benchwire-collect.json이다.
+﻿# 현재 장치 트리·링크·화면·배터리를 읽어 로컬 JSON으로 지정한 곳에 저장한다. Add-Type은 컴파일용 임시 파일을 쓴다.
 [CmdletBinding()]
 param([string]$Out = (Join-Path $env:TEMP 'benchwire-collect.json'))
 
 $ErrorActionPreference = 'Stop'
-if ($Out -notmatch '\.json$') { throw '출력 파일의 확장자는 .json이어야 합니다.' }
+if ($Out -notmatch '^[A-Za-z]:[\\/][^:]*\.json$') { throw '로컬 드라이브의 절대 .json 경로를 지정하세요.' }
+$Out = [IO.Path]::GetFullPath($Out)
+$root = [IO.Path]::GetPathRoot($Out)
+$drive = [IO.DriveInfo]::new($root)
+if ($drive.DriveType -notin @([IO.DriveType]::Fixed, [IO.DriveType]::Removable, [IO.DriveType]::Ram)) {
+    throw '로컬 드라이브의 .json 경로를 지정하세요.'
+}
+# 연결을 따라가면 로컬 드라이브의 이름으로 원격 경로에 쓸 수 있다.
+$entry = $root
+foreach ($part in $Out.Substring($root.Length).Split('\')) {
+    $entry = [IO.Path]::Combine($entry, $part)
+    try { $attributes = [IO.File]::GetAttributes($entry) }
+    catch [IO.FileNotFoundException] {
+        if ($entry -eq $Out) { break }
+        throw
+    }
+    if ($attributes -band [IO.FileAttributes]::ReparsePoint) { throw '링크를 거치지 않는 로컬 .json 경로를 지정하세요.' }
+}
 $capturedAt = Get-Date -Format o
 $devices = @{}
 $readings = @()

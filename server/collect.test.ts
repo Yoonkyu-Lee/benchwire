@@ -51,6 +51,10 @@ test("같은 VID/PID의 두 실물을 따로 맞추고 같은 배선·조건에�
   assert(scene.connections[0]!.observations![0]!.ports.every(p=>p.firmware===null));
   assert.equal(scene.personal?.length??0,0);
   assert.equal(scene.sources.filter((s:{title:string;locator:string})=>s.title==="수집기" && s.locator.includes("fixture-1")).length,2);
+  const changedSpeed = scene.sources.find(s => s.id === scene.connections[1]!.observations![0]!.claim.sources[0])!;
+  const comparison = new URLSearchParams(changedSpeed.locator.slice("verification:".length));
+  assert.equal(comparison.get("prediction"), "1000 Mbps");
+  assert.equal(comparison.get("different"), "1");
   const again=await (await post({...initial,sceneId:id})).json() as Preview;
   assert.deepEqual(again.rows.slice(0,2).map((r:{candidates:{applied:boolean}[]})=>r.candidates.filter(c=>c.applied).length),[1,1]);
   const saved=await (await post({...apply,sceneId:id,picks:again.rows.slice(0,2).map((r:{candidates:{applied:boolean;key:string}[]},row:number)=>({row,key:r.candidates.find(c=>c.applied)!.key}))},again.etag)).json();

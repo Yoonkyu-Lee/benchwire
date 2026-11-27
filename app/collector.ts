@@ -40,6 +40,7 @@ export function mountCollector(root:HTMLElement, sceneId:()=>string) {
       <p>현재 장치의 배선과 협상값을 읽습니다. 장치 목록·부모와 포트 경로, PCIe·USB·NIC 링크, 화면·EDID, 배터리 충방전율이 JSON에 담깁니다.</p>
       <details><summary>실행 방법과 대본 전문</summary>
         <p>대본과 출력 위치를 확인한 뒤, 원하는 경우 저장소 폴더에서 직접 실행하세요.</p>
+        <p>수집 결과는 로컬 드라이브의 절대 .json 경로에 씁니다. Add-Type은 C# 컴파일에 시스템 임시 파일과 컴파일러 프로세스를 사용합니다.</p>
         <code>powershell.exe -NoProfile -File .\\collector\\collect.ps1 -Out "$env:TEMP\\benchwire-collect.json"</code>
         <p>Restricted 또는 AllSigned 정책으로 실행이 막히면 장치 관리자와 디스플레이 설정에서 값을 확인하고 퀘스트에 직접 기록하세요.</p><pre></pre>
       </details>

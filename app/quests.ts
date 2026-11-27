@@ -1,11 +1,14 @@
 // 판정의 미확인 주장과 현재 연결을 검증하고 실물·배선의 측정으로 기록한다.
 import { domains, type QuestTemplate } from "../domains/registry.ts";
-import type { Claim, Value } from "../engine/contract.ts";
-import { recordMeasurement, type MeasurementTarget } from "../scene/measurement.ts";
+import type { Claim } from "../engine/contract.ts";
+import { measurementPrediction, measurementValueText, predictionText, recordMeasurement, sceneWithMeasurementContext,
+  verificationLocator, verificationSource, type MeasurementTarget } from "../scene/measurement.ts";
 import { connectionPorts } from "../engine/scene.ts";
-import { claimInput, describe, field, showError, type FieldValue, type JSONSchema } from "./field.ts";
+import { claimInput, describe, field, showError, type JSONSchema } from "./field.ts";
 import type { Connection, Item, SceneDocument } from "./document.ts";
 import { interval, verdictText, type ResultView } from "./results.ts";
+
+export { verificationSource };
 
 type Personal = NonNullable<SceneDocument["personal"]>[number];
 type Observation = NonNullable<Connection["observations"]>[number];
@@ -18,7 +21,6 @@ type Quest = {
 };
 type Save = (before: SceneDocument, next: SceneDocument, validateOnly?: boolean) => string | undefined;
 
-const SOURCE_SCHEME = "verification:";
 const PHOTO_LIMIT = 2 * 1024 * 1024;
 const PHOTO_TYPES = ["image/png", "image/jpeg", "image/webp"];
 const CONTEXT_LIMIT = 120;
@@ -159,54 +161,6 @@ function quests(view: ResultView, saved: SceneDocument) {
   return [...grouped.values(), ...observations].sort((a, b) => b.impact - a.impact || b.outcomes.size - a.outcomes.size);
 }
 
-type Prediction = { values: Value[]; low?: number; high?: number; unit: string };
-
-function prediction(view: ResultView, quest: Quest): Prediction {
-  const { scene, result } = view;
-  if (quest.claim !== undefined) {
-    const claim = scene.claims[quest.claim]!;
-    const values = scene.claimSources.flatMap(s => s.claim === quest.claim && s.candidate ? [s.candidate.value] : []);
-    if (claim.value !== null) values.unshift(claim.value);
-    return { values: [...new Set(values)], unit: claim.unit };
-  }
-  const unit = quest.property?.properties?.unit;
-  const label = typeof unit === "object" && typeof unit.const === "string" ? unit.const : "";
-  const convert = quest.template?.observation?.fromLimit;
-  if (!convert) return { values: [], unit: label };
-  if ([...quest.outcomes].some(row => result.options[result.outcomes[row]!.option ?? -1]?.observation !== undefined))
-    return { values: [], unit: label };
-  const limits = [...quest.outcomes].flatMap(row => {
-    const option = result.options[result.outcomes[row]!.option ?? -1];
-    const metric = view.limits.get(row);
-    if (!option) return [];
-    const low = metric ? metric.low : option.bounds?.low ?? option.limit;
-    const high = metric ? metric.high : option.bounds?.high ?? option.limit;
-    if (high === null || low === null) return [];
-    return [{ low: convert(low), high: convert(high) }];
-  });
-  if (!limits.length || limits.some(p => p.high === undefined)) return { values: [], unit: label };
-  if (limits.every(p => typeof p.low === "number" && typeof p.high === "number"))
-    return { values: [], low: Math.min(...limits.map(p => p.low as number)), high: Math.max(...limits.map(p => p.high as number)), unit: label };
-  const values = limits.every(p => p.low === p.high) ? [...new Set(limits.map(p => p.high!))] : [];
-  return { values, unit: label };
-}
-
-function valueText(value: Value, unit: string) {
-  return [value === true ? "예" : value === false ? "아니요" : value, unit].filter(part => part !== "" && part !== null).join(" ");
-}
-
-function comparison(p: Prediction, value?: FieldValue) {
-  const expected = p.values.length ? p.values.map(v => valueText(v, p.unit)).join(" / ")
-    : p.low !== undefined && p.high !== undefined ? interval({ low: p.low, high: p.high }, p.unit) : "";
-  const differs = Boolean(expected && value && p.unit === value.unit && (p.values.length ? !p.values.includes(value.value)
-    : typeof value.value === "number" && (value.value < p.low! || value.value > p.high!)));
-  return { expected, differs };
-}
-
-export function verificationSource(locator: string) {
-  return locator.startsWith(SOURCE_SCHEME) ? new URLSearchParams(locator.slice(SOURCE_SCHEME.length)) : undefined;
-}
-
 async function attach(note: string, file?: File) {
   const body = new FormData();
   if (note) body.set("note", note);
@@ -244,17 +198,21 @@ function card(view: ResultView, saved: SceneDocument, q: Quest, save: Save, edit
     works.append(el("li", [w.id, ...expected].join(" · ")));
   }
   if (works.childElementCount) detail.append(el("p", "영향받는 작업과 예상 결과"), works);
-  const predicted = prediction(view, q);
-  const { expected } = comparison(predicted);
+  const claim = q.claim === undefined ? undefined : view.scene.claims[q.claim]!;
+  const unitSchema = q.property?.properties?.unit;
+  const unit = claim?.unit ?? (typeof unitSchema === "object" && typeof unitSchema.const === "string" ? unitSchema.const : "");
+  const target: MeasurementTarget | undefined = q.connection
+    ? { connection:q.connection.row, domain:q.connection.domain, field:q.connection.field }
+    : q.target && { ...q.target, condition:claim!.condition };
+  const expected = target ? predictionText(measurementPrediction(view.scene, target, unit, view.scenario, view.result)) : "";
   if (expected) detail.append(el("p", "입력값 예측 · " + expected));
-  if (q.claim !== undefined) {
+  if (claim) {
     const candidates = el("ul");
-    const claim = view.scene.claims[q.claim]!;
     for (const row of view.scene.claimSources.filter(s => s.claim === q.claim)) {
       const candidate = row.candidate?.value ?? claim.value;
       if (candidate === null) continue;
       const src = view.scene.sources[row.source]!;
-      const item = el("li", [valueText(candidate, claim.unit), src.title].join(" · "));
+      const item = el("li", [measurementValueText(candidate, claim.unit), src.title].join(" · "));
       if (/^https?:\/\//i.test(src.locator)) {
         const link = el("a", "출처 열기");
         link.href = src.locator;
@@ -272,12 +230,12 @@ function card(view: ResultView, saved: SceneDocument, q: Quest, save: Save, edit
     detail.append(change);
     return detail;
   }
-  if (!q.property) return detail;
+  if (!q.property || !target) return detail;
 
   const form = el("form");
   form.noValidate = true;
   const property = { ...q.property, title: q.template?.title ?? q.property.title ?? q.title };
-  const read = claimInput(form, q.title, property, true, { value: null, unit: predicted.unit }, "measurement", true).read;
+  const read = claimInput(form, q.title, property, true, { value: null, unit }, "measurement", true).read;
   const ids = q.target ? [q.target.instanceId] : [...new Set(q.connection!.ports.map(p => p.instanceId))];
   const scopes = ids.map(id => {
     const item = saved.items.find(i => i.instanceId === id)!;
@@ -332,8 +290,6 @@ function card(view: ResultView, saved: SceneDocument, q: Quest, save: Save, edit
     }
     const items = saved.items.map(i => current.get(i.instanceId) ?? i);
     const measurementConditions = [...new Set([...current.values()].map(i => i.measurementCondition ?? "별도 조건 없음"))];
-    const settings = q.claim === undefined ? "" : view.scene.claims[q.claim]!.condition;
-    const compare = comparison(predicted, value);
     const memo = note.value.trim();
     const metadata = new URLSearchParams();
     for (const [key, value] of [
@@ -341,15 +297,13 @@ function card(view: ResultView, saved: SceneDocument, q: Quest, save: Save, edit
       ["firmware", q.target ? current.get(q.target.instanceId)!.firmware ?? "없음"
         : [...current.values()].map(i => `${i.alias || i.instanceId} ${i.firmware ?? "없음"}`).join(" / ")],
       ["condition", measurementConditions.join(" / ")],
-      ["note", memo], ["prediction", compare.expected], ["different", compare.differs ? "1" : ""],
+      ["note", memo],
     ]) if (key && value) metadata.set(key, value);
-    const source = { id: "verification-" + crypto.randomUUID(), title: "검증 퀘스트", locator: SOURCE_SCHEME + metadata,
+    const source = { id: "verification-" + crypto.randomUUID(), title: "검증 퀘스트", locator: verificationLocator(metadata),
       retrievedAt: new Date().toISOString().slice(0, 10) };
-    const target: MeasurementTarget = q.connection
-      ? {connection:q.connection.row,domain:q.connection.domain,field:q.connection.field}
-      : {...q.target!,condition:settings};
     const scoped = items.every((item,i) => item === saved.items[i]) ? saved : {...saved,items};
-    const next = recordMeasurement(scoped,target,value,source,"manual");
+    const prediction = measurementPrediction(sceneWithMeasurementContext(view.scene, scoped.items), target, value.unit, view.scenario);
+    let next = recordMeasurement(scoped, target, value, source, "manual", prediction);
     if (next === saved) { status.textContent = "이미 같은 값이 저장되어 있습니다."; return; }
     const problem = save(saved, next, true);
     if (problem) { showError(form, problem); return; }
@@ -357,8 +311,13 @@ function card(view: ResultView, saved: SceneDocument, q: Quest, save: Save, edit
     submit.disabled = true;
     try {
       if ((memo || file) && next.sources !== saved.sources) {
-        metadata.set(file ? "photo" : "evidence", await attach(memo, file));
-        source.locator = SOURCE_SCHEME + metadata;
+        const location = await attach(memo, file);
+        next = { ...next, sources: next.sources.map(s => {
+          if (s.id !== source.id) return s;
+          const recorded = verificationSource(s.locator)!;
+          recorded.set(file ? "photo" : "evidence", location);
+          return { ...s, locator: verificationLocator(recorded) };
+        }) };
       }
       const failure = save(saved, next);
       if (failure) showError(form, failure);
@@ -368,6 +327,73 @@ function card(view: ResultView, saved: SceneDocument, q: Quest, save: Save, edit
     } finally { submit.disabled = false; }
   };
   return detail;
+}
+
+function evidenceCleanup() {
+  const details = el("details");
+  details.className = "quest-card";
+  const form = el("form");
+  const rows = el("div");
+  const status = el("p");
+  status.setAttribute("role", "status");
+  const remove = button("선택한 증거 지우기", true);
+  remove.disabled = true;
+  form.append(rows, remove, status);
+  details.append(el("summary", "쓰지 않는 증거 정리"), form);
+  const endpoint = "/api/evidence/unused";
+  const selected = new Set<string>();
+  let busy = false;
+  async function update(ids?: string[]) {
+    if (busy) return;
+    busy = rows.inert = true;
+    remove.disabled = true;
+    status.textContent = ids ? "선택한 증거를 정리하는 중입니다." : "증거 목록을 불러오는 중입니다.";
+    try {
+      if (ids) {
+        const response = await fetch(endpoint, { method: "POST", headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ ids }) });
+        if (!response.ok) throw new Error((await response.json() as { message: string }).message);
+      }
+      const response = await fetch(endpoint);
+      if (!response.ok) throw new Error((await response.json() as { message: string }).message);
+      const list = await response.json() as { id: string; note: string; photo: boolean }[];
+      selected.clear();
+      rows.replaceChildren();
+      for (const { id, note, photo } of list) {
+        const item = el("p");
+        const label = el("label");
+        const choice = el("input");
+        choice.type = "checkbox";
+        choice.onchange = () => {
+          if (choice.checked) selected.add(id);
+          else selected.delete(id);
+          remove.disabled = busy || !selected.size;
+        };
+        label.append(choice, " ", note || "첨부 사진 " + id.slice(0, 8));
+        item.append(label);
+        if (photo) {
+          const link = el("a", "사진 보기");
+          link.href = "/api/evidence/" + id;
+          link.target = "_blank";
+          link.rel = "noopener noreferrer";
+          item.append(" · ", link);
+        }
+        rows.append(item);
+      }
+      status.textContent = list.length ? "지울 증거를 선택하세요." : "쓰지 않는 증거가 없습니다.";
+    } catch (error) {
+      status.textContent = error instanceof Error ? error.message : String(error);
+    } finally {
+      busy = rows.inert = false;
+      remove.disabled = !selected.size;
+    }
+  }
+  details.ontoggle = () => { if (details.open) void update(); };
+  form.onsubmit = event => {
+    event.preventDefault();
+    if (selected.size) void update([...selected]);
+  };
+  return details;
 }
 
 export function mountQuests(dialog: HTMLDialogElement, trigger: HTMLButtonElement, save: Save, editWorkload: (id: string) => void) {
@@ -380,6 +406,7 @@ export function mountQuests(dialog: HTMLDialogElement, trigger: HTMLButtonElemen
   dialog.classList.add("creator", "quest-dialog");
   dialog.setAttribute("aria-label", "검증 퀘스트");
   dialog.append(header, body);
+  const cleanup = evidenceCleanup();
   close.onclick = () => dialog.close();
   let current: { view: ResultView; saved: SceneDocument };
   trigger.onclick = () => {
@@ -428,7 +455,7 @@ export function mountQuests(dialog: HTMLDialogElement, trigger: HTMLButtonElemen
       const entry = card(view, saved, q, save, id => { dialog.close(); editWorkload(id); });
       entry.open = opened.includes(entry.querySelector("summary")!.textContent);
       return entry;
-    }));
+    }), cleanup);
   }
   return (view: ResultView, saved: SceneDocument) => {
     current = { view, saved };
