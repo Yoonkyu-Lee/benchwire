@@ -9,6 +9,7 @@ import { modelKey, type InventoryItem, type Model, type Port } from "./document.
 import { claimInput, describe, field, showError, type FieldValue, type JSONSchema } from "./field.ts";
 
 type Claim = Port["connector"];
+type Candidate = NonNullable<Claim["conflicts"]>[number];
 type Interface = Port["interfaces"][number];
 type Resource = Model["resources"][number];
 type Node = Model["nodes"][number];
@@ -79,6 +80,7 @@ function rows<T, S = undefined>(root: HTMLElement, name: string, make: (box: HTM
     entries.set(row, read);
     remove.onclick = () => { entries.delete(row); row.remove(); changed(); };
     changed();
+    return row;
   }
   addButton.onclick = () => add();
   return {
@@ -479,20 +481,22 @@ export function mountCreator(dialog: HTMLDialogElement, documents: Documents, sa
     return () => ({ id, title: title.value, locator: locator.value, retrievedAt: date.value });
   }, updateReferences);
 
-  const connectorChoices: NamedChoice[] = [["", "미확인"], ...documents.connectors.connectors.map(c =>
-    [c.id, typeof c.endForm.value === "string" ? `${c.id} · ${c.endForm.value}` : c.id] as const)];
+  const connectorChoices: NamedChoice[] = documents.connectors.connectors.map(c =>
+    [c.id, typeof c.endForm.value === "string" ? `${c.id} · ${c.endForm.value}` : c.id] as const);
   const domainChoices: NamedChoice[] = registrations.map(r => [r.plugin.id, r.name]);
   const registered = new Map(registrations.map(r => [r.plugin.id, r]));
   const forInterfaces: NamedChoice[] = registrations.filter(r => r.interfaces.length).map(r => [r.plugin.id, r.name]);
 
-  function sourcePicker(box: HTMLElement, label: string, initial: readonly string[] = []) {
-    const pick = select(box, label + " 출처", [["", "기본 출처"]]);
+  function sourcePicker(box: HTMLElement, label: string, initial: readonly string[] = [], explicit = false) {
+    const pick = select(box, label + " 출처", []);
     pick.dataset.sources = JSON.stringify(initial);
+    if (explicit) pick.dataset.explicitSource = "";
     refreshSourceChoices(pick, sources.read(), initial[0] ?? "");
     return () => {
       const selected = pick.value;
       const available = new Set(sources.read().map(row => row.id));
-      return (selected && selected === initial[0] ? initial : [selected || defaultSource.value]).filter(id => available.has(id));
+      return (selected && selected === initial[0] ? initial : [selected || (explicit ? "" : defaultSource.value)])
+        .filter(id => available.has(id));
     };
   }
 
@@ -506,7 +510,7 @@ export function mountCreator(dialog: HTMLDialogElement, documents: Documents, sa
       if (at < 0) entries.unshift(inherited);
       else entries[at] = inherited;
     } else if (selected && !entries.some(([id]) => id === selected)) entries.unshift([selected, "출처 없음"]);
-    const blank = control === defaultSource ? "선택"
+    const blank = control === defaultSource || control.hasAttribute("data-explicit-source") ? "선택"
       : available.some(row => row.id === defaultSource.value) ? "기본 출처" : "출처 없음";
     choices(control, [["", blank], ...entries], selected);
   }
@@ -517,23 +521,97 @@ export function mountCreator(dialog: HTMLDialogElement, documents: Documents, sa
     return ({ value, unit }: FieldValue): Claim => {
       const rank = value === null ? "unknown" : confidence.value as Claim["confidence"];
       const selected = readSources();
-      const sameValue = seed && value === seed.value && unit === (seed.unit ?? "") && rank === seed.confidence;
-      const claim = { value, unit, confidence: rank, sources: selected, ...(seed?.condition && { condition: seed.condition }) };
-      if (!sameValue) return claim;
-      const available = new Set(sources.read().map(row => row.id));
-      const conflicts = seed.conflicts?.map(candidate => ({ ...candidate, sources: candidate.sources.filter(id => available.has(id)) }));
-      return { ...seed, sources: selected, ...(conflicts && { conflicts }) };
+      const inferredFrom = seed && value === seed.value && unit === (seed.unit ?? "") && rank === seed.confidence ? seed.inferredFrom : undefined;
+      return { value, unit, confidence: rank, sources: selected, ...(seed?.condition && { condition: seed.condition }),
+        ...(inferredFrom && { inferredFrom }) };
+    };
+  }
+
+  function known(value: FieldValue["value"] | undefined): value is Candidate["value"] {
+    return value != null && value !== "" && (typeof value !== "number" || Number.isFinite(value));
+  }
+
+  function claimEditor(box: HTMLElement, label: string, seed: Claim | undefined, path: string,
+    main: (root: HTMLElement) => () => FieldValue | undefined,
+    alternate: (root: HTMLElement, initial: Candidate | undefined, path: string) => () => FieldValue["value"]) {
+    const editor = el("div");
+    const primary = el("div");
+    primary.className = "creator-claim";
+    const readMain = main(primary);
+    const proof = claimProof(primary, label, seed);
+    const details = el("details");
+    const message = el("p");
+    message.setAttribute("role", "status");
+    const controls = el("fieldset");
+    details.append(el("summary", "다른 출처의 다른 값 더하기 · " + label), message, controls);
+    editor.append(primary, details);
+    box.append(editor);
+
+    const candidates = rows(controls, "후보", (row, n, initial?: Candidate) => {
+      const read = alternate(row, initial, path + ".conflicts." + (n - 1));
+      const confidence = select(row, "후보 신뢰도", trust, initial?.confidence);
+      const readSources = sourcePicker(row, "후보", initial?.sources, true);
+      const notice = el("p");
+      notice.setAttribute("role", "status");
+      row.append(notice);
+      return () => ({ read, confidence, readSources, notice, initial });
+    }, update);
+    const newSource = button("새 출처 등록");
+    newSource.onclick = () => { sources.add().querySelector("input")!.focus(); };
+    controls.append(newSource);
+    seed?.conflicts?.forEach(candidates.add);
+
+    function update() {
+      const value = readMain()?.value;
+      controls.disabled = !known(value);
+      message.textContent = controls.disabled ? "미확인 값에는 후보를 추가할 수 없습니다."
+        : "후보에도 본값의 단위와 조건이 적용됩니다.";
+      const seen = new Set([value]);
+      for (const { read, notice } of candidates.read()) {
+        const next = read();
+        notice.textContent = !known(next) ? "" : next === value ? "본값과 같아 본값에 출처를 더합니다."
+          : seen.has(next) ? "같은 후보 값에 출처를 더합니다." : "";
+        seen.add(next);
+      }
+    }
+    editor.addEventListener("input", update);
+    editor.addEventListener("change", update);
+    update();
+
+    return () => {
+      const value = readMain();
+      if (value === undefined) return undefined;
+      const claim = proof(value);
+      if (!known(claim.value)) return claim;
+      const conflicts: Candidate[] = [];
+      for (const { read, confidence, readSources, initial } of candidates.read()) {
+        const next = read();
+        const sources = readSources();
+        const rank = confidence.value as Candidate["confidence"];
+        if (known(next) && sources.length) {
+          const same = next === claim.value ? claim : conflicts.find(row => row.value === next && row.sources.length);
+          if (same) {
+            same.sources = [...new Set([...same.sources, ...sources])];
+            continue;
+          }
+        }
+        const inferredFrom = initial && next === initial.value && rank === initial.confidence ? initial.inferredFrom : undefined;
+        conflicts.push({ value: known(next) ? next : NaN, confidence: rank, sources,
+          ...(inferredFrom && { inferredFrom }) });
+      }
+      return conflicts.length ? { ...claim, conflicts } : claim;
     };
   }
 
   function factField(box: HTMLElement, key: string, schema: JSONSchema | boolean, required: boolean, unknown: boolean, path: string, seed?: Claim) {
-    const label = typeof schema === "object" ? schema.title ?? key : key;
-    const group = el("div");
-    group.className = "creator-claim";
-    box.append(group);
-    const { read } = claimInput(group, key, schema, required, seed ?? (unknown ? { value: null } : undefined), path);
-    const proof = claimProof(group, label, seed);
-    return () => { const value = read(); return value === undefined ? undefined : proof(value); };
+    if (typeof schema !== "object") throw new Error("주장 필드의 값 스키마가 필요합니다: " + key);
+    const label = schema.title ?? key;
+    return claimEditor(box, label, seed, path,
+      root => claimInput(root, key, schema, required, seed ?? (unknown ? { value: null } : undefined), path).read,
+      (root, initial, at) => {
+        const { read } = claimInput(root, "후보 값", { ...schema, title: "후보 값" }, true, initial, at, true);
+        return () => read()!.value;
+      });
   }
 
   function factFields(box: HTMLElement, schema: JSONSchema, unknownPrefixes: readonly string[], path: string, seed?: Record<string, Claim>) {
@@ -548,8 +626,8 @@ export function mountCreator(dialog: HTMLDialogElement, documents: Documents, sa
     }));
   }
 
-  function ref(box: HTMLElement, label: string, kind: "node" | "resource", blank: string, initial = "") {
-    const control = select(box, label, initial ? [["", blank], [initial, initial]] : [["", blank]], initial);
+  function ref(box: HTMLElement, label: string, kind: "node" | "resource", blank: string, initial = "", path = "") {
+    const control = select(box, label, initial ? [["", blank], [initial, initial]] : [["", blank]], initial, path);
     control.dataset.ref = kind;
     control.dataset.empty = blank;
     return control;
@@ -560,10 +638,22 @@ export function mountCreator(dialog: HTMLDialogElement, documents: Documents, sa
     const template = seed && "name" in seed ? seed : undefined;
     const id = input(row, "포트 ID", initial?.id ?? "port-" + n);
     const label = input(row, "포트 이름", initial?.label ?? (template ? template.name + " " + n : ""));
-    const connector = select(row, "커넥터", connectorChoices, String(initial?.connector.value ?? template?.connector ?? ""));
-    const connectorProof = claimProof(row, "커넥터", initial?.connector);
-    const attachment = ref(row, "부착 노드", "node", "미확인", String(initial?.attachment.value ?? ""));
-    const attachmentProof = claimProof(row, "부착 노드", initial?.attachment);
+    const connector = claimEditor(row, "커넥터", initial?.connector, `ports.${n - 1}.connector`, root => {
+      const control = select(root, "커넥터", [["", "미확인"], ...connectorChoices],
+        String(initial?.connector.value ?? template?.connector ?? ""), `ports.${n - 1}.connector`);
+      return () => ({ value: control.value || null, unit: "" });
+    }, (root, candidate, at) => {
+      const control = select(root, "후보 값", [["", "선택"], ...connectorChoices], String(candidate?.value ?? ""), at);
+      return () => control.value || null;
+    });
+    const attachment = claimEditor(row, "부착 노드", initial?.attachment, `ports.${n - 1}.attachment`, root => {
+      const control = ref(root, "부착 노드", "node", "미확인", String(initial?.attachment.value ?? ""), `ports.${n - 1}.attachment`);
+      return () => ({ value: control.value || null, unit: "" });
+    }, (root, candidate, at) => {
+      const control = ref(root, "후보 값", "node", "선택", String(candidate?.value ?? ""), at);
+      choices(control, [["", "선택"], ...nodeChoices()]);
+      return () => control.value || null;
+    });
     const position = section(row, "위치");
     const face = select(position, "면", [["", "미확인"], ...faces], initial?.position?.face);
     const coords = el("div");
@@ -622,8 +712,8 @@ export function mountCreator(dialog: HTMLDialogElement, documents: Documents, sa
         position.inferredFrom = original.inferredFrom;
       return {
         id: id.value, label: label.value, ...(initial?.location && { location: initial.location }),
-        connector: connectorProof({ value: connector.value || null, unit: "" }),
-        attachment: attachmentProof({ value: attachment.value || null, unit: "" }),
+        connector: connector()!,
+        attachment: attachment()!,
         ...(position && { position }),
         interfaces: interfaces.read(),
       };
@@ -660,11 +750,24 @@ export function mountCreator(dialog: HTMLDialogElement, documents: Documents, sa
     const kind = input(row, "자원 종류", seed?.kind ?? "");
     const domain = select(row, "자원 영역", domainChoices, seed?.domain);
     const unit = select(row, "자원 단위", []);
-    const capacity = input(row, "용량", String(initial?.capacity.value ?? ""), "", "number");
-    capacity.min = "0"; capacity.step = "any";
-    const capProof = claimProof(row, "용량", initial?.capacity);
-    const policy = input(row, "분배 정책", String(initial?.policy.value ?? ""));
-    const policyProof = claimProof(row, "분배 정책", initial?.policy);
+    const capacityPath = `resources.${n - 1}.capacity`;
+    function amount(root: HTMLElement, label: string, value: FieldValue["value"] | undefined, path: string) {
+      const control = input(root, label, String(value ?? ""), path, "number");
+      control.min = "0"; control.step = "any";
+      return () => control.value === "" ? null : control.valueAsNumber;
+    }
+    const capacity = claimEditor(row, "용량", initial?.capacity, capacityPath, root => {
+      const read = amount(root, "용량", initial?.capacity.value, capacityPath);
+      return () => ({ value: read(), unit: unit.value });
+    }, (root, candidate, at) => amount(root, "후보 값", candidate?.value, at));
+    const policyPath = `resources.${n - 1}.policy`;
+    const policy = claimEditor(row, "분배 정책", initial?.policy, policyPath, root => {
+      const control = input(root, "분배 정책", String(initial?.policy.value ?? ""), policyPath);
+      return () => ({ value: control.value || null, unit: "" });
+    }, (root, candidate, at) => {
+      const control = input(root, "후보 값", String(candidate?.value ?? ""), at);
+      return () => control.value || null;
+    });
     function updateUnits(wanted = unit.value) {
       choices(unit, (registered.get(domain.value)?.plugin.resourceUnits ?? []).map(value => [value, value]), wanted);
     }
@@ -672,8 +775,7 @@ export function mountCreator(dialog: HTMLDialogElement, documents: Documents, sa
     domain.onchange = () => updateUnits();
     id.addEventListener("change", updateReferences);
     return () => ({ id: id.value, kind: kind.value, domain: domain.value, unit: unit.value,
-      capacity: capProof({ value: capacity.value ? capacity.valueAsNumber : null, unit: unit.value }),
-      policy: policyProof({ value: policy.value || null, unit: "" }) });
+      capacity: capacity()!, policy: policy()! });
   }, updateReferences);
 
   const attributeSection = section(body, "영역별 속성");
@@ -728,17 +830,23 @@ export function mountCreator(dialog: HTMLDialogElement, documents: Documents, sa
     }];
   });
 
+  function nodeChoices(): NamedChoice[] {
+    return nodes.read().flatMap(node => node.id ? [[node.id, node.label || node.id] as const] : []);
+  }
+
   function updateReferences() {
     const available = sources.read();
     refreshSourceChoices(defaultSource, available, defaultSource.value || available[0]?.id || "");
     for (const control of form.querySelectorAll<HTMLSelectElement>("select[data-sources]"))
       refreshSourceChoices(control, available);
-    const nodeList = nodes.read().flatMap(row => row.id ? [[row.id, row.label || row.id] as const] : []);
+    const nodeList = nodeChoices();
     const resourceList = resources.read().flatMap(row => row.id ? [[row.id, row.id] as const] : []);
     for (const control of form.querySelectorAll<HTMLSelectElement>("select[data-ref]")) {
       const type = control.dataset.ref;
       const entries = type === "node" ? nodeList : resourceList;
+      const before = control.value;
       choices(control, [["", control.dataset.empty ?? "선택"], ...entries]);
+      if (control.value !== before) control.dispatchEvent(new Event("change", { bubbles: true }));
     }
   }
 

@@ -85,6 +85,7 @@ export function claimInput(form: HTMLElement, key: string, property: JSONSchema 
       const blank = new Option("확인한 값 선택", "", true, true);
       blank.disabled = true;
       select.prepend(blank);
+      select.selectedIndex = choices.indexOf(initial?.value ?? null) + 1;
     } else select.selectedIndex = Math.max(0, choices.indexOf(initial?.value ?? null));
     control = select;
     read = () => choices[select.selectedIndex - Number(verified)] ?? null;

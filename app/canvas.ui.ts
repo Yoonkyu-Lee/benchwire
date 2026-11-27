@@ -1183,6 +1183,139 @@ test("모델 복제가 새 판본에 알려진 값과 원본을 남기고 미확
   } finally { await page.close(); }
 });
 
+async function manualCharger(page: Page, modelId: string) {
+  await page.getByRole("button", { name: "새 아이템", exact: true }).click();
+  const dialog = page.getByRole("dialog", { name: "새 아이템" });
+  await dialog.getByLabel("복제할 모델 판본").selectOption("supply@1");
+  await dialog.getByRole("button", { name: "모델 복제", exact: true }).click();
+  await dialog.getByLabel("모델 ID", { exact: true }).fill(modelId);
+  await dialog.getByLabel("모델 이름", { exact: true }).fill("수동 정격 충전기");
+  const official = dialog.getByRole("group", { name: "출처 1", exact: true });
+  await official.getByLabel("제목", { exact: true }).fill("제조사 정격표");
+  await official.getByLabel("주소", { exact: true }).fill("https://example.invalid/rating");
+  const total = dialog.getByRole("group", { name: "자원 1", exact: true });
+  await total.getByLabel("용량 신뢰도", { exact: true }).selectOption("official");
+  const candidates = total.locator("details").filter({ hasText: "다른 출처의 다른 값 더하기 · 용량" });
+  await candidates.locator("summary").click({ timeout: 2500 });
+  const add = candidates.getByRole("button", { name: "후보 추가", exact: true });
+  await total.getByLabel("용량", { exact: true }).fill("");
+  assert(await add.isDisabled());
+  await candidates.getByText("미확인 값에는 후보를 추가할 수 없습니다.", { exact: true }).waitFor();
+  return { dialog, total, candidates, add };
+}
+
+async function fillChargerCandidate(page: Page, modelId: string, main: number) {
+  const { dialog, total, candidates, add } = await manualCharger(page, modelId);
+  await total.getByLabel("용량", { exact: true }).fill(String(main));
+  await add.click();
+  const candidate = candidates.getByRole("group", { name: "후보 1", exact: true });
+  await candidate.getByLabel("후보 값", { exact: true }).fill("60");
+  await candidate.getByLabel("후보 신뢰도", { exact: true }).selectOption("review");
+  await candidates.getByRole("button", { name: "새 출처 등록", exact: true }).click();
+  const review = dialog.getByRole("group", { name: "출처 3", exact: true });
+  await review.getByLabel("제목", { exact: true }).fill("리뷰 출력 측정");
+  await review.getByLabel("주소", { exact: true }).fill("https://example.invalid/wattage");
+  await candidate.getByLabel("후보 출처", { exact: true }).selectOption({ label: "리뷰 출력 측정" });
+  return { dialog, candidates };
+}
+
+async function saveManualCharger(page: Page, dialog: ReturnType<Page["getByRole"]>, modelId: string) {
+  await dialog.getByRole("button", { name: "저장하고 배치", exact: true }).click();
+  await dialog.waitFor({ state: "hidden", timeout: 8000 });
+  await page.getByText("저장됨", { exact: true }).waitFor();
+  const library = await (await page.request.get(new URL("/api/library", page.url()).href)).json() as Library;
+  const model = library.models.find(row => row.modelId === modelId);
+  const item = library.inventory.find(row => row.modelId === modelId);
+  assert(model && item);
+  return { model, item };
+}
+
+test("수동 충전기 총 출력 30 W와 60 W를 입력해 연결하면 가능한 판정과 후보별 출처를 표시한다", async () => {
+  const { page, errors } = await newPage("/");
+  try {
+    const scene = JSON.parse(readFileSync("fixtures/power/single-port.json", "utf8")) as SceneDocument;
+    const [workload] = scene.workloads;
+    const [scenario] = scene.scenarios;
+    workload!.request.loadW!.value = 40;
+    workload!.request.targetW!.value = 10;
+    const sceneId = "creator-disputed-power";
+    await saveFromAnotherTab(page, { ...scene, sceneId, items: scene.items.filter(item => item.instanceId !== "supply"),
+      connections: [], workloads: [], scenarios: [],
+      layout: { placements: [{ instanceId: "a", x: 615, y: 100 }, { instanceId: "wire-a", x: 35, y: 245 }] } });
+    await openStored(page, sceneId);
+    const { dialog, candidates } = await fillChargerCandidate(page, "creator-power-conflict", 30);
+    await candidates.scrollIntoViewIfNeeded();
+    await page.screenshot({ path: "work/creator-conflicts-entry.png" });
+    const { model, item } = await saveManualCharger(page, dialog, "creator-power-conflict");
+    const capacity = model.resources[0]!.capacity;
+    const sourceId = (title: string) => model.sources.find(row => row.title === title)!.id;
+    assert.deepEqual([capacity.value, capacity.confidence, capacity.sources], [30, "official", [sourceId("제조사 정격표")]]);
+    assert.deepEqual(capacity.conflicts, [{ value: 60, confidence: "review", sources: [sourceId("리뷰 출력 측정")] }]);
+    const card = page.locator('[data-instance="' + item.instanceId + '"]');
+    await card.getByText("충돌", { exact: true }).waitFor();
+    await page.locator('[data-inventory="wire-a"]').getByRole("button", { name: "연결에 사용" }).click();
+    await port(page, item.instanceId, "a").press("Enter");
+    await port(page, "a", "in").press("Space");
+    await page.getByText("저장됨", { exact: true }).waitFor();
+    const saved = await readStored(page, sceneId);
+    assert.equal(saved.document.connections[0]?.from.instanceId, item.instanceId);
+    assert.equal(saved.document.connections[0]?.to.instanceId, "a");
+    await saveFromAnotherTab(page, { ...saved.document, scenarios: [scenario!],
+      workloads: [{ ...workload!, from: { ...workload!.from, instanceId: item.instanceId } }] }, saved.tag);
+    await openStored(page, sceneId);
+
+    await page.getByRole("button", { name: "결과 · 근거", exact: true }).click();
+    const results = page.getByRole("complementary", { name: "결과와 근거" });
+    await results.getByRole("button", { name: /USB PD 충전/ }).click();
+    const evidence = results.getByRole("region", { name: "선택한 항목 근거" });
+    const verdicts = evidence.getByRole("heading", { name: "가능한 판정", exact: true }).locator("xpath=following-sibling::ul[1]");
+    assert.deepEqual((await verdicts.getByRole("listitem").allTextContents()).sort(), ["✅ 성립", "❌ 불가"]);
+    assert.match(await evidence.locator("ul.quests").innerText(), /capacity.*판정에 영향/u);
+    await evidence.getByText("순충전 -10–20 W", { exact: true }).waitFor();
+    await page.screenshot({ path: "work/creator-conflicts-verdict.png" });
+    for (const [label, source] of [["충돌 후보 30 W · 공식", "제조사 정격표"], ["충돌 후보 60 W · 리뷰", "리뷰 출력 측정"]]) {
+      const references = evidence.getByText(label!, { exact: true }).first().locator("..").getByRole("link", { includeHidden: true });
+      assert.deepEqual(await references.allTextContents(), [source]);
+    }
+    await evidence.evaluate(root => root.querySelectorAll("details").forEach(row => { row.open = true; }));
+    await evidence.getByText("충돌 후보 60 W · 리뷰", { exact: true }).first().scrollIntoViewIfNeeded();
+    await page.screenshot({ path: "work/creator-conflicts-evidence.png" });
+    assert.deepEqual(errors, []);
+  } finally { await page.close(); }
+});
+
+test("수동 생성기에서 같은 60 W를 입력하면 안내하고 본값에 두 출처를 저장한다", async () => {
+  const { page, errors } = await newPage("/");
+  try {
+    const { dialog, candidates } = await fillChargerCandidate(page, "creator-power-agreement", 60);
+    await candidates.getByText("본값과 같아 본값에 출처를 더합니다.", { exact: true }).waitFor();
+    await candidates.scrollIntoViewIfNeeded();
+    await page.screenshot({ path: "work/creator-conflicts-agreement.png" });
+
+    const port = dialog.getByRole("group", { name: "포트 1", exact: true });
+    await port.getByText("인터페이스 값", { exact: true }).click();
+    await port.getByLabel("5 V 수전 지원 상태", { exact: true }).selectOption("value");
+    await port.getByLabel("5 V 수전 지원", { exact: true }).selectOption({ label: "아니요" });
+    const flagSummary = port.getByText("다른 출처의 다른 값 더하기 · 5 V 수전 지원", { exact: true });
+    await flagSummary.click();
+    const flag = flagSummary.locator("..");
+    await flag.getByRole("button", { name: "후보 추가", exact: true }).click();
+    const flagCandidate = flag.getByLabel("후보 값", { exact: true });
+    assert.equal(await flagCandidate.inputValue(), "");
+    await flagCandidate.selectOption({ label: "예" });
+    await flag.getByLabel("후보 출처", { exact: true }).selectOption({ label: "리뷰 출력 측정" });
+
+    const { model } = await saveManualCharger(page, dialog, "creator-power-agreement");
+    const capacity = model.resources[0]!.capacity;
+    assert.equal(capacity.value, 60);
+    assert.equal(capacity.conflicts, undefined);
+    assert.deepEqual(capacity.sources.map(id => model.sources.find(row => row.id === id)?.title), ["제조사 정격표", "리뷰 출력 측정"]);
+    const accepts5 = model.ports[0]!.interfaces[0]!.params.accepts5!;
+    assert.deepEqual([accepts5.value, accepts5.conflicts?.[0]?.value], [false, true]);
+    assert.deepEqual(errors, []);
+  } finally { await page.close(); }
+});
+
 test("왜 패널과 캔버스 포트 툴팁에서 충돌 후보마다 해당 출처를 짝지어 표시한다", async () => {
   const { page, errors } = await newPage("/");
   try {
@@ -1217,7 +1350,7 @@ test("등록한 영역의 어휘와 스키마 필드가 생성기와 시나리�
     await creator.getByText("인터페이스 값", { exact: true }).click();
     assert(await creator.getByLabel("시험 인터페이스 스위치 상태", { exact: true }).isVisible());
     const attributes = creator.locator("details").filter({ has: page.locator("summary", { hasText: /^시험 영역$/ }) });
-    await attributes.locator("summary").click();
+    await attributes.locator(":scope > summary").click();
     assert(await attributes.getByLabel("시험 속성 스위치 상태", { exact: true }).isVisible());
     await creator.getByRole("button", { name: "닫기" }).click();
     const scenario = page.locator("#extra-scenario");
