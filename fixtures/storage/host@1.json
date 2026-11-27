@@ -1,0 +1,153 @@
+{
+  "modelId": "host",
+  "revision": "1",
+  "kind": "device",
+  "brand": "합성",
+  "name": "호스트",
+  "category": "호스트",
+  "sources": [
+    {"id": "host", "title": "합성 호스트의 시험 정의", "locator": "fixture:storage-host", "retrievedAt": "2026-11-26"}
+  ],
+  "nodes": [
+    {"id": "copy-service", "label": "복사 서비스", "kind": "host"},
+    {"id": "controller-a", "label": "컨트롤러 a", "kind": "controller"},
+    {"id": "controller-b", "label": "컨트롤러 b", "kind": "controller"},
+    {"id": "controller-c", "label": "컨트롤러 c", "kind": "controller"}
+  ],
+  "ports": [
+    {
+      "id": "hub",
+      "label": "허브 포트",
+      "connector": {"value": "storage-socket", "confidence": "inferred", "sources": ["host"]},
+      "attachment": {"value": "copy-service", "confidence": "inferred", "sources": ["host"]},
+      "interfaces": [
+        {
+          "id": "hub-copy",
+          "domain": "storage",
+          "protocol": "copy",
+          "role": "bidirectional",
+          "evidence": {"value": true, "confidence": "inferred", "sources": ["host"]},
+          "params": {"throughput": {"value": 1200, "unit": "MB/s", "confidence": "inferred", "sources": ["host"]}}
+        }
+      ]
+    },
+    {
+      "id": "a",
+      "label": "독립 포트 a",
+      "connector": {"value": "storage-socket", "confidence": "inferred", "sources": ["host"]},
+      "attachment": {"value": "controller-a", "confidence": "inferred", "sources": ["host"]},
+      "interfaces": [
+        {
+          "id": "a-copy",
+          "domain": "storage",
+          "protocol": "copy",
+          "role": "bidirectional",
+          "evidence": {"value": true, "confidence": "inferred", "sources": ["host"]},
+          "params": {"throughput": {"value": 1200, "unit": "MB/s", "confidence": "inferred", "sources": ["host"]}}
+        }
+      ]
+    },
+    {
+      "id": "b",
+      "label": "독립 포트 b",
+      "connector": {"value": "storage-socket", "confidence": "inferred", "sources": ["host"]},
+      "attachment": {"value": "controller-b", "confidence": "inferred", "sources": ["host"]},
+      "interfaces": [
+        {
+          "id": "b-copy",
+          "domain": "storage",
+          "protocol": "copy",
+          "role": "bidirectional",
+          "evidence": {"value": true, "confidence": "inferred", "sources": ["host"]},
+          "params": {"throughput": {"value": 1200, "unit": "MB/s", "confidence": "inferred", "sources": ["host"]}}
+        }
+      ]
+    },
+    {
+      "id": "c",
+      "label": "독립 포트 c",
+      "connector": {"value": "storage-socket", "confidence": "inferred", "sources": ["host"]},
+      "attachment": {"value": "controller-c", "confidence": "inferred", "sources": ["host"]},
+      "interfaces": [
+        {
+          "id": "c-copy",
+          "domain": "storage",
+          "protocol": "copy",
+          "role": "bidirectional",
+          "evidence": {"value": true, "confidence": "inferred", "sources": ["host"]},
+          "params": {"throughput": {"value": 1200, "unit": "MB/s", "confidence": "inferred", "sources": ["host"]}}
+        }
+      ]
+    }
+  ],
+  "edges": [
+    {
+      "id": "receive-a",
+      "from": "controller-a",
+      "to": "copy-service",
+      "evidence": {"value": true, "confidence": "inferred", "sources": ["host"]},
+      "uses": [{"resource": "bus-a", "evidence": {"value": true, "confidence": "inferred", "sources": ["host"]}}]
+    },
+    {
+      "id": "send-a",
+      "from": "copy-service",
+      "to": "controller-a",
+      "evidence": {"value": true, "confidence": "inferred", "sources": ["host"]},
+      "uses": [{"resource": "bus-a", "evidence": {"value": true, "confidence": "inferred", "sources": ["host"]}}]
+    },
+    {
+      "id": "receive-b",
+      "from": "controller-b",
+      "to": "copy-service",
+      "evidence": {"value": true, "confidence": "inferred", "sources": ["host"]},
+      "uses": [{"resource": "bus-b", "evidence": {"value": true, "confidence": "inferred", "sources": ["host"]}}]
+    },
+    {
+      "id": "send-b",
+      "from": "copy-service",
+      "to": "controller-b",
+      "evidence": {"value": true, "confidence": "inferred", "sources": ["host"]},
+      "uses": [{"resource": "bus-b", "evidence": {"value": true, "confidence": "inferred", "sources": ["host"]}}]
+    },
+    {
+      "id": "receive-c",
+      "from": "controller-c",
+      "to": "copy-service",
+      "evidence": {"value": true, "confidence": "inferred", "sources": ["host"]},
+      "uses": [{"resource": "bus-c", "evidence": {"value": true, "confidence": "inferred", "sources": ["host"]}}]
+    },
+    {
+      "id": "send-c",
+      "from": "copy-service",
+      "to": "controller-c",
+      "evidence": {"value": true, "confidence": "inferred", "sources": ["host"]},
+      "uses": [{"resource": "bus-c", "evidence": {"value": true, "confidence": "inferred", "sources": ["host"]}}]
+    }
+  ],
+  "resources": [
+    {
+      "id": "bus-a",
+      "kind": "bandwidth",
+      "domain": "storage",
+      "unit": "MB/s",
+      "capacity": {"value": 900, "unit": "MB/s", "confidence": "inferred", "sources": ["host"]},
+      "policy": {"value": "max-min", "confidence": "inferred", "sources": ["host"]}
+    },
+    {
+      "id": "bus-b",
+      "kind": "bandwidth",
+      "domain": "storage",
+      "unit": "MB/s",
+      "capacity": {"value": 900, "unit": "MB/s", "confidence": "inferred", "sources": ["host"]},
+      "policy": {"value": "max-min", "confidence": "inferred", "sources": ["host"]}
+    },
+    {
+      "id": "bus-c",
+      "kind": "bandwidth",
+      "domain": "storage",
+      "unit": "MB/s",
+      "capacity": {"value": 900, "unit": "MB/s", "confidence": "inferred", "sources": ["host"]},
+      "policy": {"value": "max-min", "confidence": "inferred", "sources": ["host"]}
+    }
+  ]
+}

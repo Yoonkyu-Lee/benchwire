@@ -1,0 +1,68 @@
+{
+  "modelId": "medium",
+  "revision": "1",
+  "kind": "device",
+  "brand": "합성",
+  "name": "외장 매체",
+  "category": "저장장치",
+  "sources": [
+    {"id": "medium", "title": "합성 외장 매체의 시험 정의", "locator": "fixture:storage-medium", "retrievedAt": "2026-11-26"}
+  ],
+  "nodes": [{"id": "data", "label": "저장 영역", "kind": "medium"}, {"id": "bus", "label": "포트 통로", "kind": "junction"}],
+  "ports": [
+    {
+      "id": "port",
+      "label": "전송 포트",
+      "connector": {"value": "storage-plug", "confidence": "inferred", "sources": ["medium"]},
+      "attachment": {"value": "bus", "confidence": "inferred", "sources": ["medium"]},
+      "interfaces": [
+        {
+          "id": "port-copy",
+          "domain": "storage",
+          "protocol": "copy",
+          "role": "bidirectional",
+          "evidence": {"value": true, "confidence": "inferred", "sources": ["medium"]},
+          "params": {"throughput": {"value": 1200, "unit": "MB/s", "confidence": "inferred", "sources": ["medium"]}}
+        }
+      ]
+    }
+  ],
+  "edges": [
+    {
+      "id": "read-data",
+      "from": "data",
+      "to": "bus",
+      "evidence": {"value": true, "confidence": "inferred", "sources": ["medium"]},
+      "uses": [
+        {"resource": "read-rate", "evidence": {"value": true, "confidence": "inferred", "sources": ["medium"]}}
+      ]
+    },
+    {
+      "id": "write-data",
+      "from": "bus",
+      "to": "data",
+      "evidence": {"value": true, "confidence": "inferred", "sources": ["medium"]},
+      "uses": [
+        {"resource": "write-rate", "evidence": {"value": true, "confidence": "inferred", "sources": ["medium"]}}
+      ]
+    }
+  ],
+  "resources": [
+    {
+      "id": "read-rate",
+      "kind": "bandwidth",
+      "domain": "storage",
+      "unit": "MB/s",
+      "capacity": {"value": 800, "unit": "MB/s", "confidence": "inferred", "sources": ["medium"]},
+      "policy": {"value": "max-min", "confidence": "inferred", "sources": ["medium"]}
+    },
+    {
+      "id": "write-rate",
+      "kind": "bandwidth",
+      "domain": "storage",
+      "unit": "MB/s",
+      "capacity": {"value": 900, "unit": "MB/s", "confidence": "inferred", "sources": ["medium"]},
+      "policy": {"value": "max-min", "confidence": "inferred", "sources": ["medium"]}
+    }
+  ]
+}

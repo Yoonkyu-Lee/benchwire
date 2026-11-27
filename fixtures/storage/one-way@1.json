@@ -1,0 +1,61 @@
+{
+  "modelId": "one-way",
+  "revision": "1",
+  "kind": "adapter",
+  "brand": "합성",
+  "name": "단방향 변환 부품",
+  "category": "변환 부품",
+  "sources": [
+    {
+      "id": "one-way",
+      "title": "합성 단방향 변환 부품의 시험 정의",
+      "locator": "fixture:storage-one-way",
+      "retrievedAt": "2026-11-26"
+    }
+  ],
+  "nodes": [{"id": "in", "label": "진입", "kind": "junction"}, {"id": "out", "label": "이탈", "kind": "junction"}],
+  "ports": [
+    {
+      "id": "entry",
+      "label": "진입 포트",
+      "connector": {"value": "storage-plug", "confidence": "inferred", "sources": ["one-way"]},
+      "attachment": {"value": "in", "confidence": "inferred", "sources": ["one-way"]},
+      "interfaces": [
+        {
+          "id": "entry-copy",
+          "domain": "storage",
+          "protocol": "copy",
+          "role": "bidirectional",
+          "evidence": {"value": true, "confidence": "inferred", "sources": ["one-way"]},
+          "params": {"throughput": {"value": 1200, "unit": "MB/s", "confidence": "inferred", "sources": ["one-way"]}}
+        }
+      ]
+    },
+    {
+      "id": "exit",
+      "label": "이탈 포트",
+      "connector": {"value": "storage-socket", "confidence": "inferred", "sources": ["one-way"]},
+      "attachment": {"value": "out", "confidence": "inferred", "sources": ["one-way"]},
+      "interfaces": [
+        {
+          "id": "exit-copy",
+          "domain": "storage",
+          "protocol": "copy",
+          "role": "bidirectional",
+          "evidence": {"value": true, "confidence": "inferred", "sources": ["one-way"]},
+          "params": {"throughput": {"value": 1200, "unit": "MB/s", "confidence": "inferred", "sources": ["one-way"]}}
+        }
+      ]
+    }
+  ],
+  "edges": [
+    {
+      "id": "in-out",
+      "from": "in",
+      "to": "out",
+      "evidence": {"value": true, "confidence": "inferred", "sources": ["one-way"]},
+      "uses": []
+    }
+  ],
+  "resources": []
+}

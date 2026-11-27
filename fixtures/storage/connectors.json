@@ -1,0 +1,16 @@
+{
+  "sources": [
+    {"id": "mate", "title": "합성 복사 커넥터 결합 정의", "locator": "fixture:storage-mate", "retrievedAt": "2026-11-26"}
+  ],
+  "connectors": [
+    {"id": "storage-plug", "endForm": {"value": "plug", "confidence": "inferred", "sources": ["mate"]}},
+    {"id": "storage-socket", "endForm": {"value": "receptacle", "confidence": "inferred", "sources": ["mate"]}}
+  ],
+  "mates": [
+    {
+      "a": "storage-plug",
+      "b": "storage-socket",
+      "evidence": {"value": true, "confidence": "inferred", "sources": ["mate"]}
+    }
+  ]
+}

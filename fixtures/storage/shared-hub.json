@@ -1,0 +1,80 @@
+{
+  "sceneId": "shared-hub",
+  "sources": [
+    {"id": "scene", "title": "합성 복사 배선·요청·개별 한도 정의", "locator": "fixture:storage-scene", "retrievedAt": "2026-11-26"}
+  ],
+  "items": [
+    {"instanceId": "host", "modelId": "host", "revision": "1"},
+    {"instanceId": "hub", "modelId": "hub", "revision": "1"},
+    {"instanceId": "ssd-a", "modelId": "medium", "revision": "1"},
+    {"instanceId": "ssd-b", "modelId": "medium", "revision": "1"},
+    {"instanceId": "ssd-c", "modelId": "medium", "revision": "1"}
+  ],
+  "personal": [
+    {
+      "instanceId": "ssd-a",
+      "ownerKind": "resource",
+      "ownerId": "read-rate",
+      "domain": "storage",
+      "field": "capacity",
+      "claim": {"value": 100, "unit": "MB/s", "confidence": "user_verified", "sources": ["scene"]}
+    }
+  ],
+  "connections": [
+    {
+      "id": "hub-up",
+      "from": {"instanceId": "host", "id": "hub"},
+      "to": {"instanceId": "hub", "id": "up"},
+      "parts": [],
+      "evidence": {"value": true, "confidence": "inferred", "sources": ["scene"]}
+    },
+    {
+      "id": "wire-a",
+      "from": {"instanceId": "hub", "id": "a"},
+      "to": {"instanceId": "ssd-a", "id": "port"},
+      "parts": [],
+      "evidence": {"value": true, "confidence": "inferred", "sources": ["scene"]}
+    },
+    {
+      "id": "wire-b",
+      "from": {"instanceId": "hub", "id": "b"},
+      "to": {"instanceId": "ssd-b", "id": "port"},
+      "parts": [],
+      "evidence": {"value": true, "confidence": "inferred", "sources": ["scene"]}
+    },
+    {
+      "id": "wire-c",
+      "from": {"instanceId": "hub", "id": "c"},
+      "to": {"instanceId": "ssd-c", "id": "port"},
+      "parts": [],
+      "evidence": {"value": true, "confidence": "inferred", "sources": ["scene"]}
+    }
+  ],
+  "workloads": [
+    {
+      "id": "copy-a",
+      "domain": "storage",
+      "kind": "copy",
+      "from": {"instanceId": "ssd-a", "id": "data"},
+      "to": {"instanceId": "host", "id": "copy-service"},
+      "request": {"throughput": {"value": 100, "unit": "MB/s", "confidence": "inferred", "sources": ["scene"]}}
+    },
+    {
+      "id": "copy-b",
+      "domain": "storage",
+      "kind": "copy",
+      "from": {"instanceId": "ssd-b", "id": "data"},
+      "to": {"instanceId": "host", "id": "copy-service"},
+      "request": {"throughput": {"value": 800, "unit": "MB/s", "confidence": "inferred", "sources": ["scene"]}}
+    },
+    {
+      "id": "copy-c",
+      "domain": "storage",
+      "kind": "copy",
+      "from": {"instanceId": "ssd-c", "id": "data"},
+      "to": {"instanceId": "host", "id": "copy-service"},
+      "request": {"throughput": {"value": 800, "unit": "MB/s", "confidence": "inferred", "sources": ["scene"]}}
+    }
+  ],
+  "scenarios": [{"id": "simultaneous", "members": ["copy-a", "copy-b", "copy-c"]}]
+}
