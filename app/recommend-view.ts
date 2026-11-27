@@ -13,6 +13,8 @@ import {recommendationEdits,reviewRecommendation,recommendationCost,rankRecommen
 
 interface Input { doc:SceneDocument; before:Snapshot; scenario:string|null; library:Library }
 
+const candidateHelp = "보유·후보 인벤토리, 내 모델과 카탈로그에서 추천 장비를 찾습니다. 새 아이템에서 비교할 모델을 추가할 수 있습니다.";
+
 function workText(state: Recommendation["workloadChanges"][number]["runs"][number]["after"]) {
   if (!state) return "없음";
   const { verdict, delivery } = state;
@@ -42,7 +44,7 @@ export function mountRecommendations(documents:Documents, read:()=>Input|undefin
     const {doc,before,scenario,library}=input;
     function empty() {
       status.className="inventory-empty";
-      status.textContent="표시할 추천 장비가 없습니다.";
+      status.textContent="표시할 추천 장비가 없습니다. "+candidateHelp;
     }
     if (!scenario) {empty();return;}
     const startedInventory=library.inventory, startedModels=library.models;
@@ -60,7 +62,7 @@ export function mountRecommendations(documents:Documents, read:()=>Input|undefin
     };
     const paint=()=>{
       status.textContent="후보 "+plan.total+"개 중 "+count+"개 확인"+(running ? " 중…" : "")+
-        (failures ? " · 평가할 수 없는 편집 "+failures+"개" : "")+(!running && !cards.length ? " · 목표 달성 사례 없음" : "");
+        (failures ? " · 평가할 수 없는 편집 "+failures+"개" : "")+(!running && !cards.length ? " · 목표 달성 사례 없음. "+candidateHelp : "");
       const rows=cards.sort((a,b)=>rankRecommendations(a.card,b.card)).map(({card,view})=>{
         const row=document.createElement("article");
         row.className="inventory-item";
@@ -78,15 +80,16 @@ export function mountRecommendations(documents:Documents, read:()=>Input|undefin
           for (const { claim, value } of condition.assignments) {
             const source = view.scene.claims[claim]!, q = claimQuest(view, claim), label = questName(q);
             const expected = label + " = " + measurementValueText(value, source.unit);
+            const questLabel = name(condition.goal) + " · " + expected + " 확인 퀘스트";
             const key = card.edit.document.sceneId + "-quest-" + index + "-" + claim;
             const control = document.createElement("button");
             control.type = "button";
             control.textContent = "확인 퀘스트";
-            control.setAttribute("aria-label", label + " 확인 퀘스트");
+            control.setAttribute("aria-label", questLabel);
             control.setAttribute("aria-controls", key);
             const detail = document.createElement("section");
             detail.id = key;
-            detail.setAttribute("aria-label", label + " 확인 퀘스트");
+            detail.setAttribute("aria-label", questLabel);
             detail.hidden = !expanded.has(key);
             control.setAttribute("aria-expanded", String(!detail.hidden));
             const check = document.createElement("p");

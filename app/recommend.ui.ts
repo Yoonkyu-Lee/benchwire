@@ -99,7 +99,7 @@ test("추천 탭은 최대 여덟 편집을 검산하고 미완료 사유와 퀘
     await scenes.selectOption("three-ports");
     await waitForAssessment(page);
     await recommend.click();
-    await panel.getByText("표시할 추천 장비가 없습니다.", { exact: true }).waitFor();
+    await panel.getByText(/^표시할 추천 장비가 없습니다\./).waitFor();
     assert.equal(await panel.getByRole("article").count(), 0);
 
     let release!: () => void;
@@ -117,7 +117,7 @@ test("추천 탭은 최대 여덟 편집을 검산하고 미완료 사유와 퀘
       await recommend.click();
       release();
       assert.ok((await response).ok());
-      await panel.getByText("표시할 추천 장비가 없습니다.", { exact: true }).waitFor();
+      await panel.getByText(/^표시할 추천 장비가 없습니다\./).waitFor();
       assert.equal(await panel.getByRole("article").count(), 0);
     } finally { release(); }
     assert.deepEqual(errors, []);
@@ -202,19 +202,29 @@ test("조건부 추천에서 값마다 실물과 포트를 확인하는 퀘스�
     }
     doc.sceneId = "recommend-condition-targets";
     doc.scenarios[0]!.goals = [{ id: "전송 확보", kind: "metric", unit: "Mbps", minimum: 800,
-      metric: "delivery", run: "together", workloads: ["lan-a"] }];
+      metric: "delivery", run: "together", workloads: ["lan-a"] },
+      { id: "B 연결", kind: "workload", workload: "lan-b" }];
     const card = await reviewCard(page, model, doc);
     await card.getByText(/이 조건에서 가능.*전송 확보/).waitFor();
     const text = await card.innerText();
     assert.match(text, /시험 포트 둘 스위치 · LAN \(lan-a\) · Ethernet · 지원 BASE-T 모드 = 1000BASE-T/);
     assert.match(text, /시험 포트 둘 스위치 · LAN \(lan-b\) · Ethernet · 지원 BASE-T 모드 = 100BASE-TX/);
-    const button = card.getByRole("button", { name: "시험 포트 둘 스위치 · LAN (lan-a) · Ethernet · 지원 BASE-T 모드 확인 퀘스트", exact: true });
-    assert.equal(await card.getByRole("button", { name: "시험 포트 둘 스위치 · LAN (lan-b) · Ethernet · 지원 BASE-T 모드 확인 퀘스트", exact: true }).count(), 1);
-    await button.click();
-    const detail = card.getByRole("region", { name: /lan-a.*확인 퀘스트/ });
-    await detail.waitFor();
-    assert.match(await detail.innerText(), /1000BASE-T/);
-    assert.equal(await card.getByRole("region", { name: /lan-b.*확인 퀘스트/ }).count(), 0);
+    await card.getByText("이 조건에서 가능 · B 연결", { exact: true }).waitFor();
+    const nameA = "전송 확보 · 시험 포트 둘 스위치 · LAN (lan-a) · Ethernet · 지원 BASE-T 모드 = 1000BASE-T 확인 퀘스트";
+    const nameB = "B 연결 · 시험 포트 둘 스위치 · LAN (lan-a) · Ethernet · 지원 BASE-T 모드 = 100BASE-TX 확인 퀘스트";
+    const button = (name: string) => card.getByRole("button", { name, exact: true });
+    assert.equal(await button(nameA).count(), 1);
+    assert.equal(await button(nameB).count(), 1);
+    assert.equal(await button("전송 확보 · 시험 포트 둘 스위치 · LAN (lan-b) · Ethernet · 지원 BASE-T 모드 = 100BASE-TX 확인 퀘스트").count(), 1);
+    await button(nameA).click();
+    const detailA = card.getByRole("region", { name: nameA, exact: true });
+    await detailA.waitFor();
+    assert.match(await detailA.innerText(), /1000BASE-T/);
+    const detailB = card.getByRole("region", { name: nameB, exact: true });
+    assert.equal(await detailB.count(), 0);
+    await button(nameB).click();
+    await detailB.waitFor();
+    assert.match(await detailB.innerText(), /100BASE-TX/);
     await card.screenshot({ path: "work/recommend-duplicate-port-labels.png" });
 
     const open = structuredClone(model);
@@ -230,7 +240,8 @@ test("조건부 추천에서 값마다 실물과 포트를 확인하는 퀘스�
     await openReviewScene(page, doc.sceneId);
     await page.getByRole("button", { name: "목표 체크리스트", exact: true }).click();
     const checklist = page.getByRole("dialog", { name: "목표 체크리스트" });
-    await checklist.getByRole("button", { name: /LAN \(lan-a\).*지원 BASE-T 모드 확인 퀘스트 열기/ }).click();
+    const goal = checklist.getByRole("article").filter({ has: page.getByRole("heading", { name: "전송 확보", exact: true }) });
+    await goal.getByRole("button", { name: /LAN \(lan-a\).*지원 BASE-T 모드 확인 퀘스트 열기/ }).click();
     const quests = page.getByRole("dialog", { name: "검증 퀘스트" });
     for (const id of ["lan-a", "lan-b"]) {
       await quests.locator("summary").filter({ hasText: new RegExp("LAN \\(" + id + "\\).*Ethernet") }).waitFor();

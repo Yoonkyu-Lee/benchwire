@@ -252,7 +252,7 @@ test("포인터와 키보드로 연결하고 취소하거나 거절한 포트는
     assert.deepEqual(edited.connections[1]!.parts, []);
     assert.equal(edited.sources.filter(source => source.locator === "canvas:placement").length, 1);
     await page.getByRole("button", { name: "추천", exact: true }).click();
-    assert.equal(await page.locator(".inventory-empty").textContent(), "표시할 추천 장비가 없습니다.");
+    assert.match(await page.locator(".inventory-empty").textContent() ?? "", /^표시할 추천 장비가 없습니다\./);
     await page.screenshot({ path: "work/m3-canvas-edit.png" });
     assert.deepEqual(errors, []);
   } finally { await page.close(); }

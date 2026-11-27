@@ -7,6 +7,7 @@
   "inventory": [
     {"instanceId":"spare-wire","modelId":"network-copper","revision":"1","alias":"예비 이더넷 케이블","state":"owned"},
     {"instanceId":"practice-usbc-wire","modelId":"cable-3a","revision":"1","alias":"연습용 USB-C 전력 케이블","state":"owned"},
-    {"instanceId":"practice-receiver","modelId":"receiver","revision":"1","alias":"연습용 수전 기기","state":"owned"}
+    {"instanceId":"practice-receiver","modelId":"receiver","revision":"1","alias":"연습용 수전 기기","state":"owned"},
+    {"instanceId":"practice-uplink-switch","modelId":"practice-uplink-switch","revision":"1","state":"candidate"}
   ]
 }

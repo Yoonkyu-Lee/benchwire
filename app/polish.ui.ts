@@ -296,3 +296,38 @@ test("로드아웃과 슬롯 교체에서 배선의 방향을 표시한다",asyn
     await page.screenshot({path:"work/polish-swap-compare.png"});
   }finally{await page.close();}
 });
+
+
+
+test("복제한 초안을 템플릿으로 바꾸기 전에 확인하고 취소하면 그대로 둔다", async () => {
+  const { page, errors } = await edge.newPage("/");
+  try {
+    const form = panel(page, "새 아이템");
+    await button(page, "새 아이템").click();
+    await form.getByLabel("복제할 모델 판본").selectOption("network-copper@1");
+    await button(form, "모델 복제").click();
+    const name = form.getByLabel("모델 이름", { exact: true });
+    const id = form.getByLabel("모델 ID", { exact: true });
+    const previousId = await id.inputValue();
+    await name.fill("복제 초안");
+    await button(form, "닫기").click();
+    await button(page, "새 아이템").click();
+    const template = button(form, "USB-C 충전기 불러오기");
+    for (const accept of [false, true]) {
+      page.once("dialog", confirmation => accept ? confirmation.accept() : confirmation.dismiss());
+      const [confirmation] = await Promise.all([page.waitForEvent("dialog", { timeout: 3000 }), template.click()]);
+      assert.equal(confirmation.type(), "confirm");
+      assert.match(confirmation.message(), /초안.*USB-C 충전기/);
+      if (!accept) {
+        assert.equal(await name.inputValue(), "복제 초안");
+        assert.equal(await id.inputValue(), previousId);
+      }
+    }
+    assert.equal(await name.inputValue(), "USB-C 충전기");
+    assert.notEqual(await id.inputValue(), previousId);
+    await form.getByRole("group", { name: "포트 1", exact: true }).waitFor();
+    assert.equal(await form.getByRole("group", { name: "포트 2", exact: true }).count(), 0);
+    assert.deepEqual(await form.getByLabel("제목", { exact: true }).evaluateAll(fields => fields.map(f => (f as HTMLInputElement).value)), [""]);
+    assert.deepEqual(errors, []);
+  } finally { await page.close(); }
+});

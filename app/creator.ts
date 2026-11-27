@@ -879,8 +879,10 @@ export function mountCreator(dialog: HTMLDialogElement, documents: Documents, sa
       return;
     }
     if (ports.read().length || nodes.read().length || edges.read().length || resources.read().length) {
-      error.textContent = "템플릿은 구조가 비어 있을 때 불러올 수 있습니다.";
-      return;
+      if (!window.confirm("현재 초안을 지우고 USB-C 충전기 템플릿을 불러올까요?")) return;
+      fillDraft({ modelId: "item-" + crypto.randomUUID().slice(0, 8), revision: "1", kind: "device",
+        brand: "", name: charger.name, category: charger.category, sources: [], nodes: [], ports: [], edges: [], resources: [] });
+      sources.add();
     }
     kind.value = charger.kind;
     if (!name.value) name.value = charger.name;
