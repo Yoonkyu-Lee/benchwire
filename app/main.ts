@@ -303,8 +303,9 @@ async function start() {
         if (!tag || (result?.status !== 201 && result?.status !== 204)) { rejectEdits(); return; }
         if (result.status === 201) {
           saved = await result.json() as SceneDocument;
-          picker.add(new Option(saved.sceneId, saved.sceneId));
-          picker.value = saved.sceneId;
+          draft = workbench.adoptSceneId(saved.sceneId);
+          picker.add(new Option(draft.sceneId, draft.sceneId));
+          picker.value = draft.sceneId;
         } else saved = document;
         etag = tag;
         edits.shift()?.done?.(true);

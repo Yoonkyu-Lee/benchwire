@@ -165,24 +165,55 @@ function mountResearch(root: HTMLElement, fillDraft: (model: Model) => void) {
     if (result.draft) {
       const draft = result.draft;
       const use = button("조사 초안 불러오기");
+      const { proposals } = draft;
+      const claims = new Map<string, (typeof proposals.claims)[number]>();
       const attachments = new Map<string, Claim>();
       const edges: (() => Edge | undefined)[] = [];
-      use.onclick = () => fillDraft({
-        ...draft.model,
-        ports: draft.model.ports.map(port => ({ ...port, attachment: attachments.get(port.id) ?? port.attachment })),
-        edges: [...draft.model.edges, ...edges.flatMap(read => read() ?? [])],
-      });
+      use.onclick = () => {
+        const model: Model = structuredClone(draft.model);
+        for (const { target, id, domain, field, claim } of claims.values()) {
+          const chosen = { ...claim, confidence: "inferred" as const };
+          if (target === "item") {
+            const attributes = model.attributes ??= {};
+            attributes[domain] = { ...attributes[domain], [field]: chosen };
+          } else if (target === "interface") {
+            const iface = model.ports.flatMap(port => port.interfaces).find(row => row.id === id)!;
+            iface.params = { ...iface.params, [field]: chosen };
+          } else if (target === "port") model.ports.find(port => port.id === id)!.connector = chosen;
+          else model.resources.find(resource => resource.id === id)![field === "capacity" ? "capacity" : "policy"] = chosen;
+        }
+        for (const port of model.ports) port.attachment = attachments.get(port.id) ?? port.attachment;
+        model.edges.push(...edges.flatMap(read => read() ?? []));
+        fillDraft(model);
+      };
       details.append(el("p", "초안을 불러오면 생성기의 입력이 바뀝니다. 내용을 확인한 뒤 저장하세요."), use);
-      const { proposals } = draft;
-      if (proposals.attachments.length || proposals.edges.length) {
+      if (proposals.claims.length || proposals.attachments.length || proposals.edges.length) {
         const review = section(details, "AI 제안");
-        review.append(el("p", "인용문을 읽고 확인한 배선만 선택한 뒤 초안을 불러오세요."));
+        review.append(el("p", "인용문을 읽고 확인한 값과 배선을 선택한 뒤 초안을 불러오세요. 선택한 값은 추정으로 들어갑니다."));
         function approve(box: HTMLElement, title: string, quote: string, proof: Claim) {
           const checkbox = el("input");
           checkbox.type = "checkbox";
           field(box, title, checkbox);
           box.append(el("blockquote", quote), ...proof.sources.map(citation));
           return checkbox;
+        }
+        const byField = new Map<string, HTMLInputElement[]>();
+        for (const proposal of proposals.claims) {
+          const { target, id, domain, field, label, claim, quote, reason } = proposal;
+          const key = JSON.stringify([target, id, domain, field]);
+          const row = el("div");
+          const value = [String(claim.value), claim.unit].filter(Boolean).join(" ");
+          const control = approve(row, `${label} · ${value}`, quote, claim);
+          row.append(el("p", reason));
+          review.append(row);
+          const related = byField.get(key) ?? [];
+          related.push(control);
+          byField.set(key, related);
+          control.onchange = () => {
+            if (!control.checked) { claims.delete(key); return; }
+            for (const other of related) if (other !== control) other.checked = false;
+            claims.set(key, proposal);
+          };
         }
         const byPort = new Map<string, HTMLInputElement[]>();
         const nodeLabel = (id: string) => draft.model.nodes.find(node => node.id === id)?.label ?? id;
@@ -398,8 +429,11 @@ export function mountCreator(dialog: HTMLDialogElement, documents: Documents, sa
 
   const provenance = section(body, "출처");
   const defaultSource = select(provenance, "기본 출처", [["", "선택"]]);
+  const sourceIds = new Set<string>();
   const sources = rows<Source, Source>(provenance, "출처", (row, n, seed) => {
-    const id = seed?.id ?? "manual-source-" + n;
+    let id = seed?.id ?? "manual-source-" + n;
+    if (!seed && sourceIds.has(id)) id += "-" + crypto.randomUUID();
+    sourceIds.add(id);
     const title = input(row, "제목", seed?.title ?? "", `sources.${n - 1}.title`);
     const locator = input(row, "주소", seed?.locator ?? "", `sources.${n - 1}.locator`);
     const date = input(row, "조회일", seed?.retrievedAt ?? new Date().toISOString().slice(0, 10), `sources.${n - 1}.retrievedAt`, "date");
@@ -414,16 +448,29 @@ export function mountCreator(dialog: HTMLDialogElement, documents: Documents, sa
   const forInterfaces: NamedChoice[] = registrations.filter(r => r.interfaces.length).map(r => [r.plugin.id, r.name]);
 
   function sourcePicker(box: HTMLElement, label: string, initial: readonly string[] = []) {
-    const options = sources.read().map(row => [row.id, row.title || row.id] as const);
-    const pick = select(box, label + " 출처", [["", "기본 출처"], ...options], initial[0]);
-    pick.dataset.ref = "source";
+    const pick = select(box, label + " 출처", [["", "기본 출처"]]);
+    pick.dataset.sources = JSON.stringify(initial);
+    refreshSourceChoices(pick, sources.read(), initial[0] ?? "");
     return () => {
-      if (initial.length && pick.value === initial[0]) {
-        const available = new Set(sources.read().map(row => row.id));
-        return initial.filter(id => available.has(id));
-      }
-      return [pick.value || defaultSource.value].filter(Boolean);
+      const selected = pick.value;
+      const available = new Set(sources.read().map(row => row.id));
+      return (selected && selected === initial[0] ? initial : [selected || defaultSource.value]).filter(id => available.has(id));
     };
+  }
+
+  function refreshSourceChoices(control: HTMLSelectElement, available: readonly Source[], selected = control.value) {
+    const initial: string[] = JSON.parse(control.dataset.sources ?? "[]");
+    const entries = available.map(row => [row.id, row.title || row.id] as const);
+    if (initial.length && selected === initial[0]) {
+      const labels = available.filter(row => initial.includes(row.id)).map(row => row.title || row.id);
+      const at = entries.findIndex(([id]) => id === selected);
+      const inherited = [selected, labels.join(" · ") || "출처 없음"] as const;
+      if (at < 0) entries.unshift(inherited);
+      else entries[at] = inherited;
+    } else if (selected && !entries.some(([id]) => id === selected)) entries.unshift([selected, "출처 없음"]);
+    const blank = control === defaultSource ? "선택"
+      : available.some(row => row.id === defaultSource.value) ? "기본 출처" : "출처 없음";
+    choices(control, [["", blank], ...entries], selected);
   }
 
   function claimProof(box: HTMLElement, label: string, seed?: Claim) {
@@ -431,10 +478,13 @@ export function mountCreator(dialog: HTMLDialogElement, documents: Documents, sa
     const readSources = sourcePicker(box, label, seed?.sources);
     return ({ value, unit }: FieldValue): Claim => {
       const rank = value === null ? "unknown" : confidence.value as Claim["confidence"];
-      const sources = readSources();
-      const same = seed && value === seed.value && unit === (seed.unit ?? "") && rank === seed.confidence
-        && sources.length === seed.sources.length && sources.every((id, i) => id === seed.sources[i]);
-      return same ? seed : { value, unit, confidence: rank, sources, ...(seed?.condition && { condition: seed.condition }) };
+      const selected = readSources();
+      const sameValue = seed && value === seed.value && unit === (seed.unit ?? "") && rank === seed.confidence;
+      const claim = { value, unit, confidence: rank, sources: selected, ...(seed?.condition && { condition: seed.condition }) };
+      if (!sameValue) return claim;
+      const available = new Set(sources.read().map(row => row.id));
+      const conflicts = seed.conflicts?.map(candidate => ({ ...candidate, sources: candidate.sources.filter(id => available.has(id)) }));
+      return { ...seed, sources: selected, ...(conflicts && { conflicts }) };
     };
   }
 
@@ -641,15 +691,16 @@ export function mountCreator(dialog: HTMLDialogElement, documents: Documents, sa
   });
 
   function updateReferences() {
-    const sourceList = sources.read().map(row => [row.id, row.title || row.id] as const);
-    const preferred = defaultSource.value || sourceList[0]?.[0];
-    choices(defaultSource, [["", "선택"], ...sourceList], preferred);
+    const available = sources.read();
+    refreshSourceChoices(defaultSource, available, defaultSource.value || available[0]?.id || "");
+    for (const control of form.querySelectorAll<HTMLSelectElement>("select[data-sources]"))
+      refreshSourceChoices(control, available);
     const nodeList = nodes.read().flatMap(row => row.id ? [[row.id, row.label || row.id] as const] : []);
     const resourceList = resources.read().flatMap(row => row.id ? [[row.id, row.id] as const] : []);
     for (const control of form.querySelectorAll<HTMLSelectElement>("select[data-ref]")) {
       const type = control.dataset.ref;
-      const entries = type === "source" ? sourceList : type === "node" ? nodeList : resourceList;
-      choices(control, [["", control.dataset.empty ?? "기본 출처"], ...entries]);
+      const entries = type === "node" ? nodeList : resourceList;
+      choices(control, [["", control.dataset.empty ?? "선택"], ...entries]);
     }
   }
 
@@ -674,6 +725,7 @@ export function mountCreator(dialog: HTMLDialogElement, documents: Documents, sa
 
   function fillDraft(model: Model) {
     for (const rows of [ports, nodes, edges, resources, sources]) rows.clear();
+    sourceIds.clear();
     defaultSource.value = "";
     kind.value = model.kind;
     brand.value = model.brand;

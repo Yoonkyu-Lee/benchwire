@@ -141,7 +141,7 @@ export function mountWorkbench(root: HTMLElement, initial: SceneDocument, librar
   trigger.onclick = () => {
     if (!dialog.childElementCount) openCreator = mountCreator(dialog, documents, async (model, newId) => {
       const key = modelKey(model);
-      const pending = "benchwire:pending-placement:" + JSON.stringify([scene.sceneId, key]);
+      const pending = "benchwire:pending-placement:" + key;
       const instanceId = sessionStorage.getItem(pending) ?? newId;
       const existing = stock.get(instanceId);
       const item: InventoryItem = existing ?? { instanceId, modelId: model.modelId, revision: model.revision, state: "owned" };
@@ -266,9 +266,14 @@ export function mountWorkbench(root: HTMLElement, initial: SceneDocument, librar
     });
   }
 
+  function updateDocument(next: SceneDocument) {
+    scene = next;
+    if (view && assessment === evaluated && options.onChange) renderQuests(view, scene);
+  }
+
   function commit(next: SceneDocument, intent: SceneIntent, prepared?: Assessment) {
     if (intent.kind === "place") {
-      scene = next;
+      updateDocument(next);
       render();
     } else {
       const loaded = prepared ?? load(next);
@@ -343,6 +348,11 @@ export function mountWorkbench(root: HTMLElement, initial: SceneDocument, librar
     readDocument: () => scene,
     readScenario,
     setScenario,
+    adoptSceneId(sceneId: string) {
+      if (assessment) assessment.scene.id = sceneId;
+      updateDocument({ ...scene, sceneId });
+      return scene;
+    },
     replaceDocument(next: SceneDocument) {
       const loaded = load(next);
       if (!loaded) return false;

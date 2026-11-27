@@ -1,9 +1,9 @@
 // 가상 응답으로 판본·인용·예산·캐시 경계를 검증한다.
 import assert from "node:assert/strict";
+import { once } from "node:events";
 import { mkdir, mkdtemp, readFile, rm } from "node:fs/promises";
 import { basename, dirname, join, resolve } from "node:path";
 import { test, type TestContext } from "node:test";
-import { setImmediate as settle } from "node:timers/promises";
 import type Anthropic from "@anthropic-ai/sdk";
 import { fixtureClient, recording } from "../fixtures/research/recording.ts";
 import { plugins } from "../domains/registry.ts";
@@ -32,12 +32,9 @@ const choose = (result: ResearchStatus, index = 0) => ({ action: "select", id: r
 const pending = (value: ResearchStatus) => ["identifying", "researching", "normalizing"].includes(value.phase);
 
 async function settled(research: ReturnType<typeof openResearch>, result: ResearchStatus) {
-  for (let step = 0; step < 20 && pending(result); step++) {
-    await settle();
-    result = research.status(result.id);
-  }
-  assert(!pending(result));
-  return result;
+  const completed = await research.waitFor(result.id);
+  assert(!pending(completed));
+  return completed;
 }
 
 function oneCandidate(): Anthropic.Message {
@@ -92,7 +89,7 @@ test("다른 판본·없는 인용·잘못된 값과 단위를 버리고 나머�
   const ready = await settled(research, research.submit(input));
   const result = await settled(research, research.submit(choose(ready)));
   assert.equal(result.phase, "complete");
-  const { model, discarded, conflicts } = result.draft!;
+  const { model, discarded, conflicts, proposals } = result.draft!;
   assert.deepEqual(model.ports.map(port => port.id), ["a"]);
   assert.deepEqual(model.ports[0]!.attachment, {
     value: null, unit: "", condition: "", confidence: "unknown", sources: ["source-1"],
@@ -110,7 +107,7 @@ test("다른 판본·없는 인용·잘못된 값과 단위를 버리고 나머�
   assert.equal(model.edges.length, 0);
   assert.equal(model.resources[0]!.capacity.value, null);
   assert(discarded.some(message => message.includes("인용 근거")));
-  assert(discarded.some(message => message.includes("별도 근거")));
+  assert(proposals.claims.some(row => row.field === "maxW" && row.claim.value === 15 && row.claim.condition === "other load condition"));
   assert(discarded.some(message => message.includes("reserveW") || message.includes("claims.")));
   assert(discarded.some(message => message.includes("accepts9")));
 });
@@ -173,11 +170,21 @@ function withOfficialQuote(extra: string, changeDocument = true) {
   const fetched = message.content.find(row => row.type === "web_fetch_tool_result" && row.tool_use_id === "fixture-fetched-0");
   assert(fetched?.type === "web_fetch_tool_result" && fetched.content.type === "web_fetch_result"
     && fetched.content.content.source.type === "text");
-  const quote = message.content.find(row => row.type === "text")!.citations![0]!;
+  const citations = message.content.find(row => row.type === "text")!.citations!;
+  const quote = citations[0]!;
   assert.equal(quote.type, "char_location");
+  const end = quote.end_char_index;
   quote.cited_text += extra;
-  if (quote.type === "char_location") quote.end_char_index = quote.cited_text.length;
-  if (changeDocument) fetched.content.content.source.data = quote.cited_text;
+  quote.end_char_index += extra.length;
+  if (changeDocument) {
+    const source = fetched.content.content.source;
+    source.data = source.data.slice(0, end) + extra + source.data.slice(end);
+    for (const row of citations) {
+      if (row.type !== "char_location" || row.document_index !== quote.document_index || row.start_char_index < end) continue;
+      row.start_char_index += extra.length;
+      row.end_char_index += extra.length;
+    }
+  }
   return message;
 }
 
@@ -199,6 +206,82 @@ test("인용의 30 W를 99 W로 바꾼 정규화 값을 버린다", async t => {
 });
 
 
+
+test("적대적 인용 변형은 값이나 PDO 미지원으로 확정하지 않는다", async t => {
+  const dir = await dataDir(t);
+  const connectors = openLibrary(root, dir).describe().connectors;
+  const cases = [
+    { name: "다른 포트", quote: " USB-C A 30 W, USB-C B 99 W.", secondPort: true },
+    { name: "영어 조건", quote: " USB-C A: 99 W only when a single port is in use." },
+    { name: "한국어 조건", quote: " USB-C A는 한 포트만 연결했을 때 99 W." },
+    { name: "부정문", quote: " USB-C A: 99 W is not supported." },
+    { name: "다른 단위", quote: " USB-C A: 99 mW." },
+    { name: "다른 판본", quote: "", citation: "quote-3" },
+    { name: "같은 문서의 미식별 판본", quote: "\nMorrow Finch FA-26. USB-C A: maxW: 99 W.", citation: "quote-7", splitQuote: true },
+    { name: "다른 포트의 전체 PDO", quote: "\nUSB-C A and USB-C B.\nAll source PDOs: 5 V / 3 A, 9 V / 2 A", secondPort: true, omission: true },
+    { name: "출처 둘의 같은 값", quote: "", replace: "Morrow Finch FA-24. USB-C A: maxW: 99 W.", duplicate: true },
+    { name: "정규화가 대상과 조건을 비움", quote: " Only USB-C B can deliver 99 W when used alone.",
+      unlabeled: true },
+    { name: "정규화가 경쟁 포트를 누락", quote: " USB-C A, USB-C B 99 W." },
+    { name: "조건부 PDO 목록", quote: "\nUSB-C A only when used alone.\nUSB-C A: All source PDOs: 5 V / 3 A, 9 V / 2 A", omission: true },
+    { name: "같은 포트의 모순되는 PDO 목록", quote: "\nUSB-C A: All source PDOs: 5 V / 3 A\nUSB-C A: All source PDOs: 20 V / 3 A", omission: true },
+  ];
+  for (const variant of cases) await t.test(variant.name, async child => {
+    const isolated = await dataDir(child);
+    const found = withOfficialQuote(variant.quote);
+    if (variant.splitQuote) {
+      const citations = found.content.find(row => row.type === "text")!.citations!;
+      const first = citations[0]!;
+      assert.equal(first.type, "char_location");
+      const start = first.end_char_index - variant.quote.length;
+      citations.push({ ...first, cited_text: variant.quote, start_char_index: start });
+      first.cited_text = first.cited_text.slice(0, start);
+      first.end_char_index = start;
+    }
+    if (variant.replace) {
+      for (const index of [0, 1]) {
+        const fetch = found.content.find(row => row.type === "web_fetch_tool_result" && row.tool_use_id === "fixture-fetched-" + index);
+        assert(fetch?.type === "web_fetch_tool_result" && fetch.content.type === "web_fetch_result" &&
+          fetch.content.content.source.type === "text");
+        const citation = found.content.find(row => row.type === "text")!.citations![index]!;
+        assert.equal(citation.type, "char_location");
+        citation.cited_text = variant.replace;
+        citation.end_char_index = citation.cited_text.length;
+        fetch.content.content.source.data = citation.cited_text;
+      }
+    }
+    const normalized = structuredClone(recording.normalized);
+    const text = normalized.content.find(row => row.type === "text")!;
+    const doc = JSON.parse(text.text);
+    const claim = { ...doc.claims.find((row: { field: string }) => row.field === "maxW"), value: 99, citation: variant.citation ?? "quote-1" };
+    doc.claims = variant.omission ? [] : [claim];
+    doc.ports = doc.ports.slice(0, 1);
+    if (variant.secondPort) doc.ports.push({ id: "b", label: "USB-C B", citation: "quote-1" });
+    if (variant.unlabeled) doc.ports[0].label = "port";
+    if (variant.duplicate) doc.claims.push({ ...claim, citation: "quote-2", confidence: "review" });
+    doc.omissions = variant.omission ? [{ target: "interface", id: "usb-a", domain: "power", field: "pdo20", citation: "quote-1" }] : [];
+    text.text = JSON.stringify(doc);
+    const { client } = fixtureClient([oneCandidate(), found, normalized]);
+    const research = openResearch(isolated, connectors, client);
+    const result = await settled(research, research.submit(input));
+    assert.equal(result.phase, "complete", result.stop ?? "");
+    const draft = result.draft!;
+    const params = draft.model.ports.find(port => port.id === "a")?.interfaces[0]?.params;
+    assert.equal(params?.maxW?.value, null);
+    assert.equal(params.pdo20?.value, null);
+    assert.deepEqual(draft.omissions, []);
+    if (["다른 포트", "영어 조건", "한국어 조건", "같은 문서의 미식별 판본", "출처 둘의 같은 값", "정규화가 대상과 조건을 비움",
+      "정규화가 경쟁 포트를 누락"].includes(variant.name)) {
+      const matches = draft.proposals.claims.filter(row => row.field === "maxW" && row.claim.value === 99);
+      assert.equal(matches.length, variant.duplicate ? 2 : 1);
+      for (const proposal of matches) {
+        assert.match(proposal.quote, /99 W/);
+        assert(proposal.reason);
+        assert.equal(proposal.claim.sources.length, 1);
+      }
+    } else assert(draft.discarded.some(row => row.includes(variant.omission ? "pdo20" : "maxW")));
+  });
+});
 
 test("인용 메타데이터에만 있는 구간을 실제 열람 본문으로 취급하지 않는다", async t => {
   const dir = await dataDir(t);
@@ -222,10 +305,17 @@ test("연결되지 않았다는 원문으로 부착을 자동 저장하지 않�
   assert.equal(result.draft!.proposals.edges[0]!.uses[0]!.resource, "supply");
 });
 
-test("확인 안 된 PDO는 조사 초안에서 미확인으로 남는다", async t => {
+test("다른 포트의 전체 목록으로 미지원 처리하지 않고 PDO 확인 퀘스트를 남긴다", async t => {
   const dir = await dataDir(t);
   const connectors = openLibrary(root, dir).describe().connectors;
-  const { client } = fixtureClient([oneCandidate(), recording.investigate, recording.normalized]);
+  const normalized = structuredClone(recording.normalized);
+  const text = normalized.content.find(row => row.type === "text")!;
+  const doc = JSON.parse(text.text);
+  doc.ports.push({ id: "b", label: "USB-C B", citation: "quote-1" });
+  doc.omissions = [{ target: "interface", id: "usb-a", domain: "power", field: "pdo20", citation: "quote-1" }];
+  text.text = JSON.stringify(doc);
+  const found = withOfficialQuote("\nUSB-C B: All source PDOs: 5 V / 3 A, 9 V / 2 A");
+  const { client } = fixtureClient([oneCandidate(), found, normalized]);
   const research = openResearch(dir, connectors, client);
   const result = await settled(research, research.submit(input));
   const pdo = result.draft!.model.ports[0]!.interfaces[0]!.params.pdo20;
@@ -233,7 +323,7 @@ test("확인 안 된 PDO는 조사 초안에서 미확인으로 남는다", asyn
   assert.deepEqual([pdo?.value, pdo?.confidence, pdo?.unit], [null, "unknown", "A"]);
   const library = openLibrary(root, dir).describe();
   const model = result.draft!.model;
-  model.ports[0]!.connector.value = "c-receptacle";
+  model.ports[0]!.connector = { value: "c-receptacle", unit: "", condition: "", confidence: "inferred", sources: ["source-1"] };
   const scene = { sceneId: "pdo-check", sources: [{ id: "fixture", title: "시험", locator: "fixture:pdo", retrievedAt: "2026-11-27" }],
     items: [{ instanceId: "src", modelId: model.modelId, revision: model.revision },
       { instanceId: "sink", modelId: "receiver", revision: "1" }, { instanceId: "cable", modelId: "cable-3a", revision: "1" }],
@@ -256,7 +346,7 @@ test("완전한 PDO 목록의 인용이 있을 때만 해당 슬롯의 미선언
   doc.omissions = ["pdo20", "pdo5", "accepts20"].map(field =>
     ({ target: "interface", id: "usb-a", domain: "power", field, citation: "quote-1" }));
   text.text = JSON.stringify(doc);
-  const found = withOfficialQuote("\nAll source PDOs: 5 V / 3 A, 9 V / 2 A");
+  const found = withOfficialQuote("\nUSB-C A: All source PDOs: 5 V / 3 A, 9 V / 2 A");
   const { client } = fixtureClient([oneCandidate(), found, normalized]);
   const research = openResearch(dir, connectors, client);
   const result = await settled(research, research.submit(input));
@@ -294,6 +384,44 @@ test("한 이름에서 판본 두 개를 순서대로 조사하고 각 결과를
   assert.equal(reopened.submit(choose(again)).id, a.id);
   assert.equal(reopened.submit(choose(again, 1)).id, b.id);
   assert.equal(calls.length, 5);
+});
+
+test("완료를 기다리는 HTTP 조회는 단일 판본의 상세 기록까지 돌려준다", async t => {
+  const dir = await dataDir(t);
+  const { calls, client } = fixtureClient([oneCandidate(), recording.investigate, recording.normalized]);
+  const gate = Promise.withResolvers<void>();
+  const server = await startServer({ port: 0, dataDir: dir, researchClient: {
+    stream(params) {
+      const stream = client.stream(params);
+      return { async finalMessage() {
+        await gate.promise;
+        return stream.finalMessage();
+      } };
+    },
+  } });
+  t.after(() => new Promise<void>((done, fail) => server.close(error => error ? fail(error) : done())));
+  const address = server.address();
+  assert(address && typeof address === "object");
+  const origin = "http://127.0.0.1:" + address.port;
+  const response = await fetch(origin + "/api/research", { method: "POST",
+    headers: { "Content-Type": "application/json", Origin: origin }, body: JSON.stringify(input) });
+  assert.equal(response.status, 202);
+  const initial = await response.json() as ResearchStatus;
+  assert.equal(initial.phase, "identifying");
+  const path = origin + "/api/research/" + initial.id;
+  const progress = await (await fetch(path)).json() as ResearchStatus;
+  assert.equal(progress.phase, "identifying");
+
+  const requested = once(server, "request");
+  const waiting = fetch(path + "?wait=1");
+  await requested;
+  gate.resolve();
+  const result = await (await waiting).json() as ResearchStatus;
+  assert.equal(result.phase, "complete", result.stop ?? "");
+  assert.notEqual(result.id, initial.id);
+  assert.equal(result.draft?.model.revision, "FA-24");
+  assert.equal(calls.length, 3);
+  assert.deepEqual(await (await fetch(path)).json(), result);
 });
 
 test("키 없음과 같은 출처 검사는 서버 경계에서 유료 호출을 막는다", async t => {

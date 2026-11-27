@@ -844,6 +844,56 @@ test("장면 저장 실패 후 다시 열어 같은 모델을 배치할 때 실�
   } finally { await page.close(); }
 });
 
+test("예제 사본 응답을 잃고 새로고침한 뒤 같은 모델을 제출해도 실물은 한 개다", async () => {
+  const { page, errors } = await newPage("/");
+  const picker = page.getByRole("combobox", { name: "장면", exact: true });
+  const modelId = "retry-example-placement";
+  async function submit() {
+    await page.getByRole("button", { name: "새 아이템", exact: true }).click();
+    const form = page.getByRole("dialog", { name: "새 아이템" });
+    await form.getByLabel("모델 ID", { exact: true }).fill(modelId);
+    await form.getByLabel("브랜드", { exact: true }).fill("시험");
+    await form.getByLabel("모델 이름", { exact: true }).fill("사본에 배치한 모델");
+    await form.getByLabel("카테고리", { exact: true }).fill("시험");
+    await form.getByLabel("제목", { exact: true }).fill("모델 자료");
+    await form.getByLabel("주소", { exact: true }).fill("fixture:example-placement");
+    await form.getByRole("button", { name: "저장하고 배치" }).click();
+    return form;
+  }
+  async function inventoryIds() {
+    const response = await page.request.get(new URL("/api/library", page.url()).href);
+    const catalog = await response.json() as Library;
+    return catalog.inventory.filter(item => item.modelId === modelId).map(item => item.instanceId);
+  }
+  try {
+    await picker.selectOption("network");
+    assert.equal(await picker.inputValue(), "network");
+    let copied: SceneDocument | undefined;
+    await page.route("**/api/scenes/network", async route => {
+      if (route.request().method() !== "PUT") return route.continue();
+      const response = await route.fetch();
+      assert.equal(response.status(), 201);
+      copied = await response.json() as SceneDocument;
+      await route.abort();
+    });
+    await submit();
+    await page.locator("#storage-status").getByRole("button").waitFor();
+    assert(copied);
+    const original = await inventoryIds();
+    assert.equal(original.length, 1);
+    await page.reload();
+    await page.locator(`[data-instance="${original[0]}"]`).waitFor();
+    assert.equal(await picker.inputValue(), copied.sceneId);
+    const form = await submit();
+    await form.waitFor({ state: "hidden" });
+    assert.deepEqual(await inventoryIds(), original);
+    const response = await page.request.get(new URL("/api/scenes/" + copied.sceneId, page.url()).href);
+    assert.deepEqual(await response.json(), copied);
+    assert.deepEqual(errors, []);
+    await page.screenshot({ path: "work/m4-example-placement-retry.png" });
+  } finally { await page.close(); }
+});
+
 test("키가 없으면 AI 조사가 꺼지고 수동 생성기를 계속 쓴다", async () => {
   const { page, errors } = await newPage("/");
   try {
@@ -912,6 +962,65 @@ test("판본을 골라 가상 조사 초안을 확인·편집한 뒤 저장하�
     assert.equal(maxW.confidence, "official");
     assert.deepEqual(maxW.conflicts, [{ value: 60, confidence: "review", sources: ["detail-source-2"] }]);
     assert.deepEqual(errors, []);
+  } finally {
+    await page.close();
+    await closeServer();
+    await openServer();
+  }
+});
+
+test("배선에 붙인 출처를 지우면 다른 출처의 제목을 바꿔도 저장이 막힌다", async () => {
+  const { client } = fixtureClient([recording.identify, recording.investigate, recording.normalized]);
+  await closeServer();
+  await openServer(client);
+  const { page, errors } = await newPage("/");
+  try {
+    await page.getByRole("button", { name: "새 아이템", exact: true }).click();
+    const dialog = page.getByRole("dialog", { name: "새 아이템" });
+    await dialog.getByLabel("모델명 또는 공개 URL").fill("배선 출처 삭제 시험");
+    await dialog.getByRole("button", { name: "조사 시작" }).click();
+    await dialog.getByRole("button", { name: "Morrow Finch · FA-24" }).click();
+    const proposals = dialog.getByRole("group", { name: "AI 제안", exact: true });
+    await proposals.getByRole("checkbox", { name: "간선 · Controller → Output", exact: true }).check();
+    await proposals.getByRole("checkbox", { name: "자원 사용 · supply", exact: true }).check();
+    const conditional = proposals.getByRole("checkbox", { name: /포트 최대 전력.*15 W/ });
+    assert(!(await conditional.isChecked()));
+    await conditional.check();
+    assert.match(await proposals.innerText(), /other load condition/);
+    assert.match(await proposals.innerText(), /조건이 붙은 값/);
+    await conditional.locator("xpath=../..").screenshot({ path: "work/m4-research-conditional-proposal.png" });
+    const fill = dialog.getByRole("button", { name: "조사 초안 불러오기" });
+    await fill.click();
+    const edge = dialog.getByRole("group", { name: "간선 1", exact: true });
+    const provenance = dialog.getByRole("group", { name: "출처", exact: true });
+    await provenance.getByRole("group", { name: "출처 1", exact: true }).getByRole("button", { name: "출처 삭제" }).click();
+    await provenance.getByLabel("제목", { exact: true }).fill("무관한 전력 측정");
+    await dialog.getByLabel("모델 ID", { exact: true }).fill("missing-wiring-source");
+    const writes: string[] = [];
+    page.on("request", request => {
+      if (request.method() === "PUT") writes.push(request.url());
+    });
+    await dialog.getByRole("button", { name: "저장하고 배치" }).click();
+    assert(await dialog.isVisible());
+    assert.match(await edge.getByLabel("간선 출처", { exact: true }).locator("option:checked").textContent() ?? "", /출처 없음/);
+    assert.match(await edge.getByLabel("자원 사용 출처", { exact: true }).locator("option:checked").textContent() ?? "", /출처 없음/);
+    await dialog.getByText(/출처가 없는 주장/).waitFor();
+    assert.deepEqual(writes, []);
+    assert.deepEqual(errors, []);
+    await edge.screenshot({ path: "work/m4-research-missing-source.png" });
+    await fill.click();
+    await dialog.getByLabel("모델 ID", { exact: true }).fill("reviewed-conditional-value");
+    await dialog.getByText("인터페이스 값", { exact: true }).click();
+    assert.equal(await dialog.getByLabel("포트 최대 전력 (W)", { exact: true }).inputValue(), "15");
+    assert.equal(await dialog.getByLabel("포트 최대 전력 신뢰도", { exact: true }).inputValue(), "inferred");
+    const saved = page.waitForResponse(response => response.request().method() === "PUT" && /\/api\/models\//.test(response.url()));
+    await dialog.getByRole("button", { name: "저장하고 배치" }).click();
+    const response = await saved;
+    assert(response.ok());
+    const model = response.request().postDataJSON() as Model;
+    const claim = model.ports[0]?.interfaces[0]?.params.maxW;
+    assert.deepEqual(claim, { value: 15, unit: "W", condition: "other load condition", confidence: "inferred", sources: ["detail-source-2"] });
+    await dialog.waitFor({ state: "hidden" });
   } finally {
     await page.close();
     await closeServer();

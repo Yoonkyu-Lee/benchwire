@@ -2,7 +2,7 @@
 import { z } from "zod";
 
 export const id = z.string().min(1);
-const ids = z.array(id).nonempty();
+const ids = z.array(id).nonempty("출처가 없는 주장입니다. 출처를 선택하세요.");
 const confidence = z.enum(["official", "review", "community", "user_verified", "inferred", "unknown"]);
 const fileId = z.string().regex(/^[\p{L}\p{N}_-]+(?:\.[\p{L}\p{N}_-]+)*$/u, "파일 이름에 쓸 수 없는 ID입니다");
 export const revisionRef = z.string().refine(key => {

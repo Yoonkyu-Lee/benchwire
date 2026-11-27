@@ -82,7 +82,7 @@ export async function startServer({ port = PORT, dataDir = join(ROOT, "userdata"
     // 다른 호스트 이름으로 루프백에 도달한 브라우저 요청에도 개인 데이터를 내주지 않는다.
     if (request.headers.host !== host) throw new LibraryError(403, "Host", "서버의 루프백 주소로 접속해 주세요");
     const origin = "http://" + host;
-    const path = request.url?.split("?", 1)[0] ?? "/";
+    const [path = "/", search] = (request.url ?? "/").split("?", 2);
     const method = request.method;
     if (path === "/api/evidence/unused" && (method === "GET" || method === "POST")) {
       const selection = method === "POST" ? await readJson(request, origin) : undefined;
@@ -111,7 +111,8 @@ export async function startServer({ port = PORT, dataDir = join(ROOT, "userdata"
       return;
     }
     if (path.startsWith("/api/research/") && method === "GET") {
-      const result = research.status(path.slice("/api/research/".length));
+      const id = path.slice("/api/research/".length);
+      const result = new URLSearchParams(search).get("wait") === "1" ? await research.waitFor(id) : research.status(id);
       response.writeHead(200, { "Content-Type": JSON_TYPE }).end(JSON.stringify(result));
       return;
     }

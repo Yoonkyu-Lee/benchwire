@@ -122,7 +122,7 @@
             "source": {
               "type": "text",
               "media_type": "text/plain",
-              "data": "Morrow Finch FA-24: USB-C A, usb-c-receptacle, USB PD 30 W, PDO 5 V / 3 A, accepts5 false. USB-C A and Controller are not connected. Controller and Output are connected and use Supply."
+              "data": "Morrow Finch FA-24. USB-C A: connector: usb-c-receptacle. USB-C A: maxW: 30 W. USB-C A: pdo5: 3 A. USB-C A: accepts5: false. Controller and Output are connected and use Supply.\nUSB-C A and Controller are not connected."
             }
           }
         }
@@ -143,7 +143,7 @@
             "source": {
               "type": "text",
               "media_type": "text/plain",
-              "data": "Morrow Finch FA-24: measured USB PD 60 W; other load condition: 15 W."
+              "data": "Morrow Finch FA-24. USB-C A: maxW: 60 W.\nUSB-C A: maxW: 15 W (other load condition)."
             }
           }
         }
@@ -164,7 +164,7 @@
             "source": {
               "type": "text",
               "media_type": "text/plain",
-              "data": "Morrow Finch FA-25: USB PD 99 W."
+              "data": "Morrow Finch FA-25. USB-C B: maxW: 99 W."
             }
           }
         }
@@ -177,25 +177,25 @@
             "type": "char_location",
             "document_index": 0,
             "document_title": "FA-24 제품 설명서",
-            "cited_text": "Morrow Finch FA-24: USB-C A, usb-c-receptacle, USB PD 30 W, PDO 5 V / 3 A, accepts5 false. USB-C A and Controller are not connected. Controller and Output are connected and use Supply.",
+            "cited_text": "Morrow Finch FA-24. USB-C A: connector: usb-c-receptacle. USB-C A: maxW: 30 W. USB-C A: pdo5: 3 A. USB-C A: accepts5: false. Controller and Output are connected and use Supply.",
             "start_char_index": 0,
-            "end_char_index": 184
+            "end_char_index": 176
           },
           {
             "type": "char_location",
             "document_index": 1,
             "document_title": "FA-24 부하 측정",
-            "cited_text": "Morrow Finch FA-24: measured USB PD 60 W; other load condition: 15 W.",
+            "cited_text": "Morrow Finch FA-24. USB-C A: maxW: 60 W.",
             "start_char_index": 0,
-            "end_char_index": 69
+            "end_char_index": 40
           },
           {
             "type": "char_location",
             "document_index": 2,
             "document_title": "FA-25 제품 설명서",
-            "cited_text": "Morrow Finch FA-25: USB PD 99 W.",
+            "cited_text": "Morrow Finch FA-25. USB-C B: maxW: 99 W.",
             "start_char_index": 0,
-            "end_char_index": 32
+            "end_char_index": 40
           },
           {
             "type": "web_search_result_location",
@@ -210,6 +210,22 @@
             "title": "조사 도구 결과에 없음",
             "cited_text": "Morrow Finch FA-24 최대 170 W.",
             "encrypted_index": "fixture"
+          },
+          {
+            "type": "char_location",
+            "document_index": 1,
+            "document_title": "FA-24 부하 측정",
+            "cited_text": "USB-C A: maxW: 15 W (other load condition).",
+            "start_char_index": 41,
+            "end_char_index": 84
+          },
+          {
+            "type": "char_location",
+            "document_index": 0,
+            "document_title": "FA-24 제품 설명서",
+            "cited_text": "USB-C A and Controller are not connected.",
+            "start_char_index": 177,
+            "end_char_index": 218
           }
         ]
       }
@@ -241,7 +257,7 @@
     "content": [
       {
         "type": "text",
-        "text": "{\"revision\":\"FA-24\",\"sources\":[{\"id\":\"source-1\",\"confidence\":\"official\"},{\"id\":\"detail-source-2\",\"confidence\":\"review\"},{\"id\":\"detail-source-3\",\"confidence\":\"official\"},{\"id\":\"fake\",\"confidence\":\"official\"}],\"ports\":[{\"id\":\"a\",\"label\":\"USB-C A\",\"citation\":\"quote-1\"},{\"id\":\"discarded\",\"label\":\"근거 없는 포트\",\"citation\":\"quote-5\"}],\"nodes\":[{\"id\":\"controller\",\"label\":\"Controller\",\"kind\":\"controller\",\"citation\":\"quote-1\"},{\"id\":\"output\",\"label\":\"Output\",\"kind\":\"junction\",\"citation\":\"quote-1\"}],\"interfaces\":[{\"id\":\"usb-a\",\"label\":\"USB PD\",\"port\":\"a\",\"domain\":\"power\",\"protocol\":\"USB PD\",\"role\":\"source\",\"citation\":\"quote-1\"}],\"edges\":[{\"id\":\"invented-edge\",\"from\":\"controller\",\"to\":\"ghost\",\"citation\":\"quote-1\"},{\"id\":\"feed\",\"from\":\"controller\",\"to\":\"output\",\"citation\":\"quote-1\"}],\"resources\":[{\"id\":\"supply\",\"label\":\"Supply\",\"kind\":\"total-output\",\"domain\":\"power\",\"unit\":\"W\",\"citation\":\"quote-1\"}],\"claims\":[{\"target\":\"port\",\"id\":\"a\",\"domain\":\"\",\"field\":\"connector\",\"condition\":\"\",\"value\":\"usb-c-receptacle\",\"unit\":\"\",\"citation\":\"quote-1\",\"confidence\":\"official\"},{\"target\":\"interface\",\"id\":\"usb-a\",\"domain\":\"power\",\"field\":\"maxW\",\"condition\":\"\",\"value\":30,\"unit\":\"W\",\"citation\":\"quote-1\",\"confidence\":\"official\"},{\"target\":\"interface\",\"id\":\"usb-a\",\"domain\":\"power\",\"field\":\"pdo5\",\"condition\":\"\",\"value\":3,\"unit\":\"A\",\"citation\":\"quote-1\",\"confidence\":\"official\"},{\"target\":\"interface\",\"id\":\"usb-a\",\"domain\":\"power\",\"field\":\"accepts5\",\"condition\":\"\",\"value\":false,\"unit\":\"\",\"citation\":\"quote-1\",\"confidence\":\"official\"},{\"target\":\"interface\",\"id\":\"usb-a\",\"domain\":\"power\",\"field\":\"maxW\",\"condition\":\"\",\"value\":120,\"unit\":\"W\",\"citation\":\"quote-4\",\"confidence\":\"community\"},{\"target\":\"interface\",\"id\":\"usb-a\",\"domain\":\"power\",\"field\":\"maxW\",\"condition\":\"\",\"value\":99,\"unit\":\"W\",\"citation\":\"quote-3\",\"confidence\":\"official\"},{\"target\":\"interface\",\"id\":\"usb-a\",\"domain\":\"power\",\"field\":\"maxW\",\"condition\":\"\",\"value\":110,\"unit\":\"W\",\"citation\":\"source-invented\",\"confidence\":\"official\"},{\"target\":\"interface\",\"id\":\"usb-a\",\"domain\":\"power\",\"field\":\"maxW\",\"condition\":\"\",\"value\":170,\"unit\":\"W\",\"citation\":\"quote-5\",\"confidence\":\"official\"},{\"target\":\"interface\",\"id\":\"usb-a\",\"domain\":\"power\",\"field\":\"maxW\",\"condition\":\"\",\"value\":500,\"unit\":\"mW\",\"citation\":\"quote-1\",\"confidence\":\"official\"},{\"target\":\"interface\",\"id\":\"usb-a\",\"domain\":\"power\",\"field\":\"reserveW\",\"condition\":\"\",\"value\":5,\"unit\":\"W\",\"citation\":\"\",\"confidence\":\"official\"},{\"target\":\"port\",\"id\":\"a\",\"domain\":\"\",\"field\":\"attachment\",\"condition\":\"\",\"value\":\"hid-node\",\"unit\":\"\",\"citation\":\"quote-85\",\"confidence\":\"official\"},{\"target\":\"interface\",\"id\":\"usb-a\",\"domain\":\"power\",\"field\":\"accepts9\",\"condition\":\"\",\"value\":\"예\",\"unit\":\"\",\"citation\":\"quote-1\",\"confidence\":\"official\"},{\"target\":\"interface\",\"id\":\"usb-a\",\"domain\":\"power\",\"field\":\"maxW\",\"condition\":\"other load condition\",\"value\":15,\"unit\":\"W\",\"citation\":\"quote-2\",\"confidence\":\"review\"},{\"target\":\"port\",\"id\":\"a\",\"field\":\"attachment\",\"value\":\"controller\",\"domain\":\"\",\"unit\":\"\",\"citation\":\"quote-1\",\"confidence\":\"official\",\"condition\":\"\"},{\"target\":\"edge\",\"id\":\"feed\",\"field\":\"uses\",\"value\":\"supply\",\"domain\":\"\",\"unit\":\"\",\"citation\":\"quote-1\",\"confidence\":\"official\",\"condition\":\"\"}],\"omissions\":[]}",
+        "text": "{\"revision\":\"FA-24\",\"sources\":[{\"id\":\"source-1\",\"confidence\":\"official\"},{\"id\":\"detail-source-2\",\"confidence\":\"review\"},{\"id\":\"detail-source-3\",\"confidence\":\"official\"},{\"id\":\"fake\",\"confidence\":\"official\"}],\"ports\":[{\"id\":\"a\",\"label\":\"USB-C A\",\"citation\":\"quote-1\"},{\"id\":\"discarded\",\"label\":\"근거 없는 포트\",\"citation\":\"quote-99\"}],\"nodes\":[{\"id\":\"controller\",\"label\":\"Controller\",\"kind\":\"controller\",\"citation\":\"quote-1\"},{\"id\":\"output\",\"label\":\"Output\",\"kind\":\"junction\",\"citation\":\"quote-1\"}],\"interfaces\":[{\"id\":\"usb-a\",\"label\":\"USB PD\",\"port\":\"a\",\"domain\":\"power\",\"protocol\":\"USB PD\",\"role\":\"source\",\"citation\":\"quote-1\"}],\"edges\":[{\"id\":\"invented-edge\",\"from\":\"controller\",\"to\":\"ghost\",\"citation\":\"quote-1\"},{\"id\":\"feed\",\"from\":\"controller\",\"to\":\"output\",\"citation\":\"quote-1\"}],\"resources\":[{\"id\":\"supply\",\"label\":\"Supply\",\"kind\":\"total-output\",\"domain\":\"power\",\"unit\":\"W\",\"citation\":\"quote-1\"}],\"claims\":[{\"target\":\"port\",\"id\":\"a\",\"domain\":\"\",\"field\":\"connector\",\"condition\":\"\",\"value\":\"usb-c-receptacle\",\"unit\":\"\",\"citation\":\"quote-1\",\"confidence\":\"official\"},{\"target\":\"interface\",\"id\":\"usb-a\",\"domain\":\"power\",\"field\":\"maxW\",\"condition\":\"\",\"value\":30,\"unit\":\"W\",\"citation\":\"quote-1\",\"confidence\":\"official\"},{\"target\":\"interface\",\"id\":\"usb-a\",\"domain\":\"power\",\"field\":\"pdo5\",\"condition\":\"\",\"value\":3,\"unit\":\"A\",\"citation\":\"quote-1\",\"confidence\":\"official\"},{\"target\":\"interface\",\"id\":\"usb-a\",\"domain\":\"power\",\"field\":\"accepts5\",\"condition\":\"\",\"value\":false,\"unit\":\"\",\"citation\":\"quote-1\",\"confidence\":\"official\"},{\"target\":\"interface\",\"id\":\"usb-a\",\"domain\":\"power\",\"field\":\"maxW\",\"condition\":\"\",\"value\":120,\"unit\":\"W\",\"citation\":\"quote-4\",\"confidence\":\"community\"},{\"target\":\"interface\",\"id\":\"usb-a\",\"domain\":\"power\",\"field\":\"maxW\",\"condition\":\"\",\"value\":99,\"unit\":\"W\",\"citation\":\"quote-3\",\"confidence\":\"official\"},{\"target\":\"interface\",\"id\":\"usb-a\",\"domain\":\"power\",\"field\":\"maxW\",\"condition\":\"\",\"value\":110,\"unit\":\"W\",\"citation\":\"source-invented\",\"confidence\":\"official\"},{\"target\":\"interface\",\"id\":\"usb-a\",\"domain\":\"power\",\"field\":\"maxW\",\"condition\":\"\",\"value\":170,\"unit\":\"W\",\"citation\":\"quote-98\",\"confidence\":\"official\"},{\"target\":\"interface\",\"id\":\"usb-a\",\"domain\":\"power\",\"field\":\"maxW\",\"condition\":\"\",\"value\":500,\"unit\":\"mW\",\"citation\":\"quote-1\",\"confidence\":\"official\"},{\"target\":\"interface\",\"id\":\"usb-a\",\"domain\":\"power\",\"field\":\"reserveW\",\"condition\":\"\",\"value\":5,\"unit\":\"W\",\"citation\":\"\",\"confidence\":\"official\"},{\"target\":\"port\",\"id\":\"a\",\"domain\":\"\",\"field\":\"attachment\",\"condition\":\"\",\"value\":\"hid-node\",\"unit\":\"\",\"citation\":\"quote-85\",\"confidence\":\"official\"},{\"target\":\"interface\",\"id\":\"usb-a\",\"domain\":\"power\",\"field\":\"accepts9\",\"condition\":\"\",\"value\":\"예\",\"unit\":\"\",\"citation\":\"quote-1\",\"confidence\":\"official\"},{\"target\":\"interface\",\"id\":\"usb-a\",\"domain\":\"power\",\"field\":\"maxW\",\"condition\":\"other load condition\",\"value\":15,\"unit\":\"W\",\"citation\":\"quote-5\",\"confidence\":\"review\"},{\"target\":\"port\",\"id\":\"a\",\"field\":\"attachment\",\"value\":\"controller\",\"domain\":\"\",\"unit\":\"\",\"citation\":\"quote-6\",\"confidence\":\"official\",\"condition\":\"\"},{\"target\":\"edge\",\"id\":\"feed\",\"field\":\"uses\",\"value\":\"supply\",\"domain\":\"\",\"unit\":\"\",\"citation\":\"quote-1\",\"confidence\":\"official\",\"condition\":\"\"}],\"omissions\":[]}",
         "citations": null
       }
     ],
@@ -269,7 +285,7 @@
     "content": [
       {
         "type": "text",
-        "text": "{\"revision\":\"FA-24\",\"sources\":[{\"id\":\"source-1\",\"confidence\":\"official\"},{\"id\":\"detail-source-2\",\"confidence\":\"review\"},{\"id\":\"detail-source-3\",\"confidence\":\"official\"},{\"id\":\"fake\",\"confidence\":\"official\"}],\"ports\":[{\"id\":\"a\",\"label\":\"USB-C A\",\"citation\":\"quote-1\"},{\"id\":\"discarded\",\"label\":\"근거 없는 포트\",\"citation\":\"quote-5\"}],\"nodes\":[{\"id\":\"controller\",\"label\":\"Controller\",\"kind\":\"controller\",\"citation\":\"quote-1\"},{\"id\":\"output\",\"label\":\"Output\",\"kind\":\"junction\",\"citation\":\"quote-1\"}],\"interfaces\":[{\"id\":\"usb-a\",\"label\":\"USB PD\",\"port\":\"a\",\"domain\":\"power\",\"protocol\":\"USB PD\",\"role\":\"source\",\"citation\":\"quote-1\"}],\"edges\":[{\"id\":\"invented-edge\",\"from\":\"controller\",\"to\":\"ghost\",\"citation\":\"quote-1\"},{\"id\":\"feed\",\"from\":\"controller\",\"to\":\"output\",\"citation\":\"quote-1\"}],\"resources\":[{\"id\":\"supply\",\"label\":\"Supply\",\"kind\":\"total-output\",\"domain\":\"power\",\"unit\":\"W\",\"citation\":\"quote-1\"}],\"claims\":[{\"target\":\"port\",\"id\":\"a\",\"domain\":\"\",\"field\":\"connector\",\"condition\":\"\",\"value\":\"usb-c-receptacle\",\"unit\":\"\",\"citation\":\"quote-1\",\"confidence\":\"official\"},{\"target\":\"interface\",\"id\":\"usb-a\",\"domain\":\"power\",\"field\":\"maxW\",\"condition\":\"\",\"value\":30,\"unit\":\"W\",\"citation\":\"quote-1\",\"confidence\":\"official\"},{\"target\":\"interface\",\"id\":\"usb-a\",\"domain\":\"power\",\"field\":\"pdo5\",\"condition\":\"\",\"value\":3,\"unit\":\"A\",\"citation\":\"quote-1\",\"confidence\":\"official\"},{\"target\":\"interface\",\"id\":\"usb-a\",\"domain\":\"power\",\"field\":\"accepts5\",\"condition\":\"\",\"value\":false,\"unit\":\"\",\"citation\":\"quote-1\",\"confidence\":\"official\"},{\"target\":\"interface\",\"id\":\"usb-a\",\"domain\":\"power\",\"field\":\"maxW\",\"condition\":\"\",\"value\":120,\"unit\":\"W\",\"citation\":\"quote-4\",\"confidence\":\"community\"},{\"target\":\"interface\",\"id\":\"usb-a\",\"domain\":\"power\",\"field\":\"maxW\",\"condition\":\"\",\"value\":99,\"unit\":\"W\",\"citation\":\"quote-3\",\"confidence\":\"official\"},{\"target\":\"interface\",\"id\":\"usb-a\",\"domain\":\"power\",\"field\":\"maxW\",\"condition\":\"\",\"value\":110,\"unit\":\"W\",\"citation\":\"source-invented\",\"confidence\":\"official\"},{\"target\":\"interface\",\"id\":\"usb-a\",\"domain\":\"power\",\"field\":\"maxW\",\"condition\":\"\",\"value\":170,\"unit\":\"W\",\"citation\":\"quote-5\",\"confidence\":\"official\"},{\"target\":\"interface\",\"id\":\"usb-a\",\"domain\":\"power\",\"field\":\"maxW\",\"condition\":\"\",\"value\":500,\"unit\":\"mW\",\"citation\":\"quote-1\",\"confidence\":\"official\"},{\"target\":\"interface\",\"id\":\"usb-a\",\"domain\":\"power\",\"field\":\"reserveW\",\"condition\":\"\",\"value\":5,\"unit\":\"W\",\"citation\":\"\",\"confidence\":\"official\"},{\"target\":\"port\",\"id\":\"a\",\"domain\":\"\",\"field\":\"attachment\",\"condition\":\"\",\"value\":\"hid-node\",\"unit\":\"\",\"citation\":\"quote-85\",\"confidence\":\"official\"},{\"target\":\"interface\",\"id\":\"usb-a\",\"domain\":\"power\",\"field\":\"accepts9\",\"condition\":\"\",\"value\":\"예\",\"unit\":\"\",\"citation\":\"quote-1\",\"confidence\":\"official\"},{\"target\":\"interface\",\"id\":\"usb-a\",\"domain\":\"power\",\"field\":\"maxW\",\"condition\":\"other load condition\",\"value\":15,\"unit\":\"W\",\"citation\":\"quote-2\",\"confidence\":\"review\"},{\"target\":\"interface\",\"id\":\"usb-a\",\"domain\":\"power\",\"field\":\"maxW\",\"condition\":\"\",\"value\":60,\"unit\":\"W\",\"citation\":\"quote-2\",\"confidence\":\"review\"},{\"target\":\"port\",\"id\":\"a\",\"field\":\"attachment\",\"value\":\"controller\",\"domain\":\"\",\"unit\":\"\",\"citation\":\"quote-1\",\"confidence\":\"official\",\"condition\":\"\"},{\"target\":\"edge\",\"id\":\"feed\",\"field\":\"uses\",\"value\":\"supply\",\"domain\":\"\",\"unit\":\"\",\"citation\":\"quote-1\",\"confidence\":\"official\",\"condition\":\"\"}],\"omissions\":[]}",
+        "text": "{\"revision\":\"FA-24\",\"sources\":[{\"id\":\"source-1\",\"confidence\":\"official\"},{\"id\":\"detail-source-2\",\"confidence\":\"review\"},{\"id\":\"detail-source-3\",\"confidence\":\"official\"},{\"id\":\"fake\",\"confidence\":\"official\"}],\"ports\":[{\"id\":\"a\",\"label\":\"USB-C A\",\"citation\":\"quote-1\"},{\"id\":\"discarded\",\"label\":\"근거 없는 포트\",\"citation\":\"quote-99\"}],\"nodes\":[{\"id\":\"controller\",\"label\":\"Controller\",\"kind\":\"controller\",\"citation\":\"quote-1\"},{\"id\":\"output\",\"label\":\"Output\",\"kind\":\"junction\",\"citation\":\"quote-1\"}],\"interfaces\":[{\"id\":\"usb-a\",\"label\":\"USB PD\",\"port\":\"a\",\"domain\":\"power\",\"protocol\":\"USB PD\",\"role\":\"source\",\"citation\":\"quote-1\"}],\"edges\":[{\"id\":\"invented-edge\",\"from\":\"controller\",\"to\":\"ghost\",\"citation\":\"quote-1\"},{\"id\":\"feed\",\"from\":\"controller\",\"to\":\"output\",\"citation\":\"quote-1\"}],\"resources\":[{\"id\":\"supply\",\"label\":\"Supply\",\"kind\":\"total-output\",\"domain\":\"power\",\"unit\":\"W\",\"citation\":\"quote-1\"}],\"claims\":[{\"target\":\"port\",\"id\":\"a\",\"domain\":\"\",\"field\":\"connector\",\"condition\":\"\",\"value\":\"usb-c-receptacle\",\"unit\":\"\",\"citation\":\"quote-1\",\"confidence\":\"official\"},{\"target\":\"interface\",\"id\":\"usb-a\",\"domain\":\"power\",\"field\":\"maxW\",\"condition\":\"\",\"value\":30,\"unit\":\"W\",\"citation\":\"quote-1\",\"confidence\":\"official\"},{\"target\":\"interface\",\"id\":\"usb-a\",\"domain\":\"power\",\"field\":\"pdo5\",\"condition\":\"\",\"value\":3,\"unit\":\"A\",\"citation\":\"quote-1\",\"confidence\":\"official\"},{\"target\":\"interface\",\"id\":\"usb-a\",\"domain\":\"power\",\"field\":\"accepts5\",\"condition\":\"\",\"value\":false,\"unit\":\"\",\"citation\":\"quote-1\",\"confidence\":\"official\"},{\"target\":\"interface\",\"id\":\"usb-a\",\"domain\":\"power\",\"field\":\"maxW\",\"condition\":\"\",\"value\":120,\"unit\":\"W\",\"citation\":\"quote-4\",\"confidence\":\"community\"},{\"target\":\"interface\",\"id\":\"usb-a\",\"domain\":\"power\",\"field\":\"maxW\",\"condition\":\"\",\"value\":99,\"unit\":\"W\",\"citation\":\"quote-3\",\"confidence\":\"official\"},{\"target\":\"interface\",\"id\":\"usb-a\",\"domain\":\"power\",\"field\":\"maxW\",\"condition\":\"\",\"value\":110,\"unit\":\"W\",\"citation\":\"source-invented\",\"confidence\":\"official\"},{\"target\":\"interface\",\"id\":\"usb-a\",\"domain\":\"power\",\"field\":\"maxW\",\"condition\":\"\",\"value\":170,\"unit\":\"W\",\"citation\":\"quote-98\",\"confidence\":\"official\"},{\"target\":\"interface\",\"id\":\"usb-a\",\"domain\":\"power\",\"field\":\"maxW\",\"condition\":\"\",\"value\":500,\"unit\":\"mW\",\"citation\":\"quote-1\",\"confidence\":\"official\"},{\"target\":\"interface\",\"id\":\"usb-a\",\"domain\":\"power\",\"field\":\"reserveW\",\"condition\":\"\",\"value\":5,\"unit\":\"W\",\"citation\":\"\",\"confidence\":\"official\"},{\"target\":\"port\",\"id\":\"a\",\"domain\":\"\",\"field\":\"attachment\",\"condition\":\"\",\"value\":\"hid-node\",\"unit\":\"\",\"citation\":\"quote-85\",\"confidence\":\"official\"},{\"target\":\"interface\",\"id\":\"usb-a\",\"domain\":\"power\",\"field\":\"accepts9\",\"condition\":\"\",\"value\":\"예\",\"unit\":\"\",\"citation\":\"quote-1\",\"confidence\":\"official\"},{\"target\":\"interface\",\"id\":\"usb-a\",\"domain\":\"power\",\"field\":\"maxW\",\"condition\":\"other load condition\",\"value\":15,\"unit\":\"W\",\"citation\":\"quote-5\",\"confidence\":\"review\"},{\"target\":\"interface\",\"id\":\"usb-a\",\"domain\":\"power\",\"field\":\"maxW\",\"condition\":\"\",\"value\":60,\"unit\":\"W\",\"citation\":\"quote-2\",\"confidence\":\"review\"},{\"target\":\"port\",\"id\":\"a\",\"field\":\"attachment\",\"value\":\"controller\",\"domain\":\"\",\"unit\":\"\",\"citation\":\"quote-6\",\"confidence\":\"official\",\"condition\":\"\"},{\"target\":\"edge\",\"id\":\"feed\",\"field\":\"uses\",\"value\":\"supply\",\"domain\":\"\",\"unit\":\"\",\"citation\":\"quote-1\",\"confidence\":\"official\",\"condition\":\"\"}],\"omissions\":[]}",
         "citations": null
       }
     ],
