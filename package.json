@@ -1,0 +1,18 @@
+{
+  "name": "benchwire",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=26"
+  },
+  "scripts": {
+    "check": "npm run typecheck && npm test && npm run gate",
+    "typecheck": "tsc --noEmit -p .",
+    "test": "node --test \"**/*.test.ts\"",
+    "gate": "node tools/gate.ts"
+  },
+  "devDependencies": {
+    "@types/node": "26.6.11",
+    "typescript": "7.0.2"
+  }
+}
