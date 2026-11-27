@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { plugins } from "../cli/domains.ts";
 import { printResults } from "../cli/print.ts";
-import { evaluate } from "../engine/evaluate.ts";
+import { evaluate, evaluateVariants } from "../engine/evaluate.ts";
 import { fixture } from "./document.ts";
 
 const source = { id:"capture", title:"사용자 검증", locator:"fixture:measurement", retrievedAt:"2026-11-27" };
@@ -65,8 +65,9 @@ test("T8 같은 측정과 출처를 재입력해도 주장·인용·판정은 �
 
 type Endpoint = { instanceId:string; id:string };
 type Wiring = { from:Endpoint; to:Endpoint; parts:{instanceId:string;entry:string;exit:string}[] };
+const context = {firmware:"v1",measurementCondition:"대기"};
 function ports(c: Wiring) {
-  return [c.from,...c.parts.flatMap(p=>[{instanceId:p.instanceId,id:p.entry},{instanceId:p.instanceId,id:p.exit}]),c.to];
+  return [c.from,...c.parts.flatMap(p=>[{instanceId:p.instanceId,id:p.entry},{instanceId:p.instanceId,id:p.exit}]),c.to].map(p=>({...p,...context}));
 }
 
 test("T7 같은 모델·VID/PID의 NIC 중 지정한 배선만 1 Gbps가 되고 다른 장면의 2.5 GbE 능력은 남는다", () => {
@@ -78,6 +79,7 @@ test("T7 같은 모델·VID/PID의 NIC 중 지정한 배선만 1 Gbps가 되고 
   d.workloads.find((w:{id:string})=>w.id==="first-hop").request.throughput.value=2000;
   d.sources.push(source);
   const wire=d.connections[0];
+  for(const item of d.items) Object.assign(item,context);
   wire.observations=[{ports:ports(wire),domain:"network",field:"linkSpeed",claim:verified(1000,"Mbps")}];
   const limit=(f:ReturnType<typeof fixture>)=>{
     const scene=f.load(), r=evaluate(scene,plugins);
@@ -117,6 +119,7 @@ test("T5 관측한 USB 세대만 벌크 서비스를 제한하고 포트·케이
   model.ports.push(other);
   d.items.push({...d.items[2],instanceId:"spare"});
   d.sources.push(source);
+  for(const item of d.items) Object.assign(item,context);
   wire.observations=[{ports:structuredClone(ports(wire)),domain:"data",field:"usbMode",claim:verified("Gen 1x1","")}];
   function check(expected:number, observed:boolean) {
     const scene=f.load(),r=evaluate(scene,plugins);
@@ -146,4 +149,71 @@ test("T10 연결 관측은 다른 영역의 화면 모드도 저장하고 자료
   assert.ok(row>=0 && scene.claimSources.some(s=>s.claim===row && scene.sources[s.source]!.id===source.id));
   wire.observations=[{ports:captured,domain:"network",field:"linkSpeed",claim:verified(1000,"MB/s")}];
   assert.throws(()=>f.load(),/observations.*unit/u);
+});
+
+function observed(folder:string, name:string, field:"usbMode"|"linkSpeed") {
+  const f=fixture(folder,name), d=f.document, wire=d.connections[0];
+  for(const item of d.items) Object.assign(item,context);
+  for(const p of d.personal??[]) Object.assign(p,context);
+  d.sources.push(source);
+  const usb=field==="usbMode";
+  wire.observations=[{ports:ports(wire),domain:usb?"data":"network",field,claim:verified(usb?"Gen 1x1":1000,usb?"":"Mbps")}];
+  return f;
+}
+
+test("T5 현재 USB 관측은 그 연결의 모델 후보보다 우선하고 관측 없는 배선은 후보로 평가한다",()=>{
+  const f=observed("data","scene","usbMode"), d=f.document;
+  f.models.get("usb-cable@1").attributes.data.cableDataGbps.value=5;
+  d.workloads[0].request.throughput.value=400;
+  const modes=f.models.get("usb-endpoint@1").ports[0].interfaces[0].params.modes;
+  Object.assign(modes,{value:"Gen 1x1",conflicts:[{value:"High Speed",confidence:"review",sources:["endpoint"]}]});
+  for(const active of [true,false]) {
+    if(!active) delete d.connections[0].observations;
+    const s=f.load(),r=evaluate(s,plugins), row=r.outcomes.findIndex(o=>o.subjectKind==="workload");
+    assert.equal(r.outcomes[row]!.verdict,active?"ok":"unknown");
+    const m=r.metrics.find(m=>m.outcome===row && m.kind==="together")!;
+    assert.equal(m.high,400);
+    assert.equal(m.low,active?400:53.248);
+  }
+});
+
+test("T7 같은 모델 두 배선 중 관측이 있는 배선만 모델 충돌과 관계없이 500 Mbps를 전달한다",()=>{
+  const f=observed("network","scene","linkSpeed"),d=f.document;
+  const modes=f.models.get("network-host@1").ports[0].interfaces[0].params.baseTModes;
+  Object.assign(modes,{value:"1000BASE-T",conflicts:[{value:"2.5GBASE-T",confidence:"review",sources:["network-host"]}]});
+  const work=d.workloads.find((w:{id:string})=>w.id==="first-hop"); work.request.throughput.value=500;
+  d.workloads=[work,{...structuredClone(work),id:"peer",from:{instanceId:"host-b",id:"nic"},to:{instanceId:"router",id:"lan-b"}}];
+  d.scenarios=[{id:"both",members:["first-hop","peer"]}];
+  const s=f.load(),r=evaluate(s,plugins);
+  const workloads=r.outcomes.flatMap((o,i)=>o.subjectKind==="workload"?[{o,m:r.metrics.find(m=>m.outcome===i&&m.kind==="together")!}]:[]);
+  assert.deepEqual(workloads.map(({o,m})=>[o.verdict,m.low,m.high]),[["ok",500,500],["unknown",0,500]]);
+});
+
+test("T2 현재 Gen 1x1과 함께 쓸 설정만 선택하고 영상·허브 작업에서 관측 출처를 인용한다",()=>{
+  const f=observed("t2","scene","usbMode"),s=f.load(),variants=evaluateVariants(s,plugins,0);
+  assert.equal(variants[0]!.choices[0]!.profile,"dp-2lane");
+  assert.ok(variants.every(v=>v.choices.every(c=>c.profile!=="dp-4lane")));
+  const r=variants[0]!.result, claim=s.claims.findIndex(c=>c.field==="usbMode");
+  for(const [i,o] of r.outcomes.entries()) if(o.subjectKind==="workload"){
+    assert.ok(r.reasonInputs.some(x=>r.reasons[x.reason]!.outcome===i && x.claim===claim),s.workloads[o.subjectRow]!.id);
+    if(s.workloads[o.subjectRow]!.id==="hub") assert.equal(r.metrics.find(m=>m.outcome===i&&m.kind==="together")!.value,400);
+  }
+  assert.ok(s.claimSources.some(c=>c.claim===claim && s.sources[c.source]!.id==="capture"));
+});
+
+test("T5 생략한 범위와 확인한 해당 없음을 구별하고 이력에 달라진 포트의 측정 당시·현재 값을 보인다",()=>{
+  const f=observed("data","scene","usbMode"),d=f.document, obs=d.connections[0].observations[0], cable=d.items[2];
+  const cablePorts=obs.ports.slice(1,-1);
+  function inactive(){return f.load().claims.find(c=>c.field==="usbMode")!.inactive;}
+  delete cable.firmware; for(const p of cablePorts) delete p.firmware;
+  assert.equal(inactive(),"firmware");
+  cable.firmware=null; for(const p of cablePorts) p.firmware=null;
+  assert.equal(inactive(),undefined);
+  delete cable.measurementCondition; for(const p of cablePorts) delete p.measurementCondition;
+  assert.equal(inactive(),"measurementCondition");
+  cable.measurementCondition=null; for(const p of cablePorts) p.measurementCondition=null;
+  assert.equal(inactive(),undefined);
+  d.items[0].firmware="v2"; const scene=f.load(),text=printResults(scene,evaluate(scene,plugins));
+  assert.match(text,/측정 당시[^\n]*left\/usb[^\n]*v1[^\n]*대기[^\n]*cable\/a[^\n]*해당 없음/u);
+  assert.match(text,/현재 배선[^\n]*left\/usb[^\n]*v2[^\n]*대기/u);
 });

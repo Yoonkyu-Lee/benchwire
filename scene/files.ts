@@ -35,7 +35,7 @@ const evidence = fact.refine(f => f.value === true && !f.unit && !f.condition &&
 const fields = z.record(id, fact);
 const sources = z.array(z.strictObject({ id, title: id, locator: id, retrievedAt: z.iso.date() }));
 const localRef = z.strictObject({ instanceId: id, id });
-const measurementContext = { firmware: id.optional(), measurementCondition: id.optional() };
+const measurementContext = { firmware: id.nullable().optional(), measurementCondition: id.nullable().optional() };
 const personalFact = fact.refine(f => f.confidence === "user_verified", "개인 주장에는 사용자 검증이 필요합니다");
 const observation = z.strictObject({
   ports: z.array(localRef.extend(measurementContext)).min(2), domain: id, field: id,

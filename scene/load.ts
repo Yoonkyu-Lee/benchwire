@@ -1,4 +1,5 @@
 // 고정한 모델 판본을 실물별로 펼치고 저장 ID를 행 번호로 바꾼다. 입력 오류는 파일과 필드를 가리킨다.
+import { connectionPorts } from "../engine/scene.ts";
 import type { z } from "zod";
 import type { Scene, Claim, DomainPlugin, InputSchema, MeasurementContext } from "../engine/contract.ts";
 import { connectorsFile, modelFile, sceneFile, parseDocument, type Fact } from "./files.ts";
@@ -21,9 +22,9 @@ function readDistinct<T>(rows: T[], read: (value: T, index: number) => void) {
     read(row,i);
   });
 }
-function contextDifference(measured: MeasurementContext, current: MeasurementContext) {
-  if (measured.firmware !== current.firmware) return "firmware";
-  if (measured.measurementCondition !== current.measurementCondition) return "measurementCondition";
+function contextDifference(measured: MeasurementContext, current: MeasurementContext, requireKnown = false) {
+  if (measured.firmware !== current.firmware || requireKnown && measured.firmware === undefined) return "firmware";
+  if (measured.measurementCondition !== current.measurementCondition || requireKnown && measured.measurementCondition === undefined) return "measurementCondition";
   return undefined;
 }
 function ref<T>(map: Map<string, T>, id: string, at: string): T {
@@ -166,7 +167,7 @@ export function loadSceneDocuments(document: unknown, library: { connectors: unk
       models.set(key, pinned);
     }
     const { model, citations } = pinned;
-    scene.items.push({ id: instanceId, model: pinned.row, alias, state, ...(firmware && {firmware}), ...(measurementCondition && {measurementCondition}) });
+    scene.items.push({ id: instanceId, model: pinned.row, alias, state, ...(firmware !== undefined && {firmware}), ...(measurementCondition !== undefined && {measurementCondition}) });
     const local = unique<Local>(instances, instanceId, { item, nodes: new Map(), ports: new Map(), resources: new Map(), interfaces: new Map() }, instanceAt + ".instanceId");
     const at = modelPath + "#";
     for (const [domain, values] of Object.entries(model.attributes))
@@ -246,10 +247,10 @@ export function loadSceneDocuments(document: unknown, library: { connectors: unk
     if (candidates.some(c => c.scope === "personal" && c.condition === p.claim.condition && !contextDifference(c,p))) fail(at, "같은 조건에 중복된 개인 주장");
     const row = claim(ownerKind, owner, "personal", domain, field, p.claim, sceneSources, at + ".claim");
     const measured = scene.claims[row]!;
-    const inactive = contextDifference(p,scene.items[local.item]!);
+    const inactive = contextDifference(p,scene.items[local.item]!,p.firmware !== undefined || p.measurementCondition !== undefined);
     if (inactive) measured.inactive = inactive;
-    if (p.firmware) measured.firmware = p.firmware;
-    if (p.measurementCondition) measured.measurementCondition = p.measurementCondition;
+    if (p.firmware !== undefined) measured.firmware = p.firmware;
+    if (p.measurementCondition !== undefined) measured.measurementCondition = p.measurementCondition;
     if (ownerKind === "resource") {
       const r = scene.resources[owner]!;
       checkResource(field, p.claim, r.unit, at + ".claim");
@@ -295,7 +296,7 @@ export function loadSceneDocuments(document: unknown, library: { connectors: unk
       scene.parts.push({ connection, order, item: local.item, entry, exit });
     });
     if (c.observations?.length) {
-      const ports = [c.from,...c.parts.flatMap(p => [{instanceId:p.instanceId,id:p.entry},{instanceId:p.instanceId,id:p.exit}]),c.to];
+      const ports = connectionPorts(scene,connection);
       const active = new Set<string>();
       readDistinct(c.observations,(observation,i) => {
         const where = at + ".observations." + i;
@@ -303,10 +304,11 @@ export function loadSceneDocuments(document: unknown, library: { connectors: unk
         const plugin = ref(domains,domain,where + ".domain");
         if (plugin.observations) validateFields(plugin.observations,{ [field]:{value:fact.value,unit:fact.unit} },where + ".claim",field);
         const row = claim("connection",connection,"personal",domain,field,fact,sceneSources,where + ".claim");
+        scene.claims[row]!.observedPorts = observation.ports;
         const changed = ports.length !== observation.ports.length || ports.some((p,j) =>
           p.instanceId !== observation.ports[j]!.instanceId || p.id !== observation.ports[j]!.id);
-        const inactive = changed ? "wiring" : observation.ports.map(p =>
-          contextDifference(p,scene.items[instances.get(p.instanceId)!.item]!)).find(reason => reason !== undefined);
+        const inactive = changed ? "wiring" : observation.ports.map((p,j) =>
+          contextDifference(p,ports[j]!,true)).find(reason => reason !== undefined);
         if (inactive) scene.claims[row]!.inactive = inactive;
         else {
           const key = JSON.stringify([domain,field]);

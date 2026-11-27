@@ -25,6 +25,8 @@ export interface Link {
 }
 export interface Option extends Trace {
   verdict: Verdict; mode: string; limit: number | null; unit: string; condition: string; unused?: number;
+  // 한 배선에서 실제 관측한 서비스의 주장 행이다. 설정 태그가 있으면 그 서비스와 함께 쓸 수 있는 설정만 남긴다.
+  observation?: number;
   profile?: string;
   pool?: { domain: string; id: string; perUnit: number };
   // limit가 null일 때 같은 단위의 유한한 0 ≤ low ≤ high를 준다. low는 해당 모드에서 보장한 한도다.
@@ -63,6 +65,7 @@ export interface DomainPlugin {
   sources: readonly { id: string; title: string; locator: string }[];
   // 각 스키마는 필드 이름을 키로, {value, unit}을 값으로 받는다. null은 미확인이다.
   resourceUnits?: readonly string[];
+  // 한 관측 행의 { [필드]: { value, unit } }를 검증한다. 각 필드를 독립적으로 입력할 수 있어야 한다.
   observations?: InputSchema;
   paramsFor?(protocol: string): InputSchema | undefined;
   params: InputSchema; attributes: InputSchema; request: InputSchema;

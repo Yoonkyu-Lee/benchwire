@@ -1,4 +1,5 @@
 // 판정 표와 장면 표를 따라 터미널에 읽을 수 있는 성능·병목·근거를 만든다.
+import { connectionPorts, type MeasurementContext } from "../engine/scene.ts";
 import { evidenceRows } from "../engine/evidence.ts";
 import type { Claim, Scene, Verdict } from "../engine/contract.ts";
 import type { Results, Target } from "../engine/results.ts";
@@ -76,11 +77,16 @@ export function printResults(scene: Scene, result: Results): string {
     }
   }
 
+  function measuredPorts(ports: ({instanceId:string;id:string} & MeasurementContext)[]) {
+    const value = (v:string | null | undefined) => v === null ? "해당 없음" : v ?? "미확인";
+    return ports.map(p=>`${p.instanceId}/${p.id} (펌웨어 ${value(p.firmware)} · 측정 조건 ${value(p.measurementCondition)})`).join(" → ");
+  }
   function writeClaim(claim: number, pad: string) {
     const c = scene.claims[claim]!;
     const value = c.value === null ? "미확인" : JSON.stringify(c.value);
     const condition = c.condition ? ` · 조건 ${c.condition}` : "";
-    const context = [c.firmware && "펌웨어 " + c.firmware,c.measurementCondition && "측정 조건 " + c.measurementCondition].filter(Boolean).join(" · ");
+    const context = [c.firmware !== undefined && "펌웨어 " + (c.firmware ?? "해당 없음"),
+      c.measurementCondition !== undefined && "측정 조건 " + (c.measurementCondition ?? "해당 없음")].filter(Boolean).join(" · ");
     const unit = c.unit ? " " + c.unit : "";
     const origin = c.inferredFrom ? " · 원본 " + c.inferredFrom : "";
     const field = `${pad}주장 ${targetName(c.ownerKind, c.owner)} · ${c.field}`;
@@ -216,6 +222,11 @@ export function printResults(scene: Scene, result: Results): string {
     const why = {firmware:"펌웨어 다름",measurementCondition:"측정 조건 다름",wiring:"배선 다름"};
     for (const h of history) {
       evidence.push("  적용 안 됨: " + why[h.why]);
+      const claim = scene.claims[h.row]!;
+      if (claim.observedPorts) {
+        evidence.push("    측정 당시 " + measuredPorts(claim.observedPorts),
+          "    현재 배선 " + measuredPorts(connectionPorts(scene,claim.owner)));
+      }
       writeClaim(h.row,"    ");
     }
   }

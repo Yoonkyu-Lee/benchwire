@@ -74,5 +74,23 @@ export function negotiate(scene: Scene, plugins: readonly DomainPlugin[], result
       }
     }
   });
+  // 같은 실측 서비스의 설정은 합집합, 서로 다른 실측 서비스의 제약은 교집합이다.
+  const observed = Map.groupBy(result.options.filter(o=>o.observation !== undefined),o=>o.observation!);
+  for (const [claim,services] of observed) {
+    if (services.some(o=>!o.profile)) continue;
+    const profiles = new Set(services.map(o=>o.profile));
+    for (const option of result.options) {
+      if (option.connection !== services[0]!.connection || !option.profile) continue;
+      if (!option.inputs.includes(claim)) option.inputs = [...option.inputs,claim];
+      if (!profiles.has(option.profile)) {
+        option.verdict = "impossible";
+        option.limit = 0;
+        delete option.bounds;
+        delete option.unused;
+        option.condition = "";
+        option.rule = "현재 연결에서 관측한 서비스와 양립하지 않는 설정 " + option.profile;
+      }
+    }
+  }
   bindPools(result);
 }

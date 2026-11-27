@@ -61,7 +61,8 @@ export function negotiateEthernet({ scene, connection, ports }: Link): Option {
 
   const observed = readNetworkClaim(scene,inputs,"connection",connection,"linkSpeed");
   const candidates = ETHERNET_BASE_T_RATES.flatMap(rate => {
-    if (typeof observed === "number" && rate.lineMbps !== observed) return [];
+    if (typeof observed === "number") return rate.lineMbps === observed
+      ? [{...rate,confirmed:"ok" as const,possible:"ok" as const}] : [];
     if (modes.some(end => end !== null && !end.includes(rate.mode))) return [];
     const possible = reach(rate.mode, optimistic);
     if (possible === "impossible") return [];
@@ -74,7 +75,7 @@ export function negotiateEthernet({ scene, connection, ports }: Link): Option {
   if (!best) {
     const common = ETHERNET_BASE_T_RATES.some(rate => modes.every(end => end === null || end.includes(rate.mode)));
     return { ...base, verdict: "impossible", limit: null, specs,
-      rule: typeof observed === "number" ? `관측한 회선 ${observed} Mbps와 해당 경로의 지원 모드·도달 거리 불일치` : common ? "케이블 등급·차폐·채널 길이가 공통 BASE-T 모드의 도달 거리 조건을 충족하지 않음" : "양 끝에 공통 BASE-T 모드 없음" };
+      rule: common ? "케이블 등급·차폐·채널 길이가 공통 BASE-T 모드의 도달 거리 조건을 충족하지 않음" : "양 끝에 공통 BASE-T 모드 없음" };
   }
 
   const limit = best.lineMbps * MAC_PAYLOAD_FRACTION;
@@ -88,10 +89,11 @@ export function negotiateEthernet({ scene, connection, ports }: Link): Option {
   }
 
   const grade = pessimistic.category === optimistic.category ? COPPER_CATEGORIES[optimistic.category] : "등급 미확인";
-  const endpointSpeeds = modes.map(end => end === null ? null :
+  const endpointSpeeds = modes.map(end => end === null || measured && !end.includes(best.mode) ? null :
     ETHERNET_BASE_T_RATES.findLast(rate => end.includes(rate.mode))!.lineMbps);
   const unusedLine = endpointSpeeds.every(speed => speed !== null) ? Math.max(...endpointSpeeds) - best.lineMbps : 0;
-  const rule = (measured ? "현재 배선에서 관측한 " : "") + `${best.mode} (${best.amendment}) 회선 ${best.lineMbps} Mbps · ${grade} 채널 ${partialLength} m · MAC 페이로드 ${limit} Mbps` +
+  const channel = measured ? "현재 배선에서 관측" : `${grade} 채널 ${partialLength} m`;
+  const rule = `${best.mode} (${best.amendment}) 회선 ${best.lineMbps} Mbps · ${channel} · MAC 페이로드 ${limit} Mbps` +
     (unusedLine > 0 ? ` · 포트 미사용 회선 성능 ${unusedLine} Mbps` : "");
   const condition = best.confirmed === "conditional" ? rule + " · 설치 채널의 외래 누화 등 도달 거리 조건 확인 및 필요한 완화 적용" : "";
   return { ...base, limit, ...(unusedLine > 0 ? { unused: unusedLine * MAC_PAYLOAD_FRACTION } : {}),

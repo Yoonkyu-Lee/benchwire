@@ -50,14 +50,15 @@ export function usbServices({ scene, connection, ports }: Link): { options: Opti
   const observation = effectiveClaim(scene,"connection",connection,DATA,"usbMode");
   const observed = observation === undefined ? undefined : scene.claims[observation]!.value;
   // USB 2·3 벌크 모드 관측은 USB4 패브릭이나 PCIe 서비스의 한도를 정하지 않는다.
-  function bulkRange(rows: readonly (typeof usbModes[number])[], ends: (string[] | null)[], rates: (number | null)[]) {
+  const nativeEnds = endRows(USB);
+  function bulkRange(rows: readonly (typeof usbModes[number])[], ends: (string[] | null)[], rates: (number | null)[], endpoints = nativeEnds) {
     if (observed === undefined) return modeRange(rows,ends,rates);
-    const {possible} = modeRange(rows.filter(r => r.mode === observed),ends,rates);
+    const possible = endpoints.every(row=>row >= 0) ? rows.find(r=>r.mode === observed) : undefined;
     return {possible, confirmed:possible};
   }
   const bulkInputs = () => observation === undefined ? [...inputs] : [...inputs,observation];
 
-  const nativeModes = modes(endRows(USB), "modes");
+  const nativeModes = modes(nativeEnds, "modes");
   const fabricEnds = endRows(USB4);
   const fabricModes = modes(fabricEnds, "modes");
   const parts = scene.parts.filter(part => part.connection === connection);
@@ -81,7 +82,7 @@ export function usbServices({ scene, connection, ports }: Link): { options: Opti
   let tunneledBulk: Option | undefined;
 
   if (fabric.possible) {
-    const usb3 = bulkRange(USB_3_2_PROTOCOL_ESTIMATES, modes(fabricEnds, "usb3Modes"), []);
+    const usb3 = bulkRange(USB_3_2_PROTOCOL_ESTIMATES, modes(fabricEnds, "usb3Modes"), [], fabricEnds);
     const pcie = fabricEnds.map(row => read("interface", row, "pcie"));
     const poolRef = { domain: DATA, id: TUNNEL_POOL, perUnit: GIGABITS_PER_MEGABYTE };
     if (!pcie.includes(false)) {
@@ -132,6 +133,8 @@ export function usbServices({ scene, connection, ports }: Link): { options: Opti
     options.push({ mode: BULK, unit: MB_PER_SECOND, verdict: "impossible", condition: "", limit: null,
       rule: "양 끝과 중간 부품에서 함께 쓸 USB 모드 없음", inputs: facts, specs: [USB2_BULK, USB3_ESTIMATE, CABLE_DATA] });
   }
+  if (observation !== undefined) for (const option of options)
+    if (option.mode === BULK && option.verdict !== "impossible") option.observation = observation;
   return { options, pools };
 
   function addNative(possible: typeof usbModes[number], confirmed: typeof usbModes[number] | undefined, profile?: string, pins: number[] = []) {

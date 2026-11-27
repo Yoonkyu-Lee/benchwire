@@ -3,8 +3,9 @@
 export type Value = string | number | boolean | null;
 export type Confidence = "official" | "review" | "community" | "user_verified" | "inferred" | "unknown";
 export type Owner = "item" | "port" | "interface" | "edge" | "resource" | "mate" | "connector" | "connection" | "workload";
-export interface MeasurementContext { firmware?: string | undefined; measurementCondition?: string | undefined }
+export interface MeasurementContext { firmware?: string | null | undefined; measurementCondition?: string | null | undefined }
 export interface Claim extends MeasurementContext {
+  observedPorts?: ({instanceId:string; id:string} & MeasurementContext)[];
   inactive?: "firmware" | "measurementCondition" | "wiring";
   id: string; scope: "model" | "personal" | "scene" | "catalog"; ownerKind: Owner; owner: number;
   // 같은 모델 판본의 같은 주장에 기대는 실물은 후보 세계 안에서도 값을 공유한다.
@@ -70,6 +71,15 @@ export function effectiveClaim(scene: Scene, ownerKind: Owner, owner: number, do
     if (priority > rank) { best = row; rank = priority; }
   }
   return best;
+}
+
+// 관측 당시의 양 끝과 모든 경유 부품을 지금 배선과 같은 순서의 영속 ID로 비교한다.
+export function connectionPorts(scene: Scene, row: number) {
+  const c = scene.connections[row]!;
+  return [c.from,...scene.parts.filter(p=>p.connection===row).flatMap(p=>[p.entry,p.exit]),c.to].map(port=>{
+    const p=scene.ports[port]!, item=scene.items[p.item]!;
+    return {instanceId:item.id,id:p.id,firmware:item.firmware,measurementCondition:item.measurementCondition};
+  });
 }
 
 export function portFacts(scene: Scene, row: number) {
