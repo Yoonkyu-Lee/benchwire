@@ -128,6 +128,20 @@ export function claimQuest(view: ResultView, row: number) {
     subject:scenario ? scenarioName(scenario) + " · " + work!.id : target.subject ?? work?.id ?? connection?.id ?? "",workload:work?.id};
 }
 
+export function questName(q: ReturnType<typeof claimQuest>) {
+  return [q.subject, q.template?.title ?? q.property?.title ?? q.title].filter(Boolean).join(" · ");
+}
+
+export function appendQuestInstructions(detail: HTMLElement, q: Pick<Quest, "template" | "instruction">) {
+  if (!q.template) {
+    detail.append(el("p", q.instruction));
+    return;
+  }
+  const steps = el("ol");
+  steps.append(...q.template.steps.map(step => el("li", step)));
+  detail.append(steps, el("p", q.template.read));
+}
+
 function quests(view: ResultView, saved: SceneDocument) {
   const { scene, result } = view;
   const active = new Set([...view.workloads.map(w => w.row), ...[...view.negotiations.values()].flat()]);
@@ -196,11 +210,7 @@ function card(view: ResultView, saved: SceneDocument, q: Quest, save: Save, edit
   const impact = q.impact === 2 ? "판정에 영향" : q.impact === 1 ? "범위에 영향" : "";
   const fieldName=!q.template && q.property?.title!==q.title ? q.property?.title : undefined;
   detail.append(el("summary", [q.title, q.subject, fieldName, impact].filter(Boolean).join(" · ")));
-  if (q.template) {
-    const steps = el("ol");
-    steps.append(...q.template.steps.map(step => el("li", step)));
-    detail.append(steps, el("p", q.template.read));
-  } else detail.append(el("p", q.instruction));
+  appendQuestInstructions(detail, q);
   const works = el("ul");
   for (const w of view.workloads.filter(w => q.outcomes.has(w.row))) {
     const metrics = view.result.metrics.filter(m => m.outcome === w.row && (m.kind === "solo" || m.kind === "together"));

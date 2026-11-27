@@ -38,7 +38,7 @@ export function interval({ low, high }: Interval, unit: string) {
   return `${quantity(low, "")}–${quantity(high, unit)}`;
 }
 
-function outcomeVerdict(result: Results, row: number, run: Run): Verdict | null {
+export function outcomeVerdict(result: Results, row: number, run: Run): Verdict | null {
   if (run === "together") return result.outcomes[row]!.verdict;
   const assessed = result.assessments.filter(a => a.outcome === row && a.run === run);
   return assessed.length ? assessed.length === 1 ? assessed[0]!.verdict : "unknown" : null;

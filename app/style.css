@@ -51,6 +51,9 @@ h1 { margin: 0; font-size: 17px; font-weight: 700; white-space: nowrap; }
 .inventory-item[draggable="true"] { cursor: grab; }
 .inventory-item[draggable="true"]:hover { border-color: #7eaaa6; background: #f8fcfc; }
 .inventory-item strong { font-size: 13px; }
+.recommendations { display: grid; gap: 8px; }
+.recommendations :is(p, ol, ul) { margin-block: 0; }
+.recommendations article > section { border-inline-start: 2px solid var(--line); padding-inline-start: 7px; }
 .inventory-detail, .inventory-empty { color: var(--muted); font-size: 12px; }
 .inventory-empty { padding: 6px 2px; }
 .inventory-actions { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 4px; }

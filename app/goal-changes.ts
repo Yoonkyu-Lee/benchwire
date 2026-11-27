@@ -1,6 +1,6 @@
 // 체크리스트와 비교 화면에 같은 목표 판정과 미완료 근거를 표시한다.
 import { hasUnsteppedNumber } from "./field.ts";
-import { claimQuest } from "./quests.ts";
+import { claimQuest, questName } from "./quests.ts";
 import type { ResultView } from "./results.ts";
 
 type GoalOutcome = ResultView["result"]["goals"][number];
@@ -16,7 +16,7 @@ export function renderIncompleteGoal(view: ResultView, outcome: GoalOutcome, ope
   const note = document.createDocumentFragment();
   function claimRow(claim: number, cause: "limit" | "open") {
     const q = claimQuest(view, claim);
-    const name = [q.subject, q.template?.title ?? q.property?.title ?? q.title].filter(Boolean).join(" · ");
+    const name = questName(q);
     const li = element("li", name);
     if (cause === "open") li.append(hasUnsteppedNumber(q.property)
       ? " 값은 규격 걸음이 없어 모든 값을 확인할 수 없습니다." : "의 가능한 값을 모두 확인할 수 없습니다.");

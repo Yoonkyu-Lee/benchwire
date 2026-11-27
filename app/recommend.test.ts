@@ -5,6 +5,9 @@ import {resolve} from "node:path";
 import {openLibrary} from "../server/library.ts";
 import {plugins} from "../domains/registry.ts";
 import {loadSceneDocuments} from "../scene/load.ts";
+import {loadScene} from "../cli/load.ts";
+import {trialDomain} from "../fixtures/trial.ts";
+import {readClaim} from "../engine/scene.ts";
 import {evaluate} from "../engine/evaluate.ts";
 import {modelKey,type SceneDocument,type Model} from "./document.ts";
 import {recommendationEdits,reviewRecommendation,rankRecommendations} from "./recommend.ts";
@@ -38,10 +41,10 @@ test("T5 병목 교체 사본에서 수치 목표를 달성하고 기존 목표�
     const card=reviewRecommendation(before,after,edit,f.scenario.id);
     if (!card) return [];
     assert.deepEqual(after.result,f.snapshot(structuredClone(edit.document)).result);
-    assert.deepEqual(card.solved,["전송 A"]);
+    assert.deepEqual(card.achieved,["전송 A"]);
     return [card];
   }).sort(rankRecommendations);
-  assert.deepEqual(cards.map(c=>[c.edit.model.revision,c.lost]),[["fast",[]],["one-port",["전송 B 유지"]]]);
+  assert.deepEqual(cards.map(c=>[c.edit.model.revision,c.goalRegressions.map(r=>r.goal)]),[["fast",[]],["one-port",["전송 B 유지"]]]);
   assert.equal(cards[0]!.edit.item.state,"owned");
   const bad=structuredClone(cards[0]!.edit.document);
   bad.scenarios.find(s=>s.id===f.scenario.id)!.members=["lan-a"];
@@ -56,9 +59,9 @@ test("T5 충돌 후보 중 하나에서만 목표가 성립하면 같은 세계�
   const f=setup([change]), edit=f.edits().edits.find(e=>e.target==="router")!;
   const after=f.snapshot(edit.document);
   const card=reviewRecommendation(f.snapshot(f.doc),after,edit,f.scenario.id);
-  assert.deepEqual(card?.solved,[]);
+  assert.deepEqual(card?.achieved,[]);
   assert.equal(card.conditional[0]?.goal,"전송 A");
-  assert.ok(card.conditional[0]!.checks.some(s=>s.includes("3000")));
+  assert.ok(card.conditional[0]!.assignments.some(a=>a.value===3000));
   const row=after.result.goals.findIndex(goal=>goal.id==="전송 A" && after.scene.scenarios[goal.scenario]!.id===f.scenario.id);
   const proof=after.result.goalSuccesses?.find(success=>success.goal===row);
   assert.ok(proof);
@@ -83,7 +86,7 @@ test("T5 결합 실패에 어댑터 하나를 끼우며 중복을 빼고 여덟 
   assert.ok(inserted);
   const parts=inserted.document.connections.find(c=>c.id===link.id)!.parts;
   assert.equal(parts.length,1);assert.equal(parts[0]!.instanceId,inserted.item.instanceId);
-  assert.deepEqual(reviewRecommendation(f.snapshot(f.doc),f.snapshot(inserted.document),inserted,f.scenario.id)?.solved,["연결 회복"]);
+  assert.deepEqual(reviewRecommendation(f.snapshot(f.doc),f.snapshot(inserted.document),inserted,f.scenario.id)?.achieved,["연결 회복"]);
 });
 
 
@@ -101,7 +104,73 @@ test("T5 검산을 끝내지 못한 추천은 해당 목표와 사유를 남긴�
   assert.ok(goal.openClaims?.some(row => after.scene.claims[row]!.field === "baseTModes"));
   const card = reviewRecommendation(before, after, edit, f.scenario.id);
   assert.ok(card);
-  assert.deepEqual(card.solved, []);
+  assert.deepEqual(card.achieved, []);
   assert.deepEqual(card.conditional, []);
   assert.deepEqual(card.incomplete, ["전송 A"]);
+});
+
+
+
+test("T5 업링크는 그대로인데 동시 작업이 끊긴 교체를 온전한 교체 뒤로 보낸다", () => {
+  const broken = structuredClone(model("network-router"));
+  broken.revision = "drops-concurrent";
+  broken.ports.find(p => p.id === "lan-b")!.interfaces[0]!.params.baseTModes!.value = "100BASE-TX";
+  const fast = structuredClone(model("network-router"));
+  fast.revision = "keeps-concurrent";
+  fast.resources.forEach(r => r.capacity.value = 3000);
+  const f = setup([broken, fast]);
+  f.scenario.goals!.pop();
+  const before = f.snapshot(f.doc);
+  const cards = f.edits().edits.map(edit => reviewRecommendation(before, f.snapshot(edit.document), edit, f.scenario.id)!)
+    .sort(rankRecommendations);
+  assert.deepEqual(cards.map(card => card.edit.model.revision), [fast.revision, broken.revision]);
+  const { workloadRegressions } = cards[1]!;
+  const loss = workloadRegressions.find(r => r.scenario === f.scenario.id && r.workload === "lan-b")!;
+  const together = loss.runs.find(r => r.run === "together")!;
+  assert.deepEqual([together.before.verdict, together.before.delivery?.value, together.after?.verdict, together.after?.delivery?.value],
+    ["conditional", 600, "impossible", 0]);
+});
+
+test("T5 다른 시나리오에서 같은 목표 ID와 작업의 전달량을 별도로 비교한다", () => {
+  const broken = structuredClone(model("network-router"));
+  broken.revision = "other-scenario";
+  broken.ports.find(p => p.id === "lan-b")!.interfaces[0]!.params.baseTModes!.value = "100BASE-TX";
+  const f = setup([broken]);
+  const goal = f.scenario.goals!.pop()!;
+  const sharedId = f.scenario.goals![0]!.id;
+  f.doc.scenarios.push({ id: "b-alone", name: "B 단독", members: ["lan-b"], goals: [{ ...goal, id: sharedId }] });
+  const edit = f.edits().edits.find(e => e.target === "router")!;
+  const card = reviewRecommendation(f.snapshot(f.doc), f.snapshot(edit.document), edit, f.scenario.id)!;
+  assert.deepEqual(card.goalRegressions, [{ scenario: "b-alone", goal: sharedId,
+    before: "ok", after: "impossible" }]);
+  const loss = card.workloadRegressions.find(r => r.scenario === "b-alone" && r.workload === "lan-b")!;
+  const together = loss.runs.find(r => r.run === "together")!;
+  assert.deepEqual([together.before.delivery?.value, together.after?.delivery?.value], [900, 0]);
+});
+
+test("검산이 미완료여도 끝까지 확인한 세계의 달성 조건을 함께 남긴다", () => {
+  const plugin = trialDomain();
+  const scene = loadScene("fixtures/three-flows.json", { modelsDir: "fixtures", connectorsFile: "fixtures/connectors.json" }, [plugin]);
+  scene.connections.length = scene.workloads.length = scene.members.length = 1;
+  const claim = scene.claims.push({ ...scene.claims[scene.connections[0]!.evidence]!, ownerKind: "item", owner: 0,
+    domain: plugin.id, field: "profile-mode", value: null, confidence: "unknown", discrete: [false, true] }) - 1;
+  scene.goals = [{ id: "전달 확보", scenario: 0, kind: "metric", workloads: [0], run: "together", metric: "delivery", unit: "회/s", minimum: 90 }];
+  const base = plugin.negotiate;
+  plugin.negotiate = link => base(link).map(option => ({ ...option, limit: 40 }));
+  const before = { scene, result: evaluate(scene, [plugin]) };
+  plugin.negotiate = link => {
+    const modes = readClaim(link.scene, claim).value === false ? 129 : 1;
+    return base(link).flatMap(option => Array.from({ length: modes }, (_, i) => ({ ...option, limit: 100, profile: "p" + i })));
+  };
+  const after = { scene, result: evaluate(scene, [plugin]) };
+  assert.equal(before.result.goals[0]!.verdict, "impossible");
+  assert.equal(after.result.goals[0]!.verdict, "unknown");
+  assert.ok(after.result.goals[0]!.truncated);
+  assert.deepEqual(after.result.goalSuccesses, [{ goal: 0, assignments: [{ claim, value: true }] }]);
+  const f = setup([model("network-router")]);
+  const spare = f.stock.inventory[0]!;
+  const edit = { kind: "insert" as const, target: "link", item: spare, model: f.stock.models[0]!, document: f.doc };
+  const card = reviewRecommendation(before, after, edit, scene.scenarios[0]!.id)!;
+  assert.deepEqual(card.incomplete, ["전달 확보"]);
+  assert.equal(card.conditional[0]?.goal, "전달 확보");
 });

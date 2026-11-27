@@ -1,12 +1,13 @@
 // 실패한 목표의 결합점과 병목에서 단일 편집을 만들고 사본의 실제 목표·부하·비용으로 순위를 정한다.
-import type { Snapshot } from "../engine/compare.ts";
-import { plugins } from "../domains/registry.ts";
+import { compare, type Snapshot } from "../engine/compare.ts";
+import { compareQuantity, type Verdict } from "../engine/contract.ts";
+import type { GoalVerdict, Results, Run } from "../engine/results.ts";
 import { portFacts } from "../engine/scene.ts";
 import type { PriceBook } from "../server/prices.ts";
 import type { Documents } from "./assessment.ts";
 import { calculateBudget, compareBudgets } from "./budget.ts";
 import { modelKey, type Library, type Model, type SceneDocument, type InventoryItem } from "./document.ts";
-import { resultView } from "./results.ts";
+import { outcomeVerdict, resultView } from "./results.ts";
 import { swapSlot } from "./swap.ts";
 
 // 한 번 연 추천 탭에서 실제로 평가하는 서로 다른 편집 수다.
@@ -14,9 +15,15 @@ export const MAX_RECOMMENDATIONS = 8;
 export interface RecommendationEdit {
   kind:"insert"|"replace"; target:string; item:InventoryItem; model:Model; document:SceneDocument;
 }
+type WorkState = { verdict: Verdict | null; delivery: Results["metrics"][number] | undefined };
+type WorkRegression = { scenario: string; workload: string; runs: { run: Run; before: WorkState; after: WorkState | null }[] };
+type GoalRegression = { scenario: string; goal: string; before: GoalVerdict; after: GoalVerdict | null };
+type Assignments = NonNullable<Results["goalSuccesses"]>[number]["assignments"];
+
 export interface Recommendation {
-  edit:RecommendationEdit; solved:string[]; lost:string[]; conditional:{goal:string; checks:string[]}[];
-  incomplete:string[]; cost:bigint|null;
+  edit: RecommendationEdit; achieved: string[];
+  workloadRegressions: WorkRegression[]; goalRegressions: GoalRegression[]; budgetRegression: boolean;
+  conditional: { goal: string; assignments: Assignments }[]; incomplete: string[]; cost: bigint | null;
 }
 
 export function recommendationEdits(doc:SceneDocument, documents:Documents, library:Library, before:Snapshot, scenarioId:string) {
@@ -84,12 +91,38 @@ export function recommendationEdits(doc:SceneDocument, documents:Documents, libr
   return {total:seen.size,edits};
 }
 
+const verdictRank = { impossible: 0, unknown: 1, conditional: 2, ok: 3 };
+const runs = ["together", "solo"] as const;
+
+function workloadRegressions(before: Snapshot, after: Snapshot): WorkRegression[] {
+  function state(result: Results, row: number, run: Run): WorkState {
+    return { verdict: outcomeVerdict(result, row, run), delivery: result.metrics.find(m => m.outcome === row && m.kind === run) };
+  }
+  return compare(before, after).flatMap(({ before: left, after: right, changed }) => {
+    if (left === null || !changed.some(key => key === "removed" || key === "verdict" || key === "value" || key === "range")) return [];
+    const outcome = before.result.outcomes[left]!;
+    if (outcome.subjectKind !== "workload") return [];
+    const losses = runs.flatMap(run => {
+      const a = state(before.result, left, run), b = right === null ? null : state(after.result, right, run);
+      if (a.verdict === null && !a.delivery) return [];
+      const verdictLost = a.verdict !== null && (b?.verdict == null || verdictRank[b.verdict] < verdictRank[a.verdict]);
+      const prior = a.delivery, next = b?.delivery;
+      const valueLost = prior && next && prior.unit === next.unit && (["value", "low", "high"] as const).some(field => {
+        const old = prior[field], updated = next[field];
+        return old !== null && updated !== null && compareQuantity(updated, old) < 0;
+      });
+      return b === null || verdictLost || valueLost ? [{ run, before: a, after: b }] : [];
+    });
+    return losses.length ? [{ scenario: before.scene.scenarios[outcome.scenario!]!.id,
+      workload: before.scene.workloads[outcome.subjectRow]!.id, runs: losses }] : [];
+  });
+}
+
 export function reviewRecommendation(before:Snapshot, after:Snapshot, edit:RecommendationEdit, scenarioId:string):Recommendation|null {
-  const goals=(s:Snapshot)=>s.result.goals.filter(g=>s.scene.scenarios[g.scenario]!.id===scenarioId);
-  const members=(s:Snapshot)=>s.scene.members.filter(m=>s.scene.scenarios[m.scenario]!.id===scenarioId).map(m=>s.scene.workloads[m.workload]!.id);
-  const remaining=new Set(members(after));
-  if (members(before).some(id=>!remaining.has(id)) ||
-      before.scene.workloads.some(w=>!after.scene.workloads.some(v=>v.id===w.id))) return null;
+  const members = (s: Snapshot) => s.scene.members.map(m => JSON.stringify([s.scene.scenarios[m.scenario]!.id, s.scene.workloads[m.workload]!.id]));
+  const remaining = new Set(members(after));
+  if (members(before).some(id => !remaining.has(id)) ||
+      before.scene.workloads.some(w => !after.scene.workloads.some(v => v.id === w.id))) return null;
   const loads=(s:Snapshot,remap:boolean)=>s.result.standingLoads.map(l=>{
     const id=s.scene.items[l.item]!.id;
     return JSON.stringify([remap && edit.kind==="replace" && id===edit.target ? edit.item.instanceId : id,l.id,l.domain,l.kind,l.unit,l.amount,l.bounds]);
@@ -100,29 +133,25 @@ export function reviewRecommendation(before:Snapshot, after:Snapshot, edit:Recom
     if (index<0) return null;
     nextLoads.splice(index,1);
   }
-  const previous=goals(before), next=goals(after);
-  const reviewed:Recommendation={edit,solved:[],lost:[],conditional:[],incomplete:[],cost:edit.item.state==="owned" ? 0n : null};
-  for (const g of previous) {
-    const current=next.find(n=>n.id===g.id);
-    if (!current) return null;
-    if (g.verdict==="ok" && current.verdict!=="ok") reviewed.lost.push(g.id);
-    if (g.verdict!=="ok" && current.verdict==="ok") reviewed.solved.push(g.id);
-    if (g.verdict==="ok" || current.verdict!=="unknown") continue;
-    if (current.truncated) {
-      reviewed.incomplete.push(g.id);
-      continue;
-    }
-    const witness=after.result.goalSuccesses?.find(w=>w.goal===after.result.goals.indexOf(current));
-    if (!witness) continue;
-    const checks=witness.assignments.map(a=>{
-      const c=after.scene.claims[a.claim]!;
-      const owner=c.ownerKind==="resource" ? after.scene.resources[c.owner]!.id : c.ownerKind==="port" ? after.scene.ports[c.owner]!.id : c.field;
-      const quest=plugins.find(p=>p.id===c.domain)?.quest(c.field) ?? c.field+" 값을 확인하세요.";
-      return owner+" · "+c.field+" = "+a.value+(c.unit ? " "+c.unit : "")+" · "+quest;
-    });
-    if (checks.length) reviewed.conditional.push({goal:g.id,checks});
+  const key = (scenario: string, goal: string) => JSON.stringify([scenario, goal]);
+  const next = new Map(after.result.goals.map((g, row) => [key(after.scene.scenarios[g.scenario]!.id, g.id), row]));
+  const witnesses = new Map(after.result.goalSuccesses?.map(witness => [witness.goal, witness.assignments]));
+  const reviewed: Recommendation = { edit, achieved: [], workloadRegressions: workloadRegressions(before, after),
+    goalRegressions: [], budgetRegression: false, conditional: [], incomplete: [], cost: edit.item.state === "owned" ? 0n : null };
+  for (const goal of before.result.goals) {
+    const scenario = before.scene.scenarios[goal.scenario]!.id;
+    const row = next.get(key(scenario, goal.id));
+    const current = row === undefined ? undefined : after.result.goals[row]!;
+    if (!current || verdictRank[current.verdict] < verdictRank[goal.verdict])
+      reviewed.goalRegressions.push({ scenario, goal: goal.id, before: goal.verdict, after: current?.verdict ?? null });
+    if (scenario !== scenarioId || !current || row === undefined || goal.verdict === "ok") continue;
+    if (current.verdict === "ok") reviewed.achieved.push(goal.id);
+    if (current.verdict !== "unknown") continue;
+    if (current.truncated) reviewed.incomplete.push(goal.id);
+    const assignments = witnesses.get(row);
+    if (assignments?.length) reviewed.conditional.push({ goal: goal.id, assignments });
   }
-  return reviewed.solved.length || reviewed.conditional.length || reviewed.incomplete.length ? reviewed : null;
+  return reviewed.achieved.length || reviewed.conditional.length || reviewed.incomplete.length ? reviewed : null;
 }
 
 export function recommendationCost(beforeDoc:SceneDocument,before:Snapshot,after:Snapshot,card:Recommendation,scenarioId:string,book:PriceBook) {
@@ -131,12 +160,13 @@ export function recommendationCost(beforeDoc:SceneDocument,before:Snapshot,after
     return calculateBudget(doc.scenarios.find(row=>row.id===scenarioId)!,doc.items,book,resultView(s.scene,s.result,index,"together"));
   }
   const prior=budget(beforeDoc,before), next=budget(card.edit.document,after);
-  if (prior.limitStatus==="within" && next.limitStatus!=="within") card.lost.push("구매 예산");
+  if (prior.limitStatus==="within" && next.limitStatus!=="within") card.budgetRegression = true;
   if (card.edit.item.state!=="owned") card.cost=compareBudgets(prior,next);
 }
 export function rankRecommendations(a:Recommendation,b:Recommendation) {
-  const status = (card: Recommendation) => card.solved.length ? 0 : card.conditional.length ? 1 : 2;
-  return a.lost.length-b.lost.length || status(a)-status(b) ||
+  const regressions = (card: Recommendation) => card.workloadRegressions.length + card.goalRegressions.length + Number(card.budgetRegression);
+  const status = (card: Recommendation) => card.achieved.length ? 0 : card.conditional.length ? 1 : 2;
+  return regressions(a)-regressions(b) || status(a)-status(b) ||
     Number(a.cost===null)-Number(b.cost===null) || (a.cost!==null && b.cost!==null && a.cost!==b.cost ? a.cost<b.cost ? -1 : 1 : 0) ||
     a.edit.model.name.localeCompare(b.edit.model.name);
 }
