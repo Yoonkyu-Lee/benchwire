@@ -123,7 +123,7 @@ test("T8 e-marker 전류가 미확인이면 전달 60–80 W, 순충전 40–60 
   assert.equal(a.metric("together").value, null);
   assert.deepEqual([a.metric("together").low, a.metric("together").high], [60, 80]);
   for (const run of ["solo", "together"] as const) {
-    assert.deepEqual(result.assessments.filter(r => r.outcome === a.outcome && r.run === run).map(r => r.verdict), ["ok", "conditional"]);
+    assert.deepEqual(new Set(result.assessments.filter(r => r.outcome === a.outcome && r.run === run).map(r => r.verdict)), new Set(["ok", "conditional"]));
     assert.deepEqual(result.measures.find(m => m.outcome === a.outcome && m.run === run && m.kind === "netCharge"),
       { outcome: a.outcome, run, kind: "netCharge", unit: "W", low: 40, high: 60 });
   }

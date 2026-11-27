@@ -124,7 +124,7 @@ test("양 끝이 일반 USB만 지원하면 벌크 근거와 퀘스트에 USB4 �
   }
   delete cable.attributes.data;
   const missing = run();
-  assert.deepEqual([missing.verdict, missing.metric.low, missing.metric.high], ["unknown", 0, 500]);
+  assert.deepEqual([missing.verdict, missing.metric.low, missing.metric.high], ["unknown", 53.248, 500]);
   assert.deepEqual(missing.questFields, ["cableDataGbps"]);
   assert.ok(missing.reasonFields.includes("cableDataGbps"));
   assert.ok(!missing.reasonFields.includes("cableUsb4"));

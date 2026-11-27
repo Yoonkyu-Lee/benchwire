@@ -1,7 +1,7 @@
 // 포트가 주장하는 링크 매개변수와 영상 작업의 요청 필드를 저장 경계에서 검사한다.
 import { z } from "zod";
 import {
-  CVT_RB_V2_MIN_VERTICAL_BLANK_US, DP_ALT_MODE_PIN_ASSIGNMENTS, DP_LINK_RATES, DP_MAX_LANES,
+  CVT_RB_V2_MIN_VERTICAL_BLANK_US, DP_ALT_MODE_PIN_ASSIGNMENTS, DP_LINK_RATES, DP_MAX_LANES, DP_VERSION_MAX_LINK_RATES,
   HDMI_21_FRL_LINK_RATES, HDMI_TMDS_VERSION_LIMITS, VIDEO_CHROMA_SAMPLES,
 } from "./constants.ts";
 
@@ -12,7 +12,7 @@ const dscBpp = z.number().positive().max(Number.MAX_SAFE_INTEGER);
 // 해당 설정의 인코더나 디코더에서 확인한 DSC 목표. 0은 지원하지 않음이다.
 const dscCapability = fact(z.union([z.literal(0), dscBpp]), "bpp").meta({ title: "지원 DSC 목표", unit: "bpp" });
 const dpParams = z.strictObject({
-  version: fact(z.string().min(1)).meta({ title: "DisplayPort 판본" }),
+  version: fact(z.enum(DP_VERSION_MAX_LINK_RATES.map(row=>row.version))).meta({ title: "DisplayPort 판본" }),
   // 링크 속도 상한은 하위 속도도 지원한다는 주장이다.
   maxRate: fact(z.enum(DP_LINK_RATES.map(row => row.rate))).meta({ title: "최고 링크 속도 등급" }),
   lanes: fact(z.literal([1, 2, DP_MAX_LANES])).meta({ title: "영상 레인 수" }),

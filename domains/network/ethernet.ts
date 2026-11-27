@@ -1,5 +1,5 @@
 // 공통 BASE-T 모드, 설치 채널의 도달 거리와 태그 없는 MAC 페이로드 한도를 협상한다.
-import { readClaim, compareQuantity, effectiveClaim, type Link, type Option } from "../../engine/contract.ts";
+import { readClaim, compareQuantity, effectiveClaim, type Claim, type Scene, type Link, type Option } from "../../engine/contract.ts";
 import { COPPER_CATEGORIES, ETHERNET_BASE_T_RATES, ETHERNET_COPPER_CHANNEL_REACH, MAC_PAYLOAD_FRACTION } from "./constants.ts";
 import { channelPortsMatch, networkInterface, readNetworkClaim } from "./evidence.ts";
 import { ETHERNET, MAC, MBPS, NETWORK, parseBaseTModes } from "./input.ts";
@@ -16,6 +16,31 @@ function reach(mode: Mode, { category, screening, length }: Channel) {
     (compareQuantity(length,row.reachM) <= 0 || "mitigatedReachM" in row && compareQuantity(length,row.mitigatedReachM) <= 0));
   if (relevant.some(row => !row.requiresExtraQualification)) return "ok";
   return relevant.length ? "conditional" : "impossible";
+}
+
+// IEEE BASE-T 채널 도달 거리 표의 모든 경계 사이에서 협상은 일정하다. 한 채널 안에 열린 길이가 둘이면 합산 경계를 따로 고정할 수 없다.
+export function lengthRepresentatives(claim:Claim, scene:Scene) {
+  if (claim.ownerKind!=="item" || claim.field!=="length") return;
+  const links=scene.parts.filter(p=>p.item===claim.owner);
+  if (links.length!==1) return;
+  let known=0;
+  for (const part of scene.parts.filter(p=>p.connection===links[0]!.connection && p.item!==claim.owner)) {
+    const row=effectiveClaim(scene,"item",part.item,NETWORK,"length");
+    const length=row===undefined ? null : readClaim(scene,row).value;
+    if (typeof length!=="number") return;
+    known+=length;
+  }
+  const link=scene.connections[links[0]!.connection]!;
+  const modes=[link.from,link.to].map(port=>{
+    const row=networkInterface(scene,[],port,ETHERNET,"bidirectional");
+    const value=row===undefined ? null : readNetworkClaim(scene,[],"interface",row,"baseTModes");
+    return typeof value==="string" ? parseBaseTModes(value) : null;
+  });
+  const reaches=ETHERNET_COPPER_CHANNEL_REACH.filter(r=>modes.every(end=>end===null || end.includes(r.mode)));
+  const edges=[...new Set(reaches.flatMap(r=>"mitigatedReachM" in r ? [r.reachM,r.mitigatedReachM] : [r.reachM]))]
+    .filter(total=>compareQuantity(known,total)<=0).sort((a,b)=>a-b);
+  // 0은 이미 깔린 길이가 문턱의 허용 오차 안에 있을 때도 첫 구간을 대표한다.
+  return [0,...edges.map((edge,i)=> (edges[i+1]===undefined ? edge+1 : (edge+edges[i+1]!)/2)-known)];
 }
 
 export function negotiateEthernet({ scene, connection, ports }: Link): Option {

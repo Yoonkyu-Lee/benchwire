@@ -25,6 +25,10 @@ function fieldSamples(schema: unknown, path: readonly string[]): Samples | undef
     if (schema instanceof z.ZodRecord) return fieldSamples(schema.valueType,rest);
     return undefined;
   }
+  if (schema instanceof z.ZodString) {
+    const values=schema.meta()?.enum;
+    if (Array.isArray(values) && values.every((v:unknown)=>typeof v==="string")) return {values};
+  }
   if (schema instanceof z.ZodBoolean) return {values:[false,true]};
   if (schema instanceof z.ZodNull) return {values:[]};
   if (schema instanceof z.ZodNumber) {

@@ -391,14 +391,19 @@ test("DP 레인 수와 속도가 미확인이어도 알려진 포트와 규격�
   assert.deepEqual(rate.option.bounds, { low: 1.62 * 4 * 0.8, high: 17.28 });
   assert.ok(rate.quests.some(q => q.claim === portClaim(scene, "host", "dp", "maxRate")));
 
-  setWorkloadValue(scene, "native", "refresh", 15);
-  const guaranteed = inspect(scene, "native");
-  assert.equal(guaranteed.outcome.verdict, "ok");
-  assert.deepEqual(guaranteed.quests, []);
-  setWorkloadValue(scene, "native", "refresh", 90);
-  const blocked = inspect(scene, "native");
-  assert.equal(blocked.outcome.verdict, "impossible");
-  assert.deepEqual(blocked.quests, []);
+  // 판본의 천장을 넘는 고정 등급은 협상이 충돌하는 세계다. 미확인 등급에도 그 가능성이 남는다.
+  for (const hz of [15,90]) {
+    setWorkloadValue(scene, "native", "refresh", hz);
+    const row = portClaim(scene, "host", "dp", "maxRate");
+    const fixed = scene.claims[row]!.discrete!.flatMap(value => {
+      scene.claims[row]!.value = value;
+      return inspect(scene, "native").possible;
+    });
+    scene.claims[row]!.value = null;
+    const actual = inspect(scene, "native");
+    assert.deepEqual(new Set(actual.possible), new Set(fixed));
+    assert.ok(actual.quests.some(q => q.claim === row));
+  }
 });
 
 test("모델에 DP 레인 수 필드가 없으면 로드 위치에서 거절하고 명시적인 null에는 퀘스트를 낸다", t => {

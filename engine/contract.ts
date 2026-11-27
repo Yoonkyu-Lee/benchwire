@@ -3,10 +3,18 @@ import type { Claim, Scene, Value } from "./scene.ts";
 export { effectiveClaim, readClaim, hasClaimPrefix } from "./scene.ts";
 export type { Scene, Claim, Value, MeasurementContext } from "./scene.ts";
 
+// 지원 모드 목록에서 순서가 다른 표기는 같은 집합이다. 빈 목록도 한 세계다.
+export function modeSets(names:readonly string[]) {
+  let sets=[""];
+  for (const name of names) sets=sets.concat(sets.map(prefix=>prefix ? prefix+","+name : name));
+  return sets;
+}
+
 export type Verdict = "ok" | "conditional" | "impossible" | "unknown";
 export type Direction = "forward" | "reverse";
 export interface Trace { rule: string; inputs: number[]; specs: string[] }
 export type KnownVerdict = Exclude<Verdict, "unknown">;
+// 열린 입력에 대해 플러그인이 내는 경계는 그 입력의 모든 허용값을 포함한다.
 export interface Interval { low: number | null; high: number | null }
 // inputs는 이 지표의 low~high가 실제로 반영한 주장이다. 판정 전체의 인용은 Trace에 둔다.
 export interface Measure extends Interval { kind: string; unit: string; inputs?: readonly number[] }
@@ -78,6 +86,8 @@ export interface DomainPlugin {
   goalMeasures?: readonly { kind: string; unit: string; label: string }[];
   // 소유 대상에 관계없이 유효한 미확인 주장의 이산 후보를 준다. 참조 필드는 파일의 지역 ID를 쓴다.
   profileValues?(claim: Claim, topology: Pick<Scene,"interfaces" | "ports" | "resources" | "nodes">): readonly Exclude<Value, null>[];
+  // 열린 수의 전 범위를 덮고 각 구간에서 모든 영역 결과가 같은 경우에만 구간 대표값을 선언한다.
+  representatives?(claim:Claim, scene:Scene): readonly number[] | undefined;
   standingLoads?(scene: Scene): readonly StandingLoad[];
   pools?(link: Link): readonly Pool[];
   match?(link: Link, option: Option, demand: Demand, workload: number): Trace & { verdict: Verdict };

@@ -4,7 +4,7 @@ import { evidenceRows } from "../engine/evidence.ts";
 import type { Claim, Value } from "../engine/contract.ts";
 import type { Results, Run } from "../engine/results.ts";
 import type { Variants } from "./assessment.ts";
-import { verificationSource } from "./quests.ts";
+import { claimQuest, questName, verificationSource } from "./quests.ts";
 import { directionArrow, interval, quantity, resourceName, verdictText, type ResultView, type Selection } from "./results.ts";
 
 const stages = { physical: "물리", negotiate: "협상", path: "경로", allocate: "배분", judge: "판정" };
@@ -208,7 +208,25 @@ function limitWitnesses(view: ResultView, outcome: number) {
   return bounds.childElementCount ? bounds : undefined;
 }
 
-function detail(root: HTMLElement, view: ResultView, selected: Selection) {
+function conservativeNote(view:ResultView,row:number,openQuest:((claim:number)=>void)|undefined) {
+  const status=view.result.outcomes[row]!.conservative;
+  if (!status) return [];
+  const note=el("div");
+  if (status.cause==="limit") note.append(el("p","보수적 후보 · 조합 상한 초과"));
+  for (const claim of status.claims) {
+    const name=questName(claimQuest(view,claim));
+    if (status.cause==="open") note.append(el("p","보수적 후보 · "+name+" 미확인"));
+    if (openQuest) {
+      const link=el("button",name+" 확인 퀘스트 열기");
+      link.type="button";
+      link.onclick=()=>openQuest(claim);
+      note.append(link);
+    }
+  }
+  return [note];
+}
+
+function detail(root: HTMLElement, view: ResultView, selected: Selection, openQuest:((claim:number)=>void)|undefined) {
   const { scene, result } = view;
   if (selected.kind === "connection") {
     const rows = view.negotiations.get(selected.id);
@@ -237,7 +255,7 @@ function detail(root: HTMLElement, view: ResultView, selected: Selection) {
         negotiation.append(title);
         if (mark.verdict === "unknown") list(negotiation, "가능한 판정",
           result.possibleVerdicts.filter(candidate => candidate.outcome === row).map(candidate => verdictText[candidate.verdict]));
-        negotiation.append(tree(view, { outcome: row }));
+        negotiation.append(...conservativeNote(view,row,openQuest),tree(view, { outcome: row }));
         section.append(negotiation);
         const witnesses = limitWitnesses(view, row);
         if (witnesses) section.append(witnesses);
@@ -266,6 +284,7 @@ function detail(root: HTMLElement, view: ResultView, selected: Selection) {
     const bindings = result.bindings.filter(b => b.scenario === outcome.scenario && b.workload === outcome.subjectRow && b.run === view.run);
     list(root, "병목 자원", bindings.map(b => resourceName(scene, result, b.resourceKind, b.resource)));
     outcomeNotes(root, result, [row], view.run);
+    root.append(...conservativeNote(view,row,openQuest));
     measurements(root, view, [row], new Set(workload.steps.map(step => step.row)));
     root.append(el("h4", "판정 근거"), tree(view, { outcome: row, run: view.run }));
   } else if (selected.kind === "resource") {
@@ -308,7 +327,7 @@ function detail(root: HTMLElement, view: ResultView, selected: Selection) {
 }
 
 export function mountEvidence(root: HTMLElement, change: {
-  run: (run: Run) => void; variant: (index: number) => void; loadVariants: () => Promise<Variants>;
+  openQuest?: ((claim:number)=>void) | undefined; run: (run: Run) => void; variant: (index: number) => void; loadVariants: () => Promise<Variants>;
 }) {
   const heading = el("div");
   heading.className = "results-heading";
@@ -393,11 +412,15 @@ export function mountEvidence(root: HTMLElement, change: {
           : selection?.kind === key.kind && selection.row === key.row));
         button.addEventListener("click", () => choose(key));
         group.append(button);
+        if (key.kind==="workload") {
+          const row=view.workloads.find(w=>w.id===key.id)!.row;
+          group.append(...conservativeNote(view,row,change.openQuest));
+        }
       }
       content.append(group);
     }
     info.replaceChildren();
-    if (selection) detail(info, view, selection);
+    if (selection) detail(info, view, selection,change.openQuest);
     if (!info.childElementCount) info.append(el("p", "선, 작업 또는 자원을 선택하세요."));
   }
 

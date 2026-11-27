@@ -128,7 +128,7 @@ test("목표 검산의 조합 상한과 열린 수를 구별하고 해당 주장
         const r=await fetch(path,{method:"PUT",headers:{"Content-Type":"application/json"},body:JSON.stringify(body)});
         if (!r.ok) throw Error(await r.text());
       };
-      for (const revision of ["open-capacity","finite-grid","mixed"]) {
+      for (const revision of ["open-capacity","finite-grid","mixed","base-open"]) {
         const doc=structuredClone(base), item=doc.items.find(i=>i.instanceId==="supply")!;
         const model=structuredClone(library.models.find(m=>m.modelId===item.modelId && m.revision===item.revision)!);
         item.revision=model.revision=revision;
@@ -136,7 +136,10 @@ test("목표 검산의 조합 상한과 열린 수를 구별하고 해당 주장
         doc.sceneId="goal-"+revision;
         doc.connections=doc.connections.slice(0,1); doc.workloads=[work];
         doc.scenarios=[{id:"충전 검증",members:[work.id],goals:[{id:"충전 성립",kind:"workload",workload:work.id}]}];
-        if (revision==="open-capacity") model.resources![0]!.capacity.value=null;
+        if (revision==="base-open") {
+          delete doc.scenarios[0]!.goals;
+          work.request.targetW!.value=null;
+        } else if (revision==="open-capacity") model.resources![0]!.capacity.value=null;
         else {
           model.ports[0]!.interfaces![0]!.params.pdo20!.value=null;
           doc.sources.push({...doc.sources[0]!,id:"other"});
@@ -155,6 +158,25 @@ test("목표 검산의 조합 상한과 열린 수를 구별하고 해당 주장
       await page.getByRole("button",{name:"목표 체크리스트",exact:true}).click();
       await panel.getByText("❓ 미확인 · 작업 성립",{exact:true}).waitFor();
     }
+    await page.getByLabel("장면",{exact:true}).selectOption("goal-finite-grid");
+    await waitForAssessment(page);
+    await page.getByRole("button",{name:"결과 · 근거",exact:true}).click();
+    const baseList=page.locator(".results-panel .result-list").first();
+    await baseList.getByText("보수적 후보 · 조합 상한 초과",{exact:true}).waitFor();
+    await page.screenshot({path:resolve("work/기본-보수후보.png")});
+    await baseList.getByRole("button",{name:/20 V 송전 PDO 확인 퀘스트/}).click();
+    await page.locator(".quest-dialog details[open] > summary").filter({hasText:"20 V 송전 PDO"}).waitFor();
+    await page.locator(".quest-dialog").getByRole("button",{name:"닫기",exact:true}).click();
+    await page.locator(".results-panel").getByRole("button",{name:"닫기",exact:true}).click();
+    await page.getByLabel("장면",{exact:true}).selectOption("goal-base-open");
+    await waitForAssessment(page);
+    await page.getByRole("button",{name:"결과 · 근거",exact:true}).click();
+    await baseList.getByText(/보수적 후보 · .*목표 순충전 미확인/).waitFor();
+    await page.screenshot({path:resolve("work/기본-열린주장.png")});
+    await baseList.getByRole("button",{name:/목표 순충전 확인 퀘스트/}).click();
+    await page.locator(".quest-dialog details[open] > summary").filter({hasText:"목표 순충전"}).waitFor();
+    await page.locator(".quest-dialog").getByRole("button",{name:"닫기",exact:true}).click();
+    await page.locator(".results-panel").getByRole("button",{name:"닫기",exact:true}).click();
     await checklist("finite-grid");
     await panel.getByText("후보 조합 수가 검산 상한을 넘었습니다.").waitFor({timeout:4000});
     assert.doesNotMatch(await panel.innerText(),/규격 걸음/);

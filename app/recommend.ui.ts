@@ -67,8 +67,8 @@ test("추천 탭은 최대 여덟 편집을 검산하고 미완료 사유와 퀘
     const original = await get("/api/scenes/network") as SceneDocument;
     const model = structuredClone(library.models.find(m => m.modelId === "network-router")!);
     model.resources.forEach(r => r.capacity.value = 3000);
-    const supported = model.ports.find(p => p.id === "lan-a")!.interfaces[0]!.params.baseTModes!;
-    Object.assign(supported, { value: null, confidence: "unknown" });
+    for (const port of model.ports.filter(p=>p.id==="lan-a" || p.id==="lan-b"))
+      Object.assign(port.interfaces[0]!.params.baseTModes!,{value:null,confidence:"unknown"});
     for (let i = 0; i < 9; i++) {
       const revision = "recommend-open-" + i;
       await put("/api/models/" + model.modelId + "/" + revision, { ...model, revision, name: "모드 확인 스위치 " + i });
@@ -91,7 +91,7 @@ test("추천 탭은 최대 여덟 편집을 검산하고 미완료 사유와 퀘
     assert.ok(Number((await status.innerText()).match(/^후보 (\d+)개/)?.[1]) > 8);
     const first = panel.getByRole("article").filter({ hasText: "모드 확인 스위치" }).first();
     await first.getByText("❓ 목표 검산 미완료 · A 전송 회복", { exact: true }).waitFor();
-    assert.match(await first.innerText(), /지원 BASE-T 모드의 가능한 값을 모두 확인할 수 없습니다/);
+    assert.match(await first.innerText(), /조합.*상한/);
     assert.match(await first.innerText(), /확인 퀘스트.*지원 BASE-T 모드/);
     assert.doesNotMatch(await first.innerText(), /이 아이템으로 해결|이 조건에서 가능/);
     await page.screenshot({ path: "work/recommend-incomplete.png" });
@@ -241,6 +241,7 @@ test("조건부 추천에서 값마다 실물과 포트를 확인하는 퀘스�
     await page.getByRole("button", { name: "목표 체크리스트", exact: true }).click();
     const checklist = page.getByRole("dialog", { name: "목표 체크리스트" });
     const goal = checklist.getByRole("article").filter({ has: page.getByRole("heading", { name: "전송 확보", exact: true }) });
+    await goal.getByText("조합을 이루는 주장 2개",{exact:true}).click();
     await goal.getByRole("button", { name: /LAN \(lan-a\).*지원 BASE-T 모드 확인 퀘스트 열기/ }).click();
     const quests = page.getByRole("dialog", { name: "검증 퀘스트" });
     for (const id of ["lan-a", "lan-b"]) {

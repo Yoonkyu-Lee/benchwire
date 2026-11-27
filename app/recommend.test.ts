@@ -94,14 +94,14 @@ test("T5 검산을 끝내지 못한 추천은 해당 목표와 사유를 남긴�
   const change = structuredClone(model("network-router"));
   change.revision = "open-modes";
   change.resources.forEach(r => r.capacity.value = 3000);
-  const modes = change.ports.find(p => p.id === "lan-a")!.interfaces[0]!.params.baseTModes!;
-  Object.assign(modes, { value: null, confidence: "unknown" });
+  for (const port of change.ports.filter(p=>p.id==="lan-a" || p.id==="lan-b"))
+    Object.assign(port.interfaces[0]!.params.baseTModes!, {value:null, confidence:"unknown"});
   const f = setup([change]), edit = f.edits().edits.find(e => e.target === "router")!;
   const before = f.snapshot(f.doc), after = f.snapshot(edit.document);
   const goal = after.result.goals.find(g => g.id === "전송 A")!;
   assert.equal(goal.verdict, "unknown");
   assert.ok(goal.truncated);
-  assert.ok(goal.openClaims?.some(row => after.scene.claims[row]!.field === "baseTModes"));
+  assert.ok(goal.limitClaims?.some(row => after.scene.claims[row]!.field === "baseTModes"));
   const card = reviewRecommendation(before, after, edit, f.scenario.id);
   assert.ok(card);
   assert.deepEqual(card.achieved, []);

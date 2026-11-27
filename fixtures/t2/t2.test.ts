@@ -308,3 +308,16 @@ test("T2 기본이 핀에 따라 달라져도 확인된 2레인 설정을 고정
   assert.ok(work("video").reasons.some(r => r.rule.includes("60 Hz")));
   assert.ok(variants.slice(1).some(v => v.choices.some(c => c.profile === "usb-only")));
 });
+
+test("T2 열린 DSC 주장으로 기본 설정이 갈려도 사용자가 고른 레인 설정의 허브 한도를 유지한다",()=>{
+  const scene=fixture("scene");
+  scene.claims.find(c=>c.field==="dscBpp")!.value=null;
+  const [automatic,...variants]=evaluateVariants(scene,plugins,0);
+  assert.deepEqual(automatic!.choices,[]);
+  for (const [profile,delivered] of [["dp-4lane",53.248],["dp-2lane",400]] as const) {
+    const branch=variants.find(v=>v.choices.some(c=>c.profile===profile));
+    assert.ok(branch,profile);
+    const row=branch.result.outcomes.findIndex(o=>o.subjectKind==="workload" && scene.workloads[o.subjectRow]!.id==="hub");
+    assert.equal(branch.result.metrics.find(m=>m.outcome===row && m.kind==="together")!.value,delivered);
+  }
+});

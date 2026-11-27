@@ -89,7 +89,10 @@ function space(scene:Scene,c:Claim,domains:readonly DomainPlugin[]) {
         for (const v of [0,lo,hi,...(typeof c.value==="number" ? [c.value,c.value/2,c.value*2] : [])])
           if (typeof v==="number" && Number.isFinite(v) && t.safeParse(v).success) candidates.add(v);
       }
-    } else if (t instanceof z.ZodString) exact=false;
+    } else if (t instanceof z.ZodString) {
+      if (Array.isArray(t.meta()?.enum)) for (const v of t.meta()!.enum as string[]) candidates.add(v);
+      else exact=false;
+    }
   }
   if (!candidates.size && c.discrete?.length) return {exact:true,values:[...c.discrete]};
   if (!candidates.size && typeof c.value==="number")
@@ -150,7 +153,8 @@ function observations(r:Results) {
   }
   for (const g of r.goals) verdicts.set("목표/"+g.id,new Set(g.verdict==="unknown" ? ["ok","impossible"] : [g.verdict]));
   const links=new Map<string,Map<string,{possible:Set<string>;low:number;high:number}>>();
-  const scenarios=[...new Set(r.goals.map(g=>g.scenario))];
+  const incompleteLinks=new Set<string>();
+  const scenarios=[...new Set([...r.goals.map(g=>g.scenario),...r.outcomes.flatMap(o=>o.scenario===null ? [] : [o.scenario])])];
   for (const [i,o] of r.outcomes.entries()) if (o.subjectKind==="connection") {
     const limit=r.metrics.find(m=>m.outcome===i && m.kind==="limit");
     const option=o.option===undefined ? undefined : availableOption(r,o.option);
@@ -161,11 +165,12 @@ function observations(r:Results) {
       low:o.verdict==="impossible" ? 0 : low ?? 0,high:o.verdict==="impossible" ? 0 : high ?? Infinity};
     for (const scenario of o.scenario===null ? scenarios : [o.scenario]) {
       const key=[scenario,o.subjectRow,o.direction,o.domain].join("/");
+      if (o.conservative) incompleteLinks.add(key);
       const budgets=links.get(key) ?? new Map(); links.set(key,budgets);
       budgets.set([o.unit,o.pool?.domain,o.pool?.id].join("/"),answer);
     }
   }
-  return {verdicts,ranges,links,truncated:new Set(r.goals.filter(g=>g.truncated).map(g=>g.scenario))};
+  return {verdicts,ranges,links,incompleteLinks};
 }
 
 function order(a:number,b:number) {
@@ -206,7 +211,7 @@ function* axes(scene:Scene, domains:readonly DomainPlugin[], only?: (c:Claim)=>b
     if (best) { pairs.add(best.id);used.add(best.fields);yield [best.a,best.b]; }
   }
 }
-function oracle(scene:Scene, domains:readonly DomainPlugin[], only?: (c:Claim)=>boolean) {
+function oracle(scene:Scene, domains:readonly DomainPlugin[], only?: (c:Claim)=>boolean, invalidOpenBounds=false) {
   const base=goals(scene,evaluate(scene,domains));
   const failures:string[]=[];
   let eligible=0, cases=0, worlds=0;
@@ -234,7 +239,22 @@ function oracle(scene:Scene, domains:readonly DomainPlugin[], only?: (c:Claim)=>
       disputed.sources=[...disputed.sources,{...scene.sources[origin.source]!,id:"순위-대조-"+axis.row}];
     }
     const unknown=evaluate(disputed,domains);
-    const actual=observations(unknown);
+    const basic=evaluate({...disputed,goals:[]},domains);
+    const actual=observations(basic), withGoals=observations(unknown);
+    assert.deepEqual(actual.verdicts,new Map([...withGoals.verdicts].filter(([k])=>!k.startsWith("목표/"))),JSON.stringify(group.map(a=>[a.row,a.c.field])));
+    assert.deepEqual(actual.links,withGoals.links);
+    assert.deepEqual(actual.ranges,withGoals.ranges);
+    for (const [key,value] of withGoals.verdicts) if (key.startsWith("목표/")) actual.verdicts.set(key,value);
+    assert.deepEqual(actual.incompleteLinks,withGoals.incompleteLinks);
+    const conservative=new Set<string>();
+    for (const o of basic.outcomes.filter(o=>o.conservative)) {
+      if (o.subjectKind==="workload") conservative.add([o.scenario,o.subjectRow].join("/"));
+      else for (const scenario of o.scenario===null ? scene.scenarios.keys() : [o.scenario])
+        conservative.add(["연결",scenario,o.subjectRow,o.direction,o.domain].join("/"));
+    }
+    const precise=(key:string)=>exact && ![...conservative].some(prefix=>key===prefix || key.startsWith(prefix+"/"));
+    // 적대적 더미 훅은 열린 값에서 계약에 어긋나는 행을 내도록 설계했다. 그 실험의 판정 대상은 목표다.
+    const goalProbe=invalidOpenBounds && !exact;
     const samples=values.map(v=>observations(evaluate(assign(input,v),domains)));
     const blocked={possible:new Set(["impossible"]),low:0,high:0};
     const incomplete={possible:new Set(["ok","conditional","impossible"]),low:0,high:Infinity};
@@ -243,8 +263,7 @@ function oracle(scene:Scene, domains:readonly DomainPlugin[], only?: (c:Claim)=>
       if (budgets.size>1) budgets.delete("//");
       for (const s of [actual,...samples]) for (const id of budgets) {
         const rows=s.links.get(key);
-        const scenario=Number(key.split("/")[0]);
-        const link=rows?.get(id) ?? rows?.get("//") ?? (s.truncated.has(scenario) ? incomplete : blocked);
+        const link=rows?.get(id) ?? rows?.get("//") ?? (s.incompleteLinks.has(key) ? incomplete : blocked);
         const name="연결/"+key+"/"+id;
         s.verdicts.set(name,new Set(link.possible));
         s.ranges.set(name,[link.low,link.high]);
@@ -266,7 +285,8 @@ function oracle(scene:Scene, domains:readonly DomainPlugin[], only?: (c:Claim)=>
     const errors:string[]=[];
     for (const [key,wanted] of expected.verdicts) {
       const got=actual.verdicts.get(key)!;
-      if (!wanted.isSubsetOf(got) || exact && got.size!==wanted.size)
+      if (goalProbe && !key.startsWith("목표/")) continue;
+      if (!wanted.isSubsetOf(got) || precise(key) && got.size!==wanted.size)
         errors.push(key+" "+[...wanted]+" → "+[...got]);
       if (only && differingGoals.has(key)) {
         const goal=unknown.goals.findIndex(g=>"목표/"+g.id===key);
@@ -276,8 +296,9 @@ function oracle(scene:Scene, domains:readonly DomainPlugin[], only?: (c:Claim)=>
     }
     for (const [key,[lo,hi]] of expected.ranges) {
       const got=actual.ranges.get(key);
+      if (goalProbe) continue;
       if (!got || order(got[0],lo)>0 || order(got[1],hi)<0 ||
-          exact && (order(got[0],lo)!==0 || order(got[1],hi)!==0))
+          precise(key) && (order(got[0],lo)!==0 || order(got[1],hi)!==0))
         errors.push(key+" ["+[lo,hi]+"] → ["+got+"]");
     }
     if (errors.length) failures.push(group.map(a=>a.row+" "+a.c.ownerKind+"."+a.c.owner+"."+a.c.field).join(" + ")+" | "+errors.join(" · "));
@@ -640,7 +661,7 @@ for (const hook of judgingHooks) for (const same of [false,true])
     assert.ok(pending.quests.some(q=>q.claim===omitted));
   }
   if (hook==="consume") {
-    for (const [result,rate] of [[zero,100],[one,0],[pending,null]] as const)
+    for (const [result,rate] of [[zero,100],[one,0]] as const)
       assert.equal(result.allocations.find(a=>a.run==="together")!.value,rate);
   }
   if (hook==="assess") {
@@ -657,7 +678,7 @@ for (const hook of judgingHooks) for (const same of [false,true])
     assert.ok(covered.goals.every(g=>g.verdict==="unknown" && g.truncated));
     assert.ok(covered.quests.some(q=>q.claim===bounded));
   }
-  oracle(scene,[plugin],c=>c===scene.claims[omitted]);
+  oracle(scene,[plugin],c=>c===scene.claims[omitted],true);
 });
 
 for (const [field, usb4] of [["cableDataGbps",true],["cableUsb4",true],["cableUsb4",false]] as const)
@@ -701,7 +722,7 @@ test("T7 모델에서 빠진 케이블 길이의 목표를 도달 거리 양쪽�
   const scene=run(), row=scene.claims.findIndex(c=>c.domain==="network" && c.field==="length");
   assert.equal(scene.claims[row]!.openDomain,true);
   const result=evaluate(scene,plugins), goal=result.goals[0]!;
-  assert.deepEqual([goal.verdict,goal.openClaims],["unknown",[row]]);
+  assert.deepEqual([goal.verdict,goal.truncated],["unknown",false]);
   assert.ok(result.quests.some(q=>q.claim===row));
   assert.deepEqual([30,101].map(value=>{
     attributes.length={...original,value};

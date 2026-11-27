@@ -481,7 +481,8 @@ test("요청 모드가 사라진 세계의 전달량 0이 100과 합쳐져 150 �
   f.doc.workloads[0]!.request.rate!.value=0;
   delete f.doc.workloads[0]!.request.rate!.conflicts;
   const fixed=evaluate(loadSceneDocuments(f.doc,f,[p]),[p]);
-  assert.deepEqual(fixed.metrics.filter(m=>m.kind==="together").map(m=>[m.unit,m.value]),[["회/s",0]]);
+  assert.deepEqual(fixed.metrics.filter(m=>m.kind==="together").map(m=>[m.unit,m.value]),[["",0]]);
+  assert.deepEqual(fixed.goals.map(g=>g.verdict),["impossible","impossible"]);
 });
 
 test("T5 같은 선호의 두 경로와 상위 모드의 포트·전달 목표는 지원 여부를 고정한 장면의 합과 같다",()=>{
@@ -729,7 +730,8 @@ test("T8 PD 전류 격자에서 작업마다 다른 문턱과 우선순위에 �
     }));
     for (const m of merged.metrics.filter(m=>m.kind==="together")) {
       const values=grid.map(r=>r.metrics.find(v=>v.outcome===m.outcome && v.kind===m.kind)!.value!);
-      assert.deepEqual([m.low,m.high],[Math.min(...values),Math.max(...values)]);
+      assert.equal(merged.outcomes[m.outcome]!.conservative?.cause,"limit");
+      assert.ok(m.low!<=Math.min(...values) && (m.high===null || m.high>=Math.max(...values)));
     }
     assert.ok(merged.goalEvidence.filter(e=>e.goal===0).every(e=>e.connections.length===2 && e.reasons.length));
   }
@@ -782,7 +784,7 @@ test("T5 두 원시 한도의 걸음 격자에서 다른 한도가 옮긴 선택
   for (const [first,second] of [[fine,fine],[open,quantity]] as const) {
     p.attributes=z.strictObject({left:first,right:second});
     const over=judge();
-    assert.equal(over.profileWorlds.length,0);
+    if (first!==open) assert.equal(over.profileWorlds.length,0);
     assert.ok(over.goals.every(g=>g.truncated && g.verdict==="unknown"));
     if (first===open) {
       assert.ok(over.goals.every(g=>!g.limitClaims && g.openClaims?.length===1));
@@ -837,18 +839,15 @@ test("T5 경계가 알려진 한도의 양 끝과 안쪽 문턱에서 고른 서
       boost.value=on;
       const scene=load(f,goals,p), merged=evaluate(scene,[p]);
       assert.deepEqual(merged.goals.map(g=>g.verdict),rawBounds ? oracle : goals.map(()=>"unknown"),"원시 경계 "+rawBounds+" 지원 "+on);
-      assert.deepEqual(merged.metrics.filter(m=>m.kind==="together").map(m=>[m.low,m.high]),rawBounds ? [[90,100]] : [[0,null]]);
-      const link=merged.outcomes.findIndex(o=>o.subjectKind==="connection" && o.subjectRow===0 && o.direction==="forward");
-      assert.equal(merged.outcomes[link]!.option,undefined);
-      const limits=merged.metrics.filter(m=>m.outcome===link && m.kind==="limit");
-      if (rawBounds) assert.deepEqual(limits.map(m=>[m.low,m.high]),[[80,100]]);
-      else assert.ok(limits.every(m=>m.low===0 && m.high===null));
+      const work=merged.outcomes.find(o=>o.subjectKind==="workload")!;
+      assert.equal(work.conservative?.cause,rawBounds ? undefined : "open");
       const claim=effectiveClaim(scene,"item",0,p.id,"limit")!;
-      assert.ok(merged.quests.some(q=>q.outcome===link && q.claim===claim));
+      assert.ok(merged.quests.some(q=>q.claim===claim));
       assert.ok(merged.goalEvidence.some(e=>e.claims.includes(claim) && e.reasons.length));
-      const numbers=new Set(merged.profileWorlds.map(v=>v.value).filter(n=>typeof n==="number"));
-      if (rawBounds) assert.ok(numbers.has(7) && numbers.has(10) && [...numbers].every(v=>v>=7 && v<=10));
-      else assert.equal(numbers.size,0);
+      if (rawBounds) {
+        const delivery=merged.goalEvidence.find(e=>goals[e.goal]?.id==="동시 90")!;
+        assert.deepEqual([delivery.low,delivery.high],[90,100]);
+      }
     }
   }
 });

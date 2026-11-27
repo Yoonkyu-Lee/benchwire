@@ -67,7 +67,7 @@ test("T2 케이블 데이터 등급이 미확인이면 포트로 상한을 제�
   scene.claims[grade]!.confidence = "unknown";
   scene.claims.find(c => c.field === "throughput")!.value = 3_000;
   const { result, work: [w] } = run(scene);
-  assert.deepEqual([w!.verdict, w!.together.low, w!.together.high, w!.together.value], ["unknown", 0, 2_200, null]);
+  assert.deepEqual([w!.verdict, w!.together.low, w!.together.high, w!.together.value], ["conditional", 53.248, 2_200, null]);
   assert.ok(result.quests.some(q => q.outcome === w!.row && q.claim === grade && q.instruction.includes("등급")));
   assert.ok(w!.specs.includes("usb3-estimate"));
   assert.ok(w!.claims.some(c => c.field === "cableDataGbps" && c.locators.includes("fixture:data-cable")));

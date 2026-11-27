@@ -205,22 +205,18 @@ function evaluatePlans(input: Scene, plugins: readonly DomainPlugin[], scenario?
     const fixWorkloads = scenario !== undefined && chosenProfile !== undefined &&
       scenarios[scenario]!.filter(p => profileKey(p.choices) === chosenProfile).length > 1;
     const result = render(scene,plugins,tables,routes,selected,prepared.gross,prepared.supplies);
-    function evaluateWorld(world: Scene, domains: readonly DomainPlugin[], profileChanged: boolean, resolveWiring: boolean,
-      prior = selected) {
-      const locks = profileChanged && !explicit ? undefined : prior.map((plan,index) => {
-        const chosen = explicit && index === scenario;
-        if (profileChanged && !chosen) return undefined;
+    function evaluateWorld(world: Scene) {
+      const locks = !explicit ? undefined : selected.map((plan,index) => {
+        if (index!==scenario) return undefined;
         const lock: LockedSelection = { choices: plan.choices, confirmed: plan.confirmed };
-        if (chosen && fixWorkloads) lock.workloads = plan.workloads;
+        if (fixWorkloads) lock.workloads = plan.workloads;
         return lock;
       });
-      const next = prepare(world,domains,locks);
+      const next = prepare(world,plugins,locks);
       const plans = next.scenarios.map(list => list[0]!);
-      const answer = render(world,domains,next.result,next.routes,plans,next.gross,next.supplies);
-      if (resolveWiring) resolveUnknowns(world,domains,answer,(s,p,changed,again) => evaluateWorld(s,p,changed,again,plans),next.routes,false);
-      return {result:answer,routes:next.routes};
+      return {result:render(world,plugins,next.result,next.routes,plans,next.gross,next.supplies),routes:next.routes};
     }
-    resolveUnknowns(scene,plugins,result,evaluateWorld,routes);
+    resolveUnknowns(scene,plugins,result,routes,evaluateWorld,explicit ? scenario : undefined);
     delete result.readClaims;
     delete result.hookReads;
     delete result.feedRequirements;

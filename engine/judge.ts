@@ -99,10 +99,13 @@ export function judgeConnections(scene: Scene, plugins: readonly DomainPlugin[],
         const { row: option, option: o } = offers[0]!;
         const unique = offers.length === 1, mode = offers.every(c => c.option.mode === o.mode) ? o.mode : "";
         const verdict = unique ? offers[0]!.verdict : floor.verdict === ceiling.verdict ? floor.verdict : "unknown";
-        const outcome = result.outcomes.push({ subjectKind: "connection", subjectRow: connection, path: null, scenario, direction, domain, verdict, mode, unit: o.unit, ...(unique ? { option } : {}),
+        const blocked=verdict==="impossible" && result.physical.some(s=>
+          s.connection===connection && s.direction===direction && s.verdict==="impossible");
+        const outcome = result.outcomes.push({ subjectKind: "connection", subjectRow: connection, path: null, scenario, direction, domain, verdict, mode, unit: o.unit, ...(unique && !blocked ? { option } : {}),
           ...(o.pool ? { pool: { domain: o.pool.domain, id: o.pool.id } } : {}),
           label: plugins.find(p => p.id === domain)!.explain(verdict, mode) }) - 1;
-        if (!unique) {
+        if (blocked) result.metrics.push({outcome,kind:"limit",unit:o.unit,value:0,low:0,high:0,basis:"calculated"});
+        else if (!unique) {
           const lows = offers.map(c => c.option.limit ?? c.option.bounds?.low ?? 0);
           const highs = offers.map(c => c.option.limit ?? c.option.bounds?.high ?? Infinity);
           const low = floor.verdict === ceiling.verdict ? floor.option.limit : Math.min(...lows);
@@ -112,7 +115,7 @@ export function judgeConnections(scene: Scene, plugins: readonly DomainPlugin[],
             if (readClaim(scene,claim,"evidence").value === null && !result.rangeInputs.some(x=>x.outcome===outcome && x.claim===claim))
               result.rangeInputs.push({outcome,claim});
         }
-        if (unique && o.unused !== undefined) result.metrics.push({ outcome, kind: "unused", unit: o.unit,
+        if (unique && !blocked && o.unused !== undefined) result.metrics.push({ outcome, kind: "unused", unit: o.unit,
           value: o.unused, low: o.unused, high: o.unused, basis: "calculated" });
         for (const c of offers) linkReason(scene, result, outcome, c.row);
       }
@@ -144,10 +147,7 @@ export function judgeWork(scene: Scene, result: Results, plugin: DomainPlugin, s
   const verdict = together.verdict;
   const outcome = result.outcomes.push({ subjectKind: "workload", subjectRow: flow.workload, path: flow.path, direction: null, scenario, domain: plugin.id,
     ...(soloPath !== null && soloPath !== flow.path ? { soloPath } : {}), verdict, mode, label: plugin.explain(verdict, mode) }) - 1;
-  // 모드가 사라져 전달량이 0이면 목표에 명시된 전달 단위로 그 0을 표시할 수 있다.
-  const goalUnits = !demand ? new Set(scene.goals?.flatMap(g => g.scenario === scenario && g.kind === "metric" &&
-    g.metric === "delivery" && g.workloads.includes(flow.workload) ? [g.unit] : [])) : undefined;
-  const unit = demand?.unit ?? (goalUnits?.size === 1 ? [...goalUnits][0]! : "");
+  const unit = demand?.unit ?? "";
   const soloUnit = soloPath === null ? unit : result.demands[result.paths[soloPath]!.demand]!.unit;
   function metric(kind: Results["metrics"][number]["kind"], value: number | null, metricUnit = unit) {
     result.metrics.push({ outcome, kind, value, unit: metricUnit, basis: "calculated", low: value, high: value });
@@ -168,7 +168,7 @@ export function judgeWork(scene: Scene, result: Results, plugin: DomainPlugin, s
         for (const claim of claims) if (readClaim(scene,claim,"evidence")?.value === null) {
           let input=result.rangeInputs.find(x=>x.outcome===outcome && x.claim===claim);
           if (!input) result.rangeInputs.push(input={outcome,claim});
-          if (scene.goals?.length) (input.deliveryRuns ??= []).push(run);
+          (input.deliveryRuns ??= []).push(run);
         }
       }
       Object.assign(m, { low: range.low, high: range.high, range: "conservative" });

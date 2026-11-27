@@ -1,4 +1,5 @@
 // USB 포트의 지원 모드, 케이블 등급과 전송 요청을 파일 경계에서 검사한다.
+import { modeSets } from "../../engine/contract.ts";
 import { z } from "zod";
 import { USB_2_HIGH_SPEED_MODE, USB_3_2_PROTOCOL_ESTIMATES, USB4_LINK_MODES, USB_C_CABLE_DATA_RATINGS_GBPS } from "./constants.ts";
 
@@ -13,7 +14,7 @@ const fact = <T extends z.ZodType>(value: T, unit = "") => z.strictObject({ valu
 const modeList = (names: readonly string[]) => z.string().refine(value => {
   const modes = parseModes(value);
   return modes.length === new Set(modes).size && modes.every(mode => names.includes(mode));
-}, "지원 모드를 중복 없이 쉼표로 구분하세요");
+}, "지원 모드를 중복 없이 쉼표로 구분하세요").meta({enum:modeSets(names)});
 
 export function parseModes(value: string): string[] {
   return value.trim() ? value.split(",").map(mode => mode.trim()) : [];

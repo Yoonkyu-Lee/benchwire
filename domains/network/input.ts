@@ -1,4 +1,5 @@
 // 이더넷 인터페이스와 채널, 송·수전 포트, 네트워크 작업의 저장 필드를 검증한다.
+import { modeSets } from "../../engine/contract.ts";
 import { z } from "zod";
 import { COPPER_CATEGORIES, ETHERNET_BASE_T_RATES, ETHERNET_POE_TYPE_LIMITS } from "./constants.ts";
 
@@ -20,7 +21,7 @@ export function parseBaseTModes(value: string) {
 const modes = z.string().refine(value => {
   const parts = parseBaseTModes(value);
   return new Set(parts).size === parts.length && parts.every(part => baseTModes.some(mode => mode === part));
-}, "지원하는 BASE-T 모드를 쉼표로 구분해 모두 적으세요");
+}, "지원하는 BASE-T 모드를 쉼표로 구분해 모두 적으세요").meta({enum:modeSets(baseTModes)});
 
 const fact = <T extends z.ZodType>(value: T, unit = "") => z.strictObject({ value: value.nullable(), unit: z.literal(unit) });
 export const observations = z.strictObject({

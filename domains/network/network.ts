@@ -1,7 +1,7 @@
 // 이더넷과 PoE의 협상·수요·공유 자원 소비를 네트워크 영역으로 등록한다.
 import { readClaim, effectiveClaim, type Demand, type DomainPlugin, type Verdict } from "../../engine/contract.ts";
 import { MAC_PAYLOAD_FRACTION, PCIE_CARRIER, PCIE_NIC } from "./constants.ts";
-import { negotiateEthernet } from "./ethernet.ts";
+import { lengthRepresentatives, negotiateEthernet } from "./ethernet.ts";
 import { readNetworkClaim } from "./evidence.ts";
 import {
   attributes, CHANNEL, ETHERNET, MAC, MBPS, NETWORK, observations, params, paramsFor, PD, POE, PSE, request, WATTS, WIRE_LINE,
@@ -18,6 +18,7 @@ export const network: DomainPlugin = {
       return { category: "", length: "m", screening: "", poeType: "", poeLoss: WATTS };
     return undefined;
   },
+  representatives:lengthRepresentatives,
   profileValues(claim,scene) {
     if (claim.ownerKind!=="interface" || claim.field!=="budgetResource") return [];
     const item=scene.ports[scene.interfaces[claim.owner]!.port]!.item;
@@ -58,7 +59,7 @@ export const network: DomainPlugin = {
   },
   consume(scene, _workload, steps, demand, options) {
     if (demand.mode === POE) {
-      if (!demand.requested) return [];
+      if (demand.requested===0) return [];
       return steps.flatMap(step => step.kind === "connection" && step.option !== null && options[step.option]!.mode === POE
         ? reservePoe(scene, step.row, step.direction) : []);
     }

@@ -10,6 +10,10 @@ import { physicalSteps } from "./physical.ts";
 
 // 연결된 장비의 후보 곱이 커지면 일부 표본 대신 물리 상한을 쓴다.
 const MAX_WIRINGS = 64;
+// 편집 때마다 계산하는 기본 결과의 예산이다. 10기기와 50기기의 Edge 판정 지연으로 정한다.
+const MAX_BASE_WORLDS = 144;
+// 50기기 × 8세계의 측정 비용을 기본 편집 예산으로 두고 작은 장면은 그 안에서 더 확인한다.
+const BASE_DEVICE_WORLDS = 400;
 // 두 끝의 기본 핀(각 6종)과 대안 지원 여부(각 2종)의 144개 조합도 함께 검산한다.
 const MAX_PROFILE_WORLDS = 256;
 type SourceCandidate = NonNullable<Scene["claimSources"][number]["candidate"]>;
@@ -52,8 +56,11 @@ function ask(scene: Scene, plugins: readonly DomainPlugin[], result: Results, ro
 function conservative(result: Results, row: number, disputed: boolean) {
   const o = result.outcomes[row]!;
   if (o.subjectKind !== "workload") {
-    for (const m of result.metrics.filter(m => m.outcome === row))
-      Object.assign(m, {value:null,low:0,high:null,basis:"calculated",range:"conservative"});
+    const metrics=result.metrics.filter(m => m.outcome === row);
+    for (const m of metrics) Object.assign(m,{value:null,low:0,high:null,basis:"calculated",range:"conservative"});
+    if (o.unit && !metrics.some(m=>m.kind==="limit")) result.metrics.push({
+      outcome:row,kind:"limit",unit:o.unit,value:null,low:0,high:null,basis:"calculated",range:"conservative",
+    });
     return;
   }
   const demands = result.demands.filter(d => d.workload === o.subjectRow);
@@ -63,7 +70,6 @@ function conservative(result: Results, row: number, disputed: boolean) {
     m.value = null; m.basis = "calculated"; m.range = "conservative";
     delete m.lowWorld; delete m.highWorld;
     if (m.kind === "solo" || m.kind === "together") { m.low = 0; m.high = upper; }
-    else if (m.kind === "drop") { m.low = upper === null ? null : -upper; m.high = upper; }
     else { m.low = null; m.high = null; }
   }
 }
@@ -90,6 +96,110 @@ function completeUnknowns(scene: Scene, plugins: readonly DomainPlugin[], result
       }
     } else if (!result.possibleVerdicts.some(v => v.outcome === row)) result.possibleVerdicts.push({ outcome: row, verdict: o.verdict });
   });
+}
+
+// 훅이 선언한 열린 값의 경계는 유지한다. 퀘스트는 그 훅을 사용한 작업·연결과 같은 자원을 쓰는 경쟁 작업에만 잇는다.
+function markIncomplete(scene:Scene,plugins:readonly DomainPlugin[],result:Results,routes:RouteInputs[],open:Variable[],limited:Variable[],lockedScenario?:number) {
+  if (!open.length && !limited.length) return;
+  const uncertainChoices=new Set<Results["choices"][number]>();
+  const uncertainJobs=new Set<Results["outcomes"][number]>();
+  for (const [row,o] of result.outcomes.entries()) {
+    const claims=new Set(inputs(result,row));
+    const work=o.subjectKind==="workload";
+    const peers=work ? competingWorks(o.subjectRow,scene.members.filter(m=>m.scenario===o.scenario).map(m=>m.workload),routes) : new Set<number>();
+    const links=new Set<number>(work ? [] : [o.subjectRow]);
+    const resources=new Set<number>();
+    for (const w of peers) {
+      for (const id of routes[w]!.claims) claims.add(id);
+      for (const id of routes[w]!.resources) {
+        resources.add(id);
+        const link=result.linkResources[id-scene.resources.length];
+        if (link) links.add(link.connection);
+      }
+    }
+    for (const h of result.hookReads ?? []) {
+      const link=h.hook==="negotiate" || h.hook==="pools" ? result.linkResources[h.row] : undefined;
+      const applies=link ? links.has(link.connection) && (work || o.domain===link.domain && o.direction===link.direction)
+        : h.hook==="laneProfiles" ? links.has(h.row) : h.hook==="policy" ? resources.has(h.row)
+        : h.hook==="consume" ? peers.has(result.paths[h.row]?.workload ?? -1) : h.hook!=="standingLoads" && peers.has(h.row);
+      if (applies) for (const id of h.claims) claims.add(id);
+    }
+    // 한 연결의 설정을 채점한 작업들의 조회는 그 설정을 사용하는 연결·작업 모두의 선택 근거다.
+    const settings=result.choices.filter(c=>c.scenario===o.scenario && links.has(c.connection) &&
+      (c.scenario!==lockedScenario || limited.some(v=>c.inputs.includes(v.claim))));
+    for (const setting of settings) {
+      for (const id of setting.inputs) claims.add(id);
+      for (const m of scene.members.filter(m=>m.scenario===o.scenario)) {
+        const route=routes[m.workload]!;
+        const reaches=[...route.resources].some(id=>result.linkResources[id-scene.resources.length]?.connection===setting.connection);
+        if (!reaches) continue;
+        if (m.evidence!==undefined) claims.add(m.evidence);
+        for (const id of route.claims) claims.add(id);
+        for (const h of result.hookReads ?? []) if (h.hook==="demand" && h.row===m.workload) for (const id of h.claims) claims.add(id);
+      }
+    }
+    const capped=limited.filter(v=>claims.has(v.claim));
+    const pending=open.filter(v=>claims.has(v.claim));
+    if (!capped.length && !pending.length) continue;
+    const ids=[...pending,...capped].map(v=>v.claim);
+    o.conservative={cause:capped.length ? "limit" : "open",claims:ids};
+    for (const id of ids) ask(scene,plugins,result,row,id);
+    const settingMayChange=settings.length>0 && result.searches.some(s=>s.scenario===o.scenario && s.examined>1);
+    if (!capped.length && !settingMayChange) {
+      addReason(result,{outcome:row,stage:"judge",rule:"열린 주장을 읽은 범위와 가능한 판정",
+        targetKind:o.subjectKind,targetRow:o.subjectRow},ids);
+      if (work && peers.size>1 && o.verdict==="unknown") {
+        const alternatives=result.paths.filter(p=>p.workload===o.subjectRow && p.verdict!=="impossible");
+        if (alternatives.length>1) {
+          // 동시 배분에서 선택한 모드가 바뀔 수 있다. 단독에서 선택한 모드의 가능한 판정만으로 좁히지 않는다.
+          const possible=new Set(result.possibleVerdicts.filter(v=>v.outcome===row).map(v=>v.verdict));
+          for (const path of alternatives) {
+            const verdict=path.conditioned ? "conditional" : "ok";
+            if (!possible.has(verdict)) {
+              possible.add(verdict);
+              result.possibleVerdicts.push({outcome:row,verdict});
+            }
+          }
+        }
+      }
+      continue;
+    }
+    for (const choice of settings) uncertainChoices.add(choice);
+    if (work) uncertainJobs.add(o);
+    const disputed=capped.some(v=>readClaim(scene,v.claim).conflictGroup!==undefined);
+    const wiring=capped.length>0 && capped.every(v=>v.kind==="wiring");
+    const physicalBlock=!work && result.physical.some(s=>s.connection===o.subjectRow && s.direction===o.direction && s.verdict==="impossible" && !s.inputs.some(i=>ids.includes(i)));
+    const boundedPath=work && o.verdict==="unknown" && o.path!==null && !settingMayChange &&
+      capped.every(v=>v.kind==="schema") && result.paths.filter(p=>p.workload===o.subjectRow).length===1 &&
+      result.metrics.some(m=>m.outcome===row && m.kind==="solo" && m.range==="conservative" && m.high!==null);
+    if (!physicalBlock && !boundedPath) {
+      o.verdict="unknown"; delete o.option; delete o.soloPath; delete o.possiblePaths;
+      o.path=null; o.mode="";
+      o.label=plugins.find(p=>p.id===o.domain)?.explain("unknown","") ?? "배선 미확인";
+      result.possibleVerdicts=result.possibleVerdicts.filter(v=>v.outcome!==row);
+      result.assessments=result.assessments.filter(v=>v.outcome!==row);
+      if (!disputed) for (const verdict of ["ok","conditional","impossible"] as const) result.possibleVerdicts.push({outcome:row,verdict});
+      const variableDemand=result.hookReads?.some(h=>h.hook==="demand" && h.row===o.subjectRow && h.claims.some(c=>ids.includes(c)));
+      conservative(result,row,disputed || !!variableDemand);
+      if (work) {
+        for (const a of result.allocations) if (a.workload===o.subjectRow && a.scenario===o.scenario) a.value=null;
+        result.bindings=result.bindings.filter(b=>b.workload!==o.subjectRow || b.scenario!==o.scenario);
+      }
+      for (const m of result.measures.filter(m=>m.outcome===row)) m.low=m.high=null;
+    }
+    for (const m of result.metrics.filter(m=>m.outcome===row && m.low!==m.high)) m.range="conservative";
+    addReason(result,{outcome:row,stage:"judge",rule:!capped.length ? "미확인 주장에 따라 연결 설정이 달라짐" : wiring ? "배선 조합 상한" : "주장 후보 조합 상한",
+      targetKind:o.subjectKind,targetRow:o.subjectRow},ids);
+  }
+  result.choices=result.choices.filter(c=>!uncertainChoices.has(c));
+  result.reservations=result.reservations.filter(r=>![...uncertainJobs].some(o=>o.scenario===r.scenario && o.subjectRow===r.workload));
+  for (const reason of result.reasons) if (reason.profile && [...uncertainChoices].some(c=>
+    c.scenario===result.outcomes[reason.outcome]!.scenario && c.profile===reason.profile &&
+    reason.targetKind==="connection" && reason.targetRow===c.connection)) {
+    reason.rule="미확인 주장으로 연결 설정을 확정하지 못함";
+    delete reason.profile;
+  }
+
 }
 
 function range(metric: Metric, samples: (Metric | undefined)[], worlds: number[]) {
@@ -190,6 +300,8 @@ function merge(scene: Scene, plugins: readonly DomainPlugin[], r: Results, row: 
         inputs:[...new Set(options.flatMap(v => v.inputs))], specs:[...new Set(options.flatMap(v => v.specs))] }) - 1;
     }
   }
+  const pending=samples.flatMap(s=>s.o.conservative ? [s.o.conservative] : []);
+  if (pending.length) o.conservative={cause:"open",claims:[...new Set(pending.flatMap(p=>p.claims))]};
   const possible = new Set(samples.flatMap(s => s.possible));
   const first = samples[0]!;
   o.verdict = possible.size === 1 && samples.every(s => s.possible.length) ? [...possible][0]! : "unknown";
@@ -346,15 +458,12 @@ function mergeGoalWorld(result: Results, sample: Results, scenarios: ReadonlySet
 }
 
 export function resolveUnknowns(scene: Scene, plugins: readonly DomainPlugin[], result: Results,
-  evaluateWiring: (s: Scene, p: readonly DomainPlugin[], profileChanged: boolean, resolveWiring: boolean) => {result:Results;routes:RouteInputs[]},
-  routeInputs: readonly RouteInputs[], readConflicts = true) {
+  routes:RouteInputs[], evaluateWorld: (world: Scene) => {result:Results;routes:RouteInputs[]}, lockedScenario?:number) {
   completeUnknowns(scene, plugins, result);
   if (scene.goals?.length) Object.assign(result,judgeGoals(scene,result));
   const all: Variable[] = [];
-  const feedReads=new Set(result.hookReads?.filter(r=>r.hook==="standingLoads").flatMap(r=>r.claims));
-  const profileLinks = new Map<number, Set<number>>();
   const conflicts = new Map<number, Map<SourceCandidate["value"], SourceCandidate>>();
-  for (const { claim, candidate } of scene.claimSources) if (readConflicts && candidate) {
+  for (const { claim, candidate } of scene.claimSources) if (candidate) {
     const values = conflicts.get(claim) ?? new Map<SourceCandidate["value"], SourceCandidate>();
     const previous = values.get(candidate.value);
     if (!previous || confidenceOrder.indexOf(candidate.confidence) < confidenceOrder.indexOf(previous.confidence))
@@ -367,12 +476,12 @@ export function resolveUnknowns(scene: Scene, plugins: readonly DomainPlugin[], 
     if (c.value !== null || effectiveClaim(scene, c.ownerKind, c.owner, c.domain, c.field, c.condition) !== claim) return;
     const owners = c.domain ? plugins.filter(p => p.id === c.domain) : plugins;
     const declared=owners.flatMap(p => p.profileValues?.(c,topology) ?? []);
-    const hasGoals=Boolean(scene.goals?.length);
+
     const conflict=conflicts.get(claim);
     const connectors=c.connectorRow===null ? scene.connectors.map(row=>row.id) : undefined;
-    const useSchema=hasGoals || feedReads.has(claim) && !!c.discrete?.length;
-    if (!conflict && !connectors && !declared.length && !(useSchema && (c.discrete || c.openDomain))) return;
-    const values=new Set(conflict?.keys() ?? connectors ?? (useSchema ? c.discrete ?? declared : declared));
+    if (!conflict && !connectors && !declared.length && !c.discrete && !c.openDomain) return;
+    const partition=c.openDomain && !conflict ? owners.flatMap(p=>p.representatives?.(c,scene) ?? []) : [];
+    const values=new Set(conflict?.keys() ?? connectors ?? (declared.length ? declared : c.discrete ?? partition));
     const samples: Variable["samples"] = [];
     for (const value of values) {
       if (c.connectorRow !== undefined) {
@@ -386,19 +495,10 @@ export function resolveUnknowns(scene: Scene, plugins: readonly DomainPlugin[], 
       } else samples.push({value});
     }
     all.push({claim,kind:conflict ? "profile" : c.numericGrid ? "grid" : declared.length ? "profile" : "schema",samples});
-    const links = new Set((result.hookReads ?? []).flatMap(r=>!r.claims.includes(claim) ? [] : r.hook==="laneProfiles" ? [r.row]
-      : r.hook==="negotiate" || r.hook==="pools" ? [result.linkResources[r.row]!.connection] : []));
-    const port = c.ownerKind === "interface" ? scene.interfaces[c.owner]!.port : c.ownerKind === "port" ? c.owner : undefined;
-    // 끝점 설정은 다른 영역의 서비스도 바꾼다. 중간 부품에서는 실제로 읽은 주장만 조합한다.
-    scene.connections.forEach(({from,to},connection) => {
-      if (port === from || port === to || c.ownerKind === "item" &&
-          (scene.ports[from]!.item === c.owner || scene.ports[to]!.item === c.owner)) links.add(connection);
-    });
-    profileLinks.set(claim,links);
   });
   for (const [port,nodes] of attachmentCandidates(scene)) {
     const claim = portFacts(scene,port).attachment;
-    if (!profileLinks.has(claim)) all.push({claim,kind:"wiring",samples:nodes.map(node => ({attachmentNode:node,value:scene.nodes[node]!.id}))});
+    if (!all.some(v=>v.claim===claim)) all.push({claim,kind:"wiring",samples:nodes.map(node => ({attachmentNode:node,value:scene.nodes[node]!.id}))});
   }
   if (!all.length) return;
   // 같은 판본의 출처 후보는 서로 다른 실물에서도 한 축이다. 각 실물의 참조 번호는 따로 고정한다.
@@ -448,71 +548,96 @@ export function resolveUnknowns(scene: Scene, plugins: readonly DomainPlugin[], 
       result.needCases={size:seen.size,members};
     }
   }
-  let goalVariables:Variable[]=[];
-  if (scene.goals?.length) {
-    const read=worldReads(scene,result,all);
-    for (;;) {
-      goalVariables=all.filter(v=>read.has(v.claim));
-      const dim=dimensions(goalVariables);
-      const unread=all.filter(v=>!read.has(v.claim));
-      if (!goalVariables.length || !unread.length || dim.count>worldLimit(goalVariables)) break;
-      const before=read.size;
-      for (let i=0;i<dim.count && read.size===before;i++) {
-        const answer=evaluateWiring(fixed(dim,i),plugins,true,false);
-        const inputs=worldReads(scene,answer.result,all);
-        for (const v of unread) if (inputs.has(v.claim)) read.add(v.claim);
-      }
-      if (before===read.size) break;
-    }
+  const open=(v:Variable)=>v.kind==="schema" && !v.samples.length;
+  const read=worldReads(scene,result,all);
+  const cache=new Map<number,ReturnType<typeof evaluateWorld> & {scene:Scene}>();
+  function sample(dim:ReturnType<typeof dimensions>,i:number) {
+    const prior=cache.get(i);
+    if (prior) return prior;
+    const concrete=fixed(dim,i);
+    const answer={scene:concrete,...evaluateWorld(concrete)};
+    cache.set(i,answer);
+    return answer;
   }
-  const groups: { variables: Variable[]; subjects: number[][] }[] = [];
-  const subjects = Map.groupBy(result.outcomes.keys(), row => {
-    const o = result.outcomes[row]!;
-    return JSON.stringify([o.subjectKind, o.subjectRow, o.scenario, o.direction, o.domain]);
-  });
-  // 충돌은 기본 경로에 없던 경로와 예산도 만들 수 있다. 시나리오의 작업은 모두 같은 세계에서 비교한다.
-  if (scene.goals?.length) {
-    if (goalVariables.length) groups.push({variables:goalVariables,subjects:[...subjects.values()]});
-  } else for (const rows of subjects.values()) {
-    const o = result.outcomes[rows[0]!]!;
-    const members = scene.members.filter(m => m.scenario === o.scenario);
-    const eligible = all.filter(v => {
-      const c = readClaim(scene,v.claim);
-      return c.ownerKind !== "workload" || members.some(m => m.workload === c.owner && (c.domain || m.evidence === v.claim));
-    });
-    let variables = eligible.filter(v => conflicts.has(v.claim));
-    if (!variables.length) {
-      // 일반 미확인 배선은 해당 시나리오가 지나가는 포트의 후보만 필요하다.
-      const claims = new Set(rows.flatMap(row => inputs(result,row)));
-      const links = new Set<number>();
-      if (o.subjectKind === "connection") links.add(o.subjectRow);
-      for (const m of members) {
-        for (const id of routeInputs[m.workload]!.claims) claims.add(id);
-        for (const resource of routeInputs[m.workload]!.resources) {
-          const link = result.linkResources[resource - scene.resources.length];
-          if (link) links.add(link.connection);
+  let variables:Variable[]=[];
+  const hasGoals=!!scene.goals?.length;
+  let capped:Variable[]|undefined, baseOpen:Variable[]|undefined;
+  const devices=scene.items.filter(i=>scene.models[i.model]!.kind!=="cable").length;
+  const baseLimit=Math.max(1,Math.min(MAX_BASE_WORLDS,Math.floor(BASE_DEVICE_WORLDS/Math.max(1,devices))));
+  let checkedGoals:Results|undefined;
+  const goalScenarios=new Set(result.goals.map(g=>g.scenario));
+  for (;;) {
+    variables=all.filter(v=>read.has(v.claim) && !open(v));
+    const dim=dimensions(variables);
+    if (!capped && (!dim.count || dim.count>baseLimit)) {
+      capped=variables;
+      baseOpen=all.filter(v=>open(v) && (read.has(v.claim) || result.readClaims?.[v.claim]==="range"));
+    }
+    const unread=all.filter(v=>!read.has(v.claim));
+    if (!variables.length || !dim.count || capped && dim.count>worldLimit(variables)) break;
+    const large=!!capped;
+    if (large && (!hasGoals || all.some(v=>open(v) && read.has(v.claim)))) break;
+    if (!large && !unread.length) break;
+    // 기본 상한 밖에서는 큰 장면 표를 보관하지 않고 같은 평가에서 목표와 새로 읽힌 주장만 모은다.
+    const collector=large ? {...result,...judgeGoals(scene,result),goalWitnesses:[],goalSuccesses:[]} : undefined;
+    const before=read.size;
+    for (let i=0;i<dim.count && read.size===before;i++) {
+      const answer=sample(dim,i);
+      for (const id of worldReads(scene,answer.result,unread)) read.add(id);
+      if (collector) {
+        cache.delete(i);
+        if (read.size!==before) break;
+        completeUnknowns(answer.scene,plugins,answer.result);
+        Object.assign(answer.result,judgeGoals(answer.scene,answer.result));
+        mergeGoalWorld(collector,answer.result,goalScenarios,i===0,i,dim.assignments,answer.scene);
+      }
+    }
+    if (before===read.size) {
+      if (collector) checkedGoals=collector;
+      break;
+    }
+    if (unread.some(v=>read.has(v.claim) && !open(v))) cache.clear();
+  }
+  const dim=dimensions(variables), {count,assignments}=dim;
+  const openVariables=all.filter(v=>open(v) && read.has(v.claim));
+  const goalsCapped=!count || count>worldLimit(variables);
+  const goalsIncomplete=goalsCapped || !!openVariables.length;
+  function finishGoals() {
+    if (goalsIncomplete) {
+      // 후보를 다 확인하지 못한 작업이 속한 시나리오만 추가 구매 요구가 열려 있다.
+      const unresolved=result.outcomes.flatMap(o=>o.conservative && o.scenario!==null ? [o.scenario] : []);
+      if (unresolved.length) result.incompleteNeeds=[...new Set([...(result.incompleteNeeds ?? []),...unresolved])];
+      const missing=all.filter(v=>read.has(v.claim));
+      for (const [i,g] of result.goals.entries()) {
+        g.verdict="unknown"; g.truncated=true;
+        if (goalsCapped) g.limitClaims=variables.filter(v=>v.samples.length!==1).map(v=>v.claim);
+        if (openVariables.length) g.openClaims=openVariables.map(v=>v.claim);
+        for (const e of result.goalEvidence.filter(e=>e.goal===i)) {
+          e.verdict="unknown"; e.low=e.high=null; e.connections=[]; delete e.portVisits;
+          e.claims=missing.map(v=>v.claim);
+          if (e.outcome<0) continue;
+          for(const v of missing) ask(scene,plugins,result,e.outcome,v.claim);
+          addReason(result,{outcome:e.outcome,stage:"judge",rule:goalsCapped ? "주장 조합 상한으로 모든 후보를 확인하지 못함" : "주장의 가능한 값을 모두 열거할 수 없음",
+            targetKind:"workload",targetRow:e.workload},e.claims);
         }
-        const row = result.outcomes.findIndex(v => v.subjectKind === "workload" && v.scenario === o.scenario && v.subjectRow === m.workload);
-        if (row >= 0) for (const id of inputs(result,row)) claims.add(id);
       }
-      for (const link of links) {
-        for (const part of scene.parts.filter(p => p.connection === link))
-          for (const port of [part.entry,part.exit]) claims.add(portFacts(scene,port).attachment);
-      }
-      for (const read of result.hookReads ?? []) {
-        const relevant=read.hook==="negotiate" || read.hook==="pools" ? links.has(result.linkResources[read.row]!.connection)
-          : read.hook==="laneProfiles" ? links.has(read.row)
-          : read.hook==="policy" ? members.some(m=>routeInputs[m.workload]!.resources.has(read.row))
-          : read.hook==="standingLoads" || members.some(m=>m.workload===(read.hook==="consume" ? result.paths[read.row]?.workload : read.row));
-        if (relevant) for (const id of read.claims) claims.add(id);
-      }
-      for (const [claim,connections] of profileLinks) if ([...links].some(link => connections.has(link))) claims.add(claim);
-      variables = eligible.filter(v=>claims.has(v.claim) && (!readClaim(scene,v.claim).domain || readClaim(scene,v.claim).ownerKind==="resource" || result.readClaims?.[v.claim]));
     }
-    if (!variables.length) continue;
-    const group = groups.find(g => g.variables.length === variables.length && g.variables.every((v,i) => v === variables[i]));
-    if (group) group.subjects.push(rows); else groups.push({ variables, subjects: [rows] });
+    for (const e of result.goalEvidence) e.reasons=goalReasons(scene.goals![e.goal]!,result,e.outcome);
   }
+  if (capped || !variables.length) {
+    markIncomplete(scene,plugins,result,routes,baseOpen ?? all.filter(v=>open(v) && (read.has(v.claim) || result.readClaims?.[v.claim]==="range")),capped ?? [],lockedScenario);
+    if (checkedGoals) {
+      result.goals=checkedGoals.goals; result.goalEvidence=checkedGoals.goalEvidence;
+      result.goalWitnesses=checkedGoals.goalWitnesses;
+      if (checkedGoals.goalSuccesses?.length) result.goalSuccesses=checkedGoals.goalSuccesses;
+    }
+    finishGoals();
+    return;
+  }
+  const subjects=[...Map.groupBy(result.outcomes.keys(),row=>{
+    const o=result.outcomes[row]!;
+    return JSON.stringify([o.subjectKind,o.subjectRow,o.scenario,o.direction,o.domain]);
+  }).values()];
   // 각 배선에서 이미 합산한 사용량끼리 비교한다. 서로 배타적인 작업별 상한을 더할 수 없다.
   const provisional = result.resourceUsage.map(u => ({ ...u }));
   const usageKey = (r: Results, u: Results["resourceUsage"][number]) => JSON.stringify([u.scenario,u.unit,
@@ -520,212 +645,116 @@ export function resolveUnknowns(scene: Scene, plugins: readonly DomainPlugin[], 
   const keys = provisional.map(u => usageKey(result,u));
   const knownUsage = new Map(keys.map((key,i) => [key,i]));
   const knownLinks = new Map(result.linkResources.map((_,i) => [linkKey(result,i),i]));
-  const updated = new Set<number>();
-  let world = 0;
-  for (const { variables, subjects } of groups) {
-    const affected = subjects.flat();
-    const dim=dimensions(variables), {count,assignments}=dim;
-    const strides=variables.map(v=>dim.axes.get(axis(v))!);
-    const scenarios = new Set(affected.map(i => result.outcomes[i]!.scenario));
-    // 같은 시나리오의 모든 작업은 같은 후보 축을 쓴다. 연결만 검산하는 묶음은 목표를 덮지 않는다.
-    const goalScenarios = new Set<number>();
-    if (result.goals.length) for (const i of affected) {
-      const o = result.outcomes[i]!;
-      if (o.subjectKind === "workload" && o.scenario !== null) goalScenarios.add(o.scenario);
+  const affected = subjects.flat();
+  const strides=variables.map(v=>dim.axes.get(axis(v))!);
+  const scenarios = new Set(affected.map(i => result.outcomes[i]!.scenario));
+  // 같은 시나리오의 모든 작업은 같은 후보 축을 쓴다. 연결만 검산하는 묶음은 목표를 덮지 않는다.
+  const scope = provisional.flatMap((u,i) => scenarios.has(u.scenario) ? [i] : []);
+  const profileChanged = variables.some(v => v.kind!=="wiring");
+  const disputed = variables.some(v => conflicts.has(v.claim));
+  const observations = subjects.map((): Observation[][] => []), worlds: number[] = [];
+  const totals = new Map<number, Pick<Results["resourceUsage"][number], "used" | "capacity" | "basis">>();
+  const added = new Set<number>();
+  let choices: Results["choices"] = [], reservations: Results["reservations"] = [];
+  for (let world = 0; world < count; world++) {
+    const {scene:concrete,result:answer,routes:worldRoutes}=sample(dim,world);
+    cache.delete(world);
+    for (const v of assignments) {
+      const value=readClaim(concrete,v.claim).value!;
+      if (v.kind !== "wiring") result.profileWorlds.push({world,claim:v.claim,value});
+      else result.wirings.push({world,claim:v.claim,node:readClaim(concrete,v.claim).attachmentNode!});
     }
-    const scope = provisional.flatMap((u,i) => scenarios.has(u.scenario) ? [i] : []);
-    const profileChanged = variables.some(v => profileLinks.has(v.claim));
-    const disputed = variables.some(v => conflicts.has(v.claim));
-    if (!count || count > worldLimit(variables)) {
-      const missing=variables.filter(v=>!v.samples.length);
-      const openClaims=missing.filter(v=>v.kind!=="grid").map(v=>v.claim);
-      const finite=variables.filter(v=>v.samples.length);
-      const combinationLimit=missing.some(v=>v.kind==="grid") ||
-        (count || dimensions(finite).count)>worldLimit(variables);
-      const incomplete=new Set(result.incompleteNeeds);
-      for (const s of scenarios) {
-        if (s===null) scene.scenarios.forEach((_,i)=>incomplete.add(i));
-        else incomplete.add(s);
-      }
-      result.incompleteNeeds=[...incomplete];
-      for (const [i,g] of result.goals.entries()) if (goalScenarios.has(g.scenario)) {
-        g.verdict = "unknown"; g.truncated = true;
-        if (combinationLimit) g.limitClaims=variables.filter(v=>v.samples.length>1 || v.kind==="grid" && !v.samples.length).map(v=>v.claim);
-        const unresolved = new Set([...(g.openClaims ?? []),...openClaims]);
-        for (const v of finite) unresolved.delete(v.claim);
-        if (unresolved.size) g.openClaims=[...unresolved]; else delete g.openClaims;
-        for (const e of result.goalEvidence.filter(e => e.goal === i)) {
-          e.verdict = "unknown"; e.low = e.high = null; e.connections = [];
-          delete e.portVisits;
-          e.claims = variables.map(v => v.claim);
-        }
-      }
-      if (profileChanged) {
-        result.choices = result.choices.filter(c => !scenarios.has(c.scenario));
-        result.reservations = result.reservations.filter(c => !scenarios.has(c.scenario));
-        for (const reason of result.reasons) if (reason.profile && scenarios.has(result.outcomes[reason.outcome]!.scenario)) {
-          reason.rule = "후보 조합 상한으로 연결 설정 검산 안 함";
-          delete reason.profile;
-        }
-      }
-      for (const i of scope) {
-        const u = result.resourceUsage[i]!;
-        const dependent = affected.some(row => {
-          const o = result.outcomes[row]!;
-          if (o.subjectKind === "workload") return o.scenario === u.scenario;
-          return u.resourceKind === "link" && result.linkResources[u.resource]!.connection === o.subjectRow;
-        });
-        if (!dependent) continue;
-        u.used = null; u.basis = "calculated";
-        if (disputed || u.resourceKind === "link" && affected.some(row => {
-          const o = result.outcomes[row]!, link = result.linkResources[u.resource]!;
-          return o.subjectKind === "connection" && o.subjectRow === link.connection && o.domain === link.domain;
-        })) u.capacity = null;
-        updated.add(i);
-      }
-      for (const row of affected) {
-        const o = result.outcomes[row]!;
-        const blocked = o.subjectKind === "connection" && result.physical.some(s =>
-          s.connection === o.subjectRow && s.direction === o.direction && s.verdict === "impossible");
-        o.verdict = blocked ? "impossible" : "unknown";
-        delete o.option;
-        delete o.soloPath;
-        delete o.possiblePaths;
-        o.path = null;
-        o.mode = "";
-        o.label = plugins.find(p => p.id === o.domain)?.explain(o.verdict, o.mode) ?? (blocked ? "연결 불가" : "배선 미확인");
-        result.possibleVerdicts = result.possibleVerdicts.filter(v => v.outcome !== row);
-        if (blocked) {
-          result.possibleVerdicts.push({ outcome:row, verdict:"impossible" });
-          result.metrics = result.metrics.filter(m => m.outcome !== row);
-          if (o.unit) result.metrics.push({ outcome:row, kind:"limit", unit:o.unit, value:0, low:0, high:0, basis:"calculated" });
-          continue;
-        }
-        conservative(result, row, disputed || variables===goalVariables);
-        for (const m of result.measures.filter(m => m.outcome === row)) m.low = m.high = null;
-        const runs = new Set(result.assessments.filter(a => a.outcome === row).map(a => a.run));
-        result.assessments = result.assessments.filter(a => a.outcome !== row);
-        if (!disputed) for (const run of runs) for (const verdict of ["ok","conditional","impossible"] as const)
-          result.assessments.push({ outcome: row, run, verdict });
-        if (o.subjectKind === "workload") {
-          for (const a of result.allocations) if (a.workload === o.subjectRow && a.scenario === o.scenario) a.value = null;
-          result.bindings = result.bindings.filter(b => b.workload !== o.subjectRow || b.scenario !== o.scenario);
-        }
-        if (!disputed) for (const verdict of ["ok", "conditional", "impossible"] as const) result.possibleVerdicts.push({ outcome: row, verdict });
-        const claims = variables.map(v => v.claim);
-        addReason(result, { outcome: row, stage: "judge", rule: variables===goalVariables
-          ? (combinationLimit ? "주장 조합 상한으로 모든 후보를 확인하지 못함" : "주장의 가능한 값을 모두 열거할 수 없음")
-          : disputed ? "출처 후보 조합 상한" : count ? "배선 조합 상한" : "부착점 후보 없음", targetKind: o.subjectKind, targetRow: o.subjectRow }, claims);
-        for (const id of claims) ask(scene, plugins, result, row, id);
-      }
-      continue;
+    const incompleteScenarios=answer.searches.filter(s=>s.truncated).map(s=>s.scenario).concat(answer.incompleteNeeds ?? []);
+    if (incompleteScenarios.length) result.incompleteNeeds=[...new Set([...(result.incompleteNeeds ?? []),...incompleteScenarios])];
+    completeUnknowns(concrete, plugins, answer);
+    if (goalScenarios.size && !goalsIncomplete) Object.assign(answer,judgeGoals(concrete,answer));
+    markIncomplete(concrete,plugins,answer,worldRoutes,all.filter(v=>open(v) && answer.readClaims?.[v.claim]),[],lockedScenario);
+    if (!goalsIncomplete) mergeGoalWorld(result,answer,goalScenarios,world === 0,world,assignments,concrete);
+
+    const sameChoice = (c: Results["choices"][number]) => answer.choices.some(other =>
+      other.scenario === c.scenario && other.connection === c.connection && other.profile === c.profile);
+    if (world === 0) {
+      choices = answer.choices.filter(c => scenarios.has(c.scenario));
+      reservations = answer.reservations.filter(c => scenarios.has(c.scenario));
+    } else {
+      choices = choices.filter(sameChoice);
+      reservations = reservations.filter(v => answer.reservations.some(a => a.scenario === v.scenario && a.workload === v.workload));
     }
-    const observations = subjects.map((): Observation[][] => []), worlds: number[] = [];
-    const totals = new Map<number, Pick<Results["resourceUsage"][number], "used" | "capacity" | "basis">>();
-    const added = new Set<number>();
-    let choices: Results["choices"] = [], reservations: Results["reservations"] = [];
-    for (let i = 0; i < count; i++, world++) {
-      const concrete=fixed(dim,i);
-      for (const v of assignments) {
-        const value=readClaim(concrete,v.claim).value!;
-        if (v.kind !== "wiring") result.profileWorlds.push({world,claim:v.claim,value});
-        else result.wirings.push({world,claim:v.claim,node:readClaim(concrete,v.claim).attachmentNode!});
+    if (profileChanged && !disputed) result.choices = result.choices.filter(c => !scenarios.has(c.scenario) || sameChoice(c));
+    // 새 예산과 그 예산을 참조하는 서비스는 세계의 행 번호를 결과 표의 행 번호로 옮긴다.
+    const links: number[] = [];
+    for (const [n,link] of answer.linkResources.entries()) {
+      const key = linkKey(answer,n);
+      let target = knownLinks.get(key);
+      if (target === undefined) {
+        const mapped = { ...link };
+        if (link.pool) { mapped.pool = { ...link.pool, limit:null }; delete mapped.pool.bounds; }
+        if (link.service?.poolResource !== undefined) mapped.service = { ...link.service, poolResource:links[link.service.poolResource]! };
+        target = result.linkResources.push(mapped) - 1;
+        knownLinks.set(key,target);
       }
-      const nested=disputed && variables!==goalVariables;
-      const {result:answer}=evaluateWiring(concrete,plugins,variables===goalVariables || profileChanged,nested);
-      const capped=answer.searches.filter(s=>s.truncated).map(s=>s.scenario).concat(answer.incompleteNeeds ?? []);
-      if (capped.length) result.incompleteNeeds=[...new Set([...(result.incompleteNeeds ?? []),...capped])];
-      if (!nested) {
-        completeUnknowns(concrete, plugins, answer);
-        if (goalScenarios.size) Object.assign(answer,judgeGoals(concrete,answer));
-      }
-      mergeGoalWorld(result,answer,goalScenarios,i === 0,world,assignments,concrete);
-      const sameChoice = (c: Results["choices"][number]) => answer.choices.some(other =>
-        other.scenario === c.scenario && other.connection === c.connection && other.profile === c.profile);
-      if (i === 0) {
-        choices = answer.choices.filter(c => scenarios.has(c.scenario));
-        reservations = answer.reservations.filter(c => scenarios.has(c.scenario));
-      } else {
-        choices = choices.filter(sameChoice);
-        reservations = reservations.filter(v => answer.reservations.some(a => a.scenario === v.scenario && a.workload === v.workload));
-      }
-      if (profileChanged && !disputed) result.choices = result.choices.filter(c => !scenarios.has(c.scenario) || sameChoice(c));
-      // 새 예산과 그 예산을 참조하는 서비스는 세계의 행 번호를 결과 표의 행 번호로 옮긴다.
-      const links: number[] = [];
-      for (const [n,link] of answer.linkResources.entries()) {
-        const key = linkKey(answer,n);
-        let target = knownLinks.get(key);
-        if (target === undefined) {
-          const mapped = { ...link };
-          if (link.pool) { mapped.pool = { ...link.pool, limit:null }; delete mapped.pool.bounds; }
-          if (link.service?.poolResource !== undefined) mapped.service = { ...link.service, poolResource:links[link.service.poolResource]! };
-          target = result.linkResources.push(mapped) - 1;
-          knownLinks.set(key,target);
-        }
-        links.push(target);
-      }
-      const usage = new Map(answer.resourceUsage.filter(u => scenarios.has(u.scenario)).map(u => [usageKey(answer,u),u]));
-      for (const [key,u] of usage) if (!knownUsage.has(key)) {
-        const row = result.resourceUsage.length;
-        const copy = { ...u, resource:u.resourceKind === "link" ? links[u.resource]! : u.resource,
-          used:null, capacity:null, reasonRows:[] };
-        result.resourceUsage.push(copy);
-        provisional.push({ ...copy });
-        keys.push(key);
-        knownUsage.set(key,row);
-        scope.push(row);
-        added.add(row);
-        if (i > 0) totals.set(row,{used:0,capacity:0,basis:"calculated"});
-      }
-      for (const row of scope) {
-        const concreteUsage = usage.get(keys[row]!);
-        const used = concreteUsage ? concreteUsage.used : 0, capacity = concreteUsage ? concreteUsage.capacity : 0;
-        const prior = totals.get(row);
-        if (!prior) totals.set(row,{used, capacity, basis:concreteUsage?.basis ?? "calculated"});
-        else {
-          if (prior.used !== used) prior.used = null;
-          if (prior.capacity !== capacity) prior.capacity = null;
-          if (concreteUsage?.basis === "assumed") prior.basis = "assumed";
-        }
-      }
-      subjects.forEach((rows,j) => {
-        const base = result.outcomes[rows[0]!]!;
-        const matches = answer.outcomes.flatMap((o,n) => o.subjectKind === base.subjectKind && o.subjectRow === base.subjectRow &&
-          (o.scenario === base.scenario || o.subjectKind === "connection" && o.scenario === null) &&
-          o.direction === base.direction && o.domain === base.domain ? [snapshot(answer,n,result,links)] : []);
-        observations[j]!.push(matches);
-      });
-      worlds.push(world);
+      links.push(target);
     }
-    if (disputed) {
-      result.choices = result.choices.filter(c => !scenarios.has(c.scenario)).concat(choices);
-      result.reservations = result.reservations.filter(c => !scenarios.has(c.scenario)).concat(reservations);
+    const usage = new Map(answer.resourceUsage.filter(u => scenarios.has(u.scenario)).map(u => [usageKey(answer,u),u]));
+    for (const [key,u] of usage) if (!knownUsage.has(key)) {
+      const row = result.resourceUsage.length;
+      const copy = { ...u, resource:u.resourceKind === "link" ? links[u.resource]! : u.resource,
+        used:null, capacity:null, reasonRows:[] };
+      result.resourceUsage.push(copy);
+      provisional.push({ ...copy });
+      keys.push(key);
+      knownUsage.set(key,row);
+      scope.push(row);
+      added.add(row);
+      if (world > 0) totals.set(row,{used:0,capacity:0,basis:"calculated"});
+    }
+    for (const row of scope) {
+      const concreteUsage = usage.get(keys[row]!);
+      const used = concreteUsage ? concreteUsage.used : 0, capacity = concreteUsage ? concreteUsage.capacity : 0;
+      const prior = totals.get(row);
+      if (!prior) totals.set(row,{used, capacity, basis:concreteUsage?.basis ?? "calculated"});
+      else {
+        if (prior.used !== used) prior.used = null;
+        if (prior.capacity !== capacity) prior.capacity = null;
+        if (concreteUsage?.basis === "assumed") prior.basis = "assumed";
+      }
     }
     subjects.forEach((rows,j) => {
-      const samples = observations[j]!, base = result.outcomes[rows[0]!]!;
-      // 기본 장면에서 보이지 않던 서비스도 세계별 예산의 합집합에 남긴다.
-      if (base.subjectKind === "connection") for (const world of samples) for (const {o} of world) {
-        if (!o.unit || rows.some(n => sameBudget(result.outcomes[n]!,o))) continue;
-        const outcome: Outcome = { ...o, scenario:base.scenario, verdict:"unknown" };
-        delete outcome.option;
-        rows.push(result.outcomes.push(outcome) - 1);
-      }
-      for (const row of rows) merge(scene, plugins, result, row, variables,
-        samples.map(world => budgetObservation(result,row,world)), worlds, strides);
+      const base = result.outcomes[rows[0]!]!;
+      const matches = answer.outcomes.flatMap((o,n) => o.subjectKind === base.subjectKind && o.subjectRow === base.subjectRow &&
+        (o.scenario === base.scenario || o.subjectKind === "connection" && o.scenario === null) &&
+        o.direction === base.direction && o.domain === base.domain ? [snapshot(answer,n,result,links)] : []);
+      observations[j]!.push(matches);
     });
-    for (const [i, total] of totals) {
-      const base = provisional[i]!, u = result.resourceUsage[i]!;
-      if (!added.has(i) && total.used === base.used && total.capacity === base.capacity && total.basis === base.basis) continue;
-      u.used = updated.has(i) && u.used !== total.used ? null : total.used;
-      u.capacity = updated.has(i) && u.capacity !== total.capacity ? null : total.capacity;
-      u.basis = u.used !== null && (u.basis === "assumed" || total.basis === "assumed") ? "assumed" : "calculated";
-      updated.add(i);
-      const outcome = affected.find(row => result.outcomes[row]!.scenario === u.scenario) ?? affected[0]!;
-      const reason = addReason(result,{outcome, stage:"allocate", rule:profileChanged ? "연결 설정 후보별 자원 점유량" : "배선 후보별 자원 점유량",
-        targetKind:u.resourceKind === "scene" ? "resource" : "linkResource", targetRow:u.resource},
-        variables.map(v => v.claim),u.reasonRows);
-      u.reasonRows = [reason];
-    }
+    worlds.push(world);
   }
-  for (const e of result.goalEvidence) e.reasons = goalReasons(scene.goals![e.goal]!,result,e.outcome);
+  if (disputed) {
+    result.choices = result.choices.filter(c => !scenarios.has(c.scenario)).concat(choices);
+    result.reservations = result.reservations.filter(c => !scenarios.has(c.scenario)).concat(reservations);
+  }
+  subjects.forEach((rows,j) => {
+    const samples = observations[j]!, base = result.outcomes[rows[0]!]!;
+    // 기본 장면에서 보이지 않던 서비스도 세계별 예산의 합집합에 남긴다.
+    if (base.subjectKind === "connection") for (const world of samples) for (const {o} of world) {
+      if (!o.unit || rows.some(n => sameBudget(result.outcomes[n]!,o))) continue;
+      const outcome: Outcome = { ...o, scenario:base.scenario, verdict:"unknown" };
+      delete outcome.option;
+      rows.push(result.outcomes.push(outcome) - 1);
+    }
+    for (const row of rows) merge(scene, plugins, result, row, variables,
+      samples.map(world => budgetObservation(result,row,world)), worlds, strides);
+  });
+  for (const [i, total] of totals) {
+    const base = provisional[i]!, u = result.resourceUsage[i]!;
+    if (!added.has(i) && total.used === base.used && total.capacity === base.capacity && total.basis === base.basis) continue;
+    u.used = total.used;
+    u.capacity = total.capacity;
+    u.basis = u.used !== null && (u.basis === "assumed" || total.basis === "assumed") ? "assumed" : "calculated";
+    const outcome = affected.find(row => result.outcomes[row]!.scenario === u.scenario) ?? affected[0]!;
+    const reason = addReason(result,{outcome, stage:"allocate", rule:profileChanged ? "연결 설정 후보별 자원 점유량" : "배선 후보별 자원 점유량",
+      targetKind:u.resourceKind === "scene" ? "resource" : "linkResource", targetRow:u.resource},
+      variables.map(v => v.claim),u.reasonRows);
+    u.reasonRows = [reason];
+  }
+  finishGoals();
 }

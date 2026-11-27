@@ -97,6 +97,7 @@ export function mountWorkbench(root: HTMLElement, initial: SceneDocument, librar
     run(next) { run = next; redrawResults(); },
     variant(index) { variant = index; redrawResults(); },
     loadVariants,
+    openQuest: options.onChange && (claim=>questPanel.open(claim)),
   });
   const questTrigger = root.querySelector<HTMLButtonElement>(".quests-open")!;
   const questDialog = root.querySelector<HTMLDialogElement>(".quest-dialog")!;
