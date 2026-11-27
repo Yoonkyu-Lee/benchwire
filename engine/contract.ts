@@ -27,7 +27,7 @@ export interface Choice extends Trace { connection: number; profile: string; dom
 export type LoadTarget = { resource: number; possible?: boolean } | { connection: number; direction: Direction; domain: string; mode: string };
 export type StandingLoad = Trace & { item: number; id: string; amount: number | null; unit: string } & (
   | { targets: readonly LoadTarget[] }
-  | { feed: { inputPort: number; mode: string; sources: readonly (Trace & { node: number; possible?: boolean })[] } });
+  | { feed: { inputPort: number; mode: string; sources: readonly (Trace & { node: number; outputPort?: number; possible?: boolean })[] } });
 export type FeedLoad = Extract<StandingLoad, { feed: unknown }>;
 export interface Pool extends Trace {
   id: string; scope: "direction" | "connection"; unit: string; limit: number | null;
@@ -91,6 +91,8 @@ export interface DomainPlugin {
   // 한 관측 행의 { [필드]: { value, unit } }를 검증한다. 각 필드를 독립적으로 입력할 수 있어야 한다.
   observations?: InputSchema;
   paramsFor?(protocol: string): InputSchema | undefined;
+  // 해당 송수신 역할에서 빠진 모델 필드를 지정한 단위의 미확인 주장으로 복원한다.
+  requiredParams?(protocol: string, role: string): Readonly<Record<string,string>> | undefined;
   // 속성이 필요한 모델과 필드별 단위. 연결 프로토콜은 부품을 끼운 배선의 양 끝에 공통으로 선언된 것만 준다.
   requiredAttributes?(context: { kind: string; protocols: ReadonlySet<string>; linkedProtocols: ReadonlySet<string>;
     hasAttributes: boolean }): Readonly<Record<string, string>> | undefined;

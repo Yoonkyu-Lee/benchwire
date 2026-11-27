@@ -361,3 +361,50 @@ test("T8 입력 작업에만 적용된 정책 한도만큼 상시 소비를 공�
   assert.ok(result.standingLoads.every(r=>r.inputs.includes(policy)));
   assert.equal(work(result,0).value,55);
 });
+
+test("T8 시나리오별 잔여에서 나온 가능한 판정과 포트 목표는 각 시나리오를 따로 고정한 결과와 같다",()=>{
+  const {scene,plugin,option,demand,inputs,specs}=setup([100,100,100]);
+  scene.scenarios.push({id:"둘째"});
+  scene.members=[{scenario:0,workload:0},{scenario:1,workload:1},{scenario:1,workload:2}];
+  const link=scene.connections[0]!, inputPort=link.to,node=scene.workloads[0]!.from;
+  plugin.negotiate=()=>["A","B"].flatMap(p=>[option("입력",p==="A" ? 60 : 5,p),
+    {...option("별도",0,p),unit:"개",...(p==="B" && {limit:null,verdict:"unknown" as const,bounds:{low:60,high:100}})}]);
+  plugin.demand=(_s,w)=>[w===0 ? demand("입력",100,true) : {...demand("별도",w===1 ? 10 : 100,true),unit:"개"}];
+  plugin.assess=(_s,w)=>({rule:"실제 전달값의 가능한 판정",inputs,specs,possible:w===1 ? ["ok","impossible"] : ["ok"],metrics:[]});
+  plugin.standingLoads=()=>[{id:"입력",item:scene.ports[inputPort]!.item,amount:10,unit:"회/s",rule:"자체 소비",inputs,specs,
+    feed:{inputPort,mode:"입력",sources:[{node,rule:"시험 공급원",inputs,specs}]}}];
+  scene.goals=scene.members.slice(0,2).map(m=>({id:"포트"+m.scenario,kind:"port",scenario:m.scenario,workloads:[m.workload],
+    item:scene.ports[link.from]!.item,port:link.from}));
+  const combined=engine.evaluate(scene,[plugin]);
+  assert.deepEqual(combined.choices.map(c=>c.profile),["A","B"]);
+  for (const [index,goal] of scene.goals.entries()) {
+    assert.ok(goal.kind==="port");
+    const one=structuredClone(scene);
+    one.scenarios=[scene.scenarios[index]!];
+    one.members=scene.members.filter(m=>m.scenario===index).map(m=>({...m,scenario:0}));
+    one.goals=[{...goal,scenario:0}];
+    const fixed=engine.evaluate(one,[plugin]);
+    const possible=(r:Results)=>r.possibleVerdicts.filter(v=>r.outcomes[v.outcome]!.subjectKind==="workload" &&
+      r.outcomes[v.outcome]!.subjectRow===goal.workloads[0]).map(v=>v.verdict).sort();
+    assert.deepEqual(possible(combined),possible(fixed));
+    assert.equal(combined.goals[index]!.verdict,fixed.goals[0]!.verdict);
+  }
+  assert.equal(combined.goals[1]!.verdict,"unknown");
+});
+
+test("T8 예약 순서 조합이 상한을 넘으면 파일 순서로 확정하지 않고 보수적 근거를 표시한다",()=>{
+  const {scene,plugin,option,demand,inputs,specs}=setup([60]);
+  const inputPort=scene.connections[0]!.to, node=scene.workloads[0]!.from;
+  plugin.negotiate=()=>[option("입력",45)];
+  plugin.demand=()=>[demand("입력",60,true)];
+  const loads=Array.from({length:6},(_,i)=>({id:"부하"+i,item:scene.ports[inputPort]!.item,amount:10,unit:"회/s",
+    rule:"입력 소비",inputs,specs,feed:{inputPort,mode:"입력",sources:[{node,rule:"공급원",inputs,specs}]}}));
+  plugin.standingLoads=()=>loads;
+  for (let i=0;i<2;i++) {
+    const r=engine.evaluate(scene,[plugin]),o=r.outcomes.findIndex(x=>x.subjectKind==="workload");
+    const metric=r.metrics.find(m=>m.outcome===o && m.kind==="together")!;
+    assert.deepEqual([metric.low,metric.high,metric.range],[0,45,"conservative"]);
+    assert.ok(r.reasons.some(reason=>reason.outcome===o && reason.rule.includes("공급 순서")));
+    loads.reverse();
+  }
+});

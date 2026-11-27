@@ -411,13 +411,13 @@ test("T8 입력 조합 한도가 0–60 W면 자체 소비 10 W 뒤의 입력은
 test("T8 중간 장치의 독립 공급원 주장이 미확인이면 목표 유무와 무관하게 고정 세계를 합친다",()=>{
   const s=read("serial-passthrough");
   const owner=s.interfaces.findIndex(i=>i.id==="out-power" && s.items[s.ports[i.port]!.item]!.id==="relay-a");
-  const other=effectiveClaim(s,"interface",owner,"power","maxW")!;
-  const claim=s.claims.push({...s.claims[other]!,field:"sourceNode",unit:"",value:null,openDomain:true})-1;
-  s.claimSources.push(...s.claimSources.filter(c=>c.claim===other).map(c=>({...c,claim})));
+  const claim=effectiveClaim(s,"interface",owner,"power","sourceNode")!;
+  Object.assign(s.claims[claim]!,{value:null,confidence:"unknown"});
   const measure=()=>analyze(s).work("only","charge").metric("together");
-  for (const [source,delivery] of [["",40],["entry",50],["exit",50]] as const) {
+  for (const [source,high] of [["",40],["entry",50],["exit",50]] as const) {
     s.claims[claim]!.value=source;
-    assert.equal(measure().value,delivery);
+    const delivery=measure();
+    assert.deepEqual([delivery.low,delivery.high],[40,high]);
   }
   s.claims[claim]!.value=null;
   for (const goals of [[],[{id:"45 W",kind:"metric" as const,run:"together" as const,minimum:45,

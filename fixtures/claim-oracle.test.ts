@@ -250,6 +250,10 @@ function oracle(scene:Scene, domains:readonly DomainPlugin[], only?: (c:Claim)=>
         s.ranges.set(name,[link.low,link.high]);
       }
     }
+    // 다른 미확인 때문에 모든 고정 세계에서 이미 같은 ❓일 수 있다. 이 축이 목표를 가른 경우만 묻는다.
+    const differingGoals=new Set([...samples[0]!.verdicts].flatMap(([key,verdicts])=>
+      key.startsWith("목표/") && samples.some(s=>!verdicts.isSubsetOf(s.verdicts.get(key)!) ||
+        !s.verdicts.get(key)!.isSubsetOf(verdicts)) ? [key] : []));
     const expected=samples[0]!;
     for (const sample of samples.slice(1)) {
       for (const [key,possible] of sample.verdicts) for (const verdict of possible) expected.verdicts.get(key)!.add(verdict);
@@ -264,7 +268,7 @@ function oracle(scene:Scene, domains:readonly DomainPlugin[], only?: (c:Claim)=>
       const got=actual.verdicts.get(key)!;
       if (!wanted.isSubsetOf(got) || exact && got.size!==wanted.size)
         errors.push(key+" "+[...wanted]+" → "+[...got]);
-      if (only && key.startsWith("목표/") && wanted.size>1) {
+      if (only && differingGoals.has(key)) {
         const goal=unknown.goals.findIndex(g=>"목표/"+g.id===key);
         if (!unknown.goalEvidence.some(e=>e.goal===goal && e.claims.includes(row) &&
           unknown.quests.some(q=>q.outcome===e.outcome && q.claim===row))) errors.push(key+" 미확인 주장의 근거·퀘스트 누락");

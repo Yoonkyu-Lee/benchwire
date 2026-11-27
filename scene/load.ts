@@ -225,6 +225,14 @@ export function loadSceneDocuments(document: unknown, library: { connectors: unk
   });
   const sceneSources = sources(saved.sources,file + "#",true);
   const models = new Map<string, { row: number; model: Model; citations: Map<string, number>; missing?: Map<string, number> }>();
+  function missingFacts(missing: ReadonlyMap<string,string>, pinned: {missing?:Map<string,number>}, modelPath:string, recovered=false) {
+    if (!missing.size) return;
+    const id = "missing-model-value";
+    pinned.missing ??= sources([{ id, title:"모델에 값 없음", locator:modelPath, retrievedAt:"" }],modelPath);
+    const values:Record<string,Fact>=Object.fromEntries([...missing].map(([field,unit])=>
+      [field,{value:null,unit,confidence:"unknown",condition:"",sources:[id]}]));
+    return {values,citations:pinned.missing,recovered};
+  }
   const instances = new Map<string, Local>();
 
   function checkResource(field: string, fact: Fact, unit: string, at: string) {
@@ -282,7 +290,10 @@ export function loadSceneDocuments(document: unknown, library: { connectors: unk
         unique(signatures, JSON.stringify([domain, protocol, role]), row, where);
         const evidence = claim("interface", row, "model", "", "declaration", iface.evidence, citations, where + ".evidence");
         scene.interfaces.push({ id, domain, protocol, role, port, evidence });
-        fields("interface", row, "model", domain, iface.params, interfaceSchema(ref(domains, domain, where + ".domain"), protocol), citations, where + ".params");
+        const plugin=ref(domains,domain,where+".domain");
+        const missing=new Map(Object.entries(plugin.requiredParams?.(protocol,role) ?? {}).filter(([key])=>!Object.hasOwn(iface.params,key)));
+        fields("interface",row,"model",domain,iface.params,interfaceSchema(plugin,protocol),citations,where+".params",
+          missingFacts(missing,pinned!,modelPath));
       });
     });
     model.resources.forEach((r, i) => {
@@ -345,15 +356,8 @@ export function loadSceneDocuments(document: unknown, library: { connectors: unk
         if (!Object.hasOwn(values ?? {}, field) && !missing.has(field)) missing.set(field, unit);
       }
       if (!values && missing.size === 0) continue;
-      let generated;
-      if (missing.size) {
-        const id = "missing-model-value";
-        pinned.missing ??= sources([{ id, title: "모델에 값 없음", locator: at, retrievedAt: "" }], at);
-        const unknowns: Record<string, Fact> = Object.fromEntries([...missing].map(([field, unit]) =>
-          [field, { value: null, unit, confidence: "unknown", condition: "", sources: [id] }]));
-        if (recovered) recoveredAttributes.add(JSON.stringify([item, domain]));
-        generated = { values: unknowns, citations: pinned.missing, recovered };
-      }
+      const generated=missingFacts(missing,pinned,names.model(key),recovered);
+      if (generated && recovered) recoveredAttributes.add(JSON.stringify([item,domain]));
       fields("item", item, "model", domain, values ?? {}, plugin.attributes, citations, where, generated);
     }
   });

@@ -19,6 +19,8 @@ export interface Results {
   // 미확인 세계를 찾는 동안 훅의 실제 조회와 선택·배분에서의 용도를 기록한다.
   readClaims?: ClaimUse[];
   hookReads?: HookRead[];
+  // 공급 순서별로 더해 둔 총예약이다. 부하별 최댓값을 더하면 같은 예산이 중복될 수 있다.
+  feedTotals?: {resource:number;low:number;high:number|null}[];
   // 사용자가 같은 예산들을 모두 지나면 양의 전달량에 앞서 충족돼야 하는 내부 부하들이다.
   feedRequirements?: {resource:number; option?:number; amount:number; capacity:number}[][];
   goals: { id: string; scenario: number; verdict: GoalVerdict; combined: boolean; truncated: boolean;

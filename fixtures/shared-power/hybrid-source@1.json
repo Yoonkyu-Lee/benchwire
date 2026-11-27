@@ -109,6 +109,7 @@
           "evidence": {"value":true,"confidence":"inferred","sources":["supply"]},
           "params": {
             "maxW": {"value":100,"unit":"W","confidence":"inferred","sources":["supply"]},
+            "sourceNode": {"value": "supply", "confidence": "inferred", "sources": ["supply"]},
             "pdo20": {"value":5,"unit":"A","confidence":"inferred","sources":["supply"]}
           }
         }

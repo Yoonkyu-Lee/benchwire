@@ -1,15 +1,16 @@
 // 설정이 고른 실제 공급 경로에서 상시 입력이 받은 양만 서비스·풀·내부 자원에 예약한다.
 import type { Choice, Demand, DomainPlugin, FeedLoad, Scene } from "./contract.ts";
+import { MAX_COMBINATIONS } from "./selection.ts";
 import { candidatesFor } from "./candidates.ts";
 import { callHook } from "./hook-reads.ts";
 import { portFacts, readClaim, resourceFacts } from "./scene.ts";
 import type { Results } from "./results.ts";
 
 type Load = FeedLoad & { domain: string };
-export type Supply = Pick<Results, "options" | "linkResources" | "standingLoads" | "feedRequirements">;
+export type Supply = Pick<Results, "options" | "linkResources" | "standingLoads" | "feedRequirements" | "feedTotals">;
 type Interval = { low: number; high: number };
 type Cost = { resource: number; fixed: number; fixedHigh: number; coefficient: number; unknown: boolean; option?: number };
-type Route = { costs: Cost[]; inputs: number[]; specs: string[]; optional: boolean; policyCap: number; length: number; key: string };
+type Route = { costs: Cost[]; inputs: number[]; specs: string[]; optional: boolean; policyCap: number; inlets: number[] };
 const unlimited = { low: 0, high: Infinity };
 
 function routes(scene: Scene, plugins: readonly DomainPlugin[], base: Results, choices: Choice[], load: Load) {
@@ -27,12 +28,20 @@ function routes(scene: Scene, plugins: readonly DomainPlugin[], base: Results, c
     delete local.hookReads;
     const workload = scene.workloads.length;
     const candidates = candidatesFor({ ...scene, workloads: [...scene.workloads,work] }, plugins, local, [], choices, {inputPort,demand,workload});
-    for (const { flow, solo, length, key, truncated } of candidates[workload]!) {
+    for (const { flow, solo, truncated } of candidates[workload]!) {
       if (flow.path === null) continue;
       const path = local.paths[flow.path]!;
       if (path.verdict === "impossible") continue;
       const steps = local.steps.filter(s => s.path === flow.path);
-      if (!steps.some(s => s.kind === "connection")) continue;
+      const links=steps.filter(s=>s.kind==="connection");
+      const first=links[0];
+      if (!first) continue;
+      const outlet=scene.connections[first.row]!;
+      if (source.outputPort!==undefined && source.outputPort!==(first.direction==="forward" ? outlet.from : outlet.to)) continue;
+      const inlets=links.slice(0,-1).map(s=>{
+        const link=scene.connections[s.row]!;
+        return s.direction==="forward" ? link.to : link.from;
+      });
       const inputs = new Set([...load.inputs,...source.inputs,port.attachment]);
       const specs = new Set([...load.specs,...source.specs]);
       let optional = truncated || source.possible === true || port.node === null;
@@ -87,13 +96,46 @@ function routes(scene: Scene, plugins: readonly DomainPlugin[], base: Results, c
         else if (cost.coefficient > 0) policyCap = Math.min(policyCap,(policy.limit-cost.fixed)/cost.coefficient);
         if (policy.limit !== null && cost.fixedHigh > cost.fixed) optional = true;
       }
-      if (costs.size) found.push({ costs: [...costs.values()], inputs: [...inputs], specs: [...specs], optional, policyCap, length, key });
+      if (costs.size) found.push({ costs: [...costs.values()], inputs: [...inputs], specs: [...specs], optional, policyCap, inlets });
     }
   }
   return found;
 }
 
+type Pending = {load:Load; paths:Route[]};
+
+// 같은 예산을 전혀 쓰지 않는 입력은 어느 순서로 예약해도 같다. 다른 순서들은 상류 제약 안에서 검산한다.
+function supplyOrders(pending:Pending[]) {
+  const predecessors=pending.map(({paths},i)=>new Set(pending.flatMap(({load},j)=>
+    i!==j && paths.some(p=>p.inlets.includes(load.feed.inputPort)) ? [j] : [])));
+  const resources=pending.map(({load,paths})=>new Set(load.amount===0 ? [] : paths.flatMap(p=>p.costs.map(c=>c.resource))));
+  const orders:number[][]=[];
+  function visit(left:number[], order:number[]):boolean {
+    if (!left.length) { orders.push(order); return orders.length<=MAX_COMBINATIONS; }
+    const ready=left.filter(i=>!left.some(j=>predecessors[i]!.has(j)));
+    const independent=ready.find(i=>left.every(j=>i===j || resources[i]!.isDisjointFrom(resources[j]!)));
+    const next=independent===undefined ? ready : [independent];
+    return next.length>0 && next.every(i=>visit(left.filter(j=>i!==j),[...order,i]));
+  }
+  return visit(pending.map((_,i)=>i),[]) ? orders : [];
+}
+
 export function feedBudgets(scene: Scene, plugins: readonly DomainPlugin[], base: Results, choices: Choice[], feeds: Load[], connections?: Set<number>): Supply {
+  const pending = feeds.map(load => ({ load, paths: callHook(scene,base,"standingLoads",-1,
+    view => routes(view,plugins,base,choices,load)).value })).filter(f => f.paths.length);
+  if (connections) for (const {paths} of pending) for (const path of paths) for (const cost of path.costs) {
+    const link = base.linkResources[cost.resource-scene.resources.length];
+    if (link) connections.add(link.connection);
+  }
+  const orders=supplyOrders(pending);
+  // 순환 또는 조합 상한에서는 미검산 순서의 예약을 빠뜨리지 않도록 모든 후보의 0~최대 비용을 남긴다.
+  if (!orders.length) return reserve(scene,base,choices,pending.map(({load,paths})=>
+    ({load:{...load,rule:load.rule+" · 공급 순서를 모두 검산할 수 없어 보수적으로 예약"},paths:paths.map(p=>({...p,optional:true}))})));
+  const cases=orders.map(order=>reserve(scene,base,choices,order.map(i=>pending[i]!)));
+  return cases.length===1 ? cases[0]! : mergeOrders(cases,scene.resources.length);
+}
+
+function reserve(scene:Scene, base:Results, choices:Choice[], pending:Pending[]):Supply {
   const options = base.options.map(o => ({...o}));
   const linkResources = base.linkResources.map(r => r.pool ? {...r,pool:{...r.pool}} : r);
   const standingLoads = base.standingLoads.slice(), offset = scene.resources.length;
@@ -124,22 +166,12 @@ export function feedBudgets(scene: Scene, plugins: readonly DomainPlugin[], base
     }
     return Math.max(0,amount);
   }
-  const pending = feeds.map(load => ({ load, paths: callHook(scene,base,"standingLoads",-1,
-    view => routes(view,plugins,base,choices,load)).value })).filter(f => f.paths.length);
-  if (connections) for (const {paths} of pending) for (const path of paths) for (const cost of path.costs) {
-    const link = linkResources[cost.resource-offset];
-    if (link) connections.add(link.connection);
-  }
-  // 상류 입력에서 먼저 소비한 뒤 하류 입력에 남은 공급을 보낸다. 실물의 저장 순서는 영향을 주지 않는다.
-  const distance = (paths: Route[]) => Math.min(...paths.map(p => p.length));
-  pending.sort((a,b) => distance(a.paths)-distance(b.paths) || scene.items[a.load.item]!.id.localeCompare(scene.items[b.load.item]!.id) || a.load.id.localeCompare(b.load.id));
   for (const {load,paths} of pending) {
     const { item, id, domain, rule, amount } = load;
-    const ranked = paths.map(path => ({path, low:path.optional ? 0 : deliver(path,amount??0,"low"), high:deliver(path,amount??Infinity,"high")}))
-      .sort((a,b) => b.low-a.low || b.high-a.high || a.path.length-b.path.length || a.path.key.localeCompare(b.path.key));
-    const best = ranked[0]!;
-    const possible = ranked.filter((r,i) => i===0 || r.high > best.low || r.high === best.low &&
-      (r.path.length < best.path.length || r.path.length === best.path.length && r.path.key.localeCompare(best.path.key)<0));
+    const offers = paths.map(path => ({path, low:path.optional ? 0 : deliver(path,amount??0,"low"), high:deliver(path,amount??Infinity,"high")}));
+    const guaranteed=Math.max(...offers.map(o=>o.low));
+    // 같은 양을 공급할 수 있는 서로 다른 전원에는 확인된 우선순위가 없다.
+    const possible=offers.filter(o=>o.high>=guaranteed), best=possible[0]!;
     const inputs = [...new Set(possible.flatMap(r => r.path.inputs))], specs = [...new Set(possible.flatMap(r => r.path.specs))];
     const resources = new Set(possible.flatMap(r => r.path.costs.map(c => c.resource)));
     const changes = [];
@@ -191,3 +223,50 @@ export function feedBudgets(scene: Scene, plugins: readonly DomainPlugin[], base
   return { options,linkResources,standingLoads,feedRequirements:requirements };
 }
 
+// 행별 예약과 예산별 총예약을 각각 같은 순서에서 합산해야 서로 배타적인 최댓값이 중복되지 않는다.
+function mergeOrders(cases:Supply[],offset:number):Supply {
+  const first=cases[0]!;
+  type Bound = {limit:number|null; bounds?:Interval};
+  function enclose(caps:Bound[]) {
+    const cap=caps[0]!;
+    if (caps.every(c=>c.limit===cap.limit && c.bounds?.low===cap.bounds?.low && c.bounds?.high===cap.bounds?.high)) return;
+    const low=Math.min(...caps.map(c=>c.limit??c.bounds?.low??0));
+    const high=Math.max(...caps.map(c=>c.limit??c.bounds?.high??Infinity));
+    cap.limit=low===high ? low : null;
+    if (low!==high && Number.isFinite(high)) cap.bounds={low,high}; else delete cap.bounds;
+  }
+  first.options.forEach((_,i)=>enclose(cases.map(c=>c.options[i]!)));
+  first.linkResources.forEach((l,i)=>{if (l.pool) enclose(cases.map(c=>c.linkResources[i]!.pool!));});
+  const rows=new Map<string,{row:Results["standingLoads"][number]; min:number; max:number; count:number}>();
+  const totals=new Map<number,{min:number;max:number;count:number}>();
+  for (const c of cases) {
+    const sums=new Map<number,Interval>();
+    for (const l of c.standingLoads) {
+      const resource=l.resource+(l.kind==="link" ? offset : 0);
+      const key=JSON.stringify([l.domain,l.item,l.id,resource]);
+      const low=l.amount??l.bounds?.low??0, high=l.amount??l.bounds?.high??Infinity;
+      const sum=sums.get(resource)??{low:0,high:0};
+      sums.set(resource,{low:sum.low+low,high:sum.high+high});
+      const entry=rows.get(key);
+      if (!entry) { rows.set(key,{row:{...l},min:low,max:high,count:1}); continue; }
+      entry.min=Math.min(entry.min,low); entry.max=Math.max(entry.max,high); entry.count++;
+      entry.row.inputs=[...new Set([...entry.row.inputs,...l.inputs])];
+      entry.row.specs=[...new Set([...entry.row.specs,...l.specs])];
+    }
+    for (const [resource,{low,high}] of sums) {
+      const current=totals.get(resource);
+      if (!current) totals.set(resource,{min:low,max:high,count:1});
+      else {current.min=Math.min(current.min,low); current.max=Math.max(current.max,high); current.count++;}
+    }
+  }
+  first.standingLoads=Array.from(rows.values(),({row,min,max,count})=>{
+    const low=count===cases.length ? min : 0;
+    row.amount=low===max ? low : null;
+    if (low!==max && Number.isFinite(max)) row.bounds={low,high:max}; else delete row.bounds;
+    return row;
+  });
+  first.feedTotals=Array.from(totals,([resource,{min,max,count}])=>({resource,low:count===cases.length ? min : 0,high:Number.isFinite(max) ? max : null}));
+  // 한 순서에서만 필수인 경로를 모든 순서의 상한으로 쓸 수 없다.
+  first.feedRequirements=[];
+  return first;
+}

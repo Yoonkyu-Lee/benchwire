@@ -15,6 +15,8 @@ function remaining(limit: number | null, amount: number | null) {
 export function resourceCapacity(scene: Scene, result: Results, resource: number) {
   const value = readClaim(scene,resourceFacts(scene, resource).capacity,"range").value;
   let capacity = typeof value === "number" ? value : null;
+  const total=result.feedTotals?.find(t=>t.resource===resource);
+  if (total) return remaining(capacity,total.low===total.high ? total.low : null);
   for (const load of result.standingLoads) if (load.kind === "scene" && load.resource === resource)
     capacity = remaining(capacity, load.amount);
   return capacity;
@@ -29,7 +31,7 @@ export function reserveStanding(scene: Scene, plugins: readonly DomainPlugin[], 
     if (!scene.items[item]) { issue("item"); continue; }
     if ("feed" in load) {
       if (scene.ports[load.feed.inputPort]?.item !== item) { issue("feed.inputPort"); continue; }
-      if (load.feed.sources.some(s=>!scene.nodes[s.node])) { issue("feed.sources"); continue; }
+      if (load.feed.sources.some(s=>!scene.nodes[s.node] || s.outputPort!==undefined && scene.ports[s.outputPort]?.item!==scene.nodes[s.node]!.item)) { issue("feed.sources"); continue; }
       const amount=load.amount===null || Number.isFinite(load.amount) && load.amount>=0 ? load.amount : null;
       if (amount!==load.amount) issue("amount");
       const checkedSpecs=(specs:string[])=>specs.filter(spec=>{

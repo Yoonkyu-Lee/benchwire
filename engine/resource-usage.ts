@@ -41,6 +41,8 @@ export function recordUsage(scene: Scene, r: Results, scenario: number, flows: F
     usage.used = usage.used === null || l.amount === null ? null : usage.used + l.amount;
   }
 
+  for (const t of r.feedTotals ?? []) budgets.get(t.resource)!.used=t.low===t.high ? t.low : null;
+
   const uncertain = new Set<number>();
   flows.forEach((f,i) => {
     const outcome = outcomes[i]!, metric = r.metrics.find(m => m.outcome === outcome && m.kind === "together")!;

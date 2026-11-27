@@ -125,13 +125,17 @@ function render(scene: Scene, plugins: readonly DomainPlugin[], result: Results,
     if (load.kind==="link") configured.add(result.linkResources[load.resource]!.connection);
   }
   judgeConnections(scene,plugins,result,c=>!configured.has(c));
-  const combined=result;
+  const negotiated={options:result.options,linkResources:result.linkResources};
+  const standing:Results["standingLoads"]=[];
   const netOptions:{outcome:number;option:Results["options"][number]}[]=[];
-  if (byScenario) combined.standingLoads=[];
   selected.forEach((plan, scenario) => {
     const { active, together, picked, candidates, choices } = plan;
-    const result=byScenario ? {...combined,...supplies.get(profileKey(choices))!} : combined;
-    if (byScenario) combined.standingLoads.push(...result.standingLoads.map(l=>({...l,scenario})));
+    // 판정·병목 등은 같은 결과에 누적하고, 각 시나리오의 배분 입력만 갈아 끼운다.
+    if (byScenario) {
+      delete result.feedTotals;
+      Object.assign(result,supplies.get(profileKey(choices))!);
+      standing.push(...result.standingLoads.map(l=>({...l,scenario})));
+    }
     for (const workload of plan.workloads.advances ?? []) result.reservations.push({ scenario, workload });
     result.choices.push(...choices.map(c => ({ ...c, scenario })));
     const firstOutcome=result.outcomes.length;
@@ -139,7 +143,7 @@ function render(scene: Scene, plugins: readonly DomainPlugin[], result: Results,
     if (byScenario) for (let row=firstOutcome; row<result.outcomes.length; row++) {
       const o=result.outcomes[row]!;
       if (o.option===undefined) continue;
-      const cap=availableOption(result,o.option), common=availableOption(combined,o.option);
+      const cap=availableOption(result,o.option), common=availableOption(negotiated,o.option);
       if (cap.limit!==common.limit || cap.bounds?.low!==common.bounds?.low || cap.bounds?.high!==common.bounds?.high)
         netOptions.push({outcome:row,option:{...result.options[o.option]!,...cap,effective:true}});
     }
@@ -182,6 +186,11 @@ function render(scene: Scene, plugins: readonly DomainPlugin[], result: Results,
     recordUsage(inventory, result, scenario, active, outcomes, gross, chosen);
     for (const row of outcomes) assessWork(scene,plugins.find(p => p.id === result.outcomes[row]!.domain)!,result,row);
   });
+  if (byScenario) {
+    Object.assign(result,negotiated,{standingLoads:standing});
+    delete result.feedRequirements;
+    delete result.feedTotals;
+  }
   for (const {outcome,option} of netOptions) result.outcomes[outcome]!.option=result.options.push(option)-1;
   return result;
 }
@@ -215,6 +224,7 @@ function evaluatePlans(input: Scene, plugins: readonly DomainPlugin[], scenario?
     delete result.readClaims;
     delete result.hookReads;
     delete result.feedRequirements;
+    delete result.feedTotals;
     return { choices: scenario === undefined ? [] : result.choices.filter(c => c.scenario === scenario).map(({scenario: _scenario,...choice}) => choice), result };
   }
   if (scenario === undefined) return [solve(primary,false,prepared.result)];

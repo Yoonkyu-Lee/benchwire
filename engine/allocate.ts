@@ -331,6 +331,10 @@ export function allocate(scene: Scene, result: Results, flows: readonly Flow[], 
   if (!flows.some(f => f.uses.some(u => u.fixedHigh!==undefined || reserved.has(u.resource) || u.option !== undefined && linkLimit(result, u).bounds)))
     return allocateKnown(scene, result, flows, fair);
   const at = (side: "low" | "high"): Results => ({ ...result,
+    ...(result.feedTotals && {feedTotals:result.feedTotals.map(t=>{
+      const amount=(side==="low" ? t.high : t.low) ?? reserved.get(t.resource);
+      return amount===undefined ? t : {...t,low:amount,high:amount};
+    })}),
     standingLoads: result.standingLoads.map(l => l.kind === "scene" && l.amount === null && reserved.has(l.resource)
       ? { ...l, amount: side === "low" ? l.bounds?.high ?? reserved.get(l.resource)! : l.bounds?.low ?? 0 } : l),
     options: result.options.map(o => o.bounds ? { ...o, limit: o.bounds[side] } : o),

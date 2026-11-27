@@ -12,6 +12,7 @@ export const power: DomainPlugin = {
   id: POWER, sources, params, paramsFor, attributes, request, resourceUnits: [POWER_UNIT],
   goalMeasures: [{ kind: "netCharge", unit: POWER_UNIT, label: "순충전 전력" }],
   negotiate: negotiatePower, standingLoads,
+  requiredParams(protocol,role) { return protocol===PD && role==="source" ? {sourceNode:""} : undefined; },
   profileValues(claim,scene) {
     if (claim.ownerKind!=="interface" || claim.field!=="sourceNode") return [];
     const item=scene.ports[scene.interfaces[claim.owner]!.port]!.item;
