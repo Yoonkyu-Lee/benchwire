@@ -10,6 +10,9 @@ import { evidence, unusedEvidence } from "./evidence.ts";
 import { LibraryError, openLibrary, sceneIdPattern } from "./library.ts";
 import { configuredResearchClient, openResearch } from "./research.ts";
 import { openPrices } from "./prices.ts";
+import { openBestBuy } from "./bestbuy.ts";
+import { openReceipt } from "./receipt.ts";
+import { serverKey } from "./claude.ts";
 
 const HOST = "127.0.0.1";
 const PORT = 3210;
@@ -70,9 +73,10 @@ function staticFile(buildDir: string, path: string, response: ServerResponse): b
 }
 
 export async function startServer({ port = PORT, dataDir = join(ROOT, "userdata"), buildDir = join(ROOT, "dist", "app"),
-  researchClient = configuredResearchClient(ROOT) } = {}) {
+  researchClient = configuredResearchClient(ROOT), bestBuy = openBestBuy(serverKey(ROOT,"BESTBUY_API_KEY")) } = {}) {
   const library = openLibrary(ROOT, dataDir);
-  const prices = openPrices(dataDir);
+  const receipt = openReceipt(dataDir,researchClient);
+  const prices = openPrices(dataDir,bestBuy,receipt);
   const { connectors } = library.describe();
   const research = openResearch(dataDir, connectors, researchClient);
   async function handle(request: IncomingMessage, response: ServerResponse) {
@@ -84,6 +88,13 @@ export async function startServer({ port = PORT, dataDir = join(ROOT, "userdata"
     const origin = "http://" + host;
     const [path = "/", search] = (request.url ?? "/").split("?", 2);
     const method = request.method;
+    if (method === "POST" && ["/api/prices/receipt","/api/prices/confirm","/api/prices/bestbuy"].includes(path)) {
+      const body = await readJson(request,origin,path.endsWith("/receipt") ? Math.ceil(receipt.config.imageBytes/3)*4 + 1024 : JSON_LIMIT);
+      const result = path.endsWith("/receipt") ? await receipt.parse(body) : path.endsWith("/confirm")
+        ? prices.saveObservation(body,library) : await prices.bestBuy(body,library);
+      response.writeHead(200,{"Content-Type":JSON_TYPE}).end(JSON.stringify(result));
+      return;
+    }
     if (path === "/api/evidence/unused" && (method === "GET" || method === "POST")) {
       const selection = method === "POST" ? await readJson(request, origin) : undefined;
       const scenes = library.describe().scenes.flatMap(({ id }) => {

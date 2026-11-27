@@ -8,6 +8,7 @@ import { chromium, type Browser, type BrowserContext, type Locator, type Page } 
 import { build } from "vite";
 import { startServer } from "../server/http.ts";
 import type { ResearchClient } from "../server/research.ts";
+import { openBestBuy } from "../server/bestbuy.ts";
 
 export const viewport = { width: 1440, height: 900 };
 
@@ -20,8 +21,8 @@ export function edgeSession() {
   let server: Server | undefined;
   let base: string;
 
-  async function openServer(researchClient: ResearchClient | null = null) {
-    server = await startServer({ port: 0, dataDir: join(scratch!, "data"), buildDir: join(scratch!, "app"), researchClient });
+  async function openServer(researchClient: ResearchClient | null = null, bestBuy = openBestBuy(null)) {
+    server = await startServer({ port: 0, dataDir: join(scratch!, "data"), buildDir: join(scratch!, "app"), researchClient, bestBuy });
     const address = server.address();
     assert(address && typeof address === "object");
     base = `http://127.0.0.1:${address.port}`;

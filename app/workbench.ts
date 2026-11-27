@@ -135,7 +135,7 @@ export function mountWorkbench(root: HTMLElement, initial: SceneDocument, librar
   if (options.onChange) mountCollector(root, () => scene.sceneId);
   const renderBudget = options.onChange && mountBudget(root,library,documents,
     () => ({doc:scene,id:readScenario(),view:assessment === evaluated ? view : undefined}),editScenario,
-    id => panel.choose({kind:"connection",id}));
+    id => panel.choose({kind:"connection",id}),items => { refreshCatalog([],items); render(); });
   let openCreator: () => void;
   if (options.onChange) trigger.hidden = false;
   trigger.onclick = () => {

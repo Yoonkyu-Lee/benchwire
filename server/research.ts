@@ -1,11 +1,9 @@
 // 공개 제품 자료를 판본별로 조사하고, 검증한 주장으로 저장 전 초안을 만든다.
-import Anthropic from "@anthropic-ai/sdk";
+import type Anthropic from "@anthropic-ai/sdk";
 import { zodOutputFormat } from "@anthropic-ai/sdk/helpers/zod";
 import { createHash } from "node:crypto";
-import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { isIP } from "node:net";
-import { parseEnv } from "node:util";
 import { z } from "zod";
 import { domains, plugins } from "../domains/registry.ts";
 import type { InputSchema } from "../engine/contract.ts";
@@ -14,7 +12,8 @@ import { loadSceneDocuments } from "../scene/load.ts";
 import { researchQuery } from "../scene/research-query.ts";
 import { LibraryError, writeAtomic } from "./library.ts";
 
-const MODEL = "claude-opus-5-5";
+import { CLAUDE_MODEL as MODEL, claudeCost, usageCost, optionalText, type ResearchClient } from "./claude.ts";
+export { configuredResearchClient, type ResearchClient } from "./claude.ts";
 const BUDGET_USD = 5;
 const MAX_SEARCHES = 6;
 const CACHE_DAYS = 30;
@@ -23,12 +22,6 @@ const CACHE_VERSION = "single-value-quotes-v3";
 const QUOTE_CONTEXT_CHARS = 512;
 const DAY_MS = 86_400_000;
 const CONTEXT_TOKENS = 1_000_000;
-// Claude Platform Pricing: https://platform.claude.com/docs/en/about-claude/pricing
-const INPUT_USD = 4 / 1_000_000;
-const OUTPUT_USD = 20 / 1_000_000;
-const CACHE_READ_USD = 0.20 / 1_000_000;
-// Messages Web search: https://platform.claude.com/docs/en/agents-and-tools/tool-use/web-search-tool
-const SEARCH_USD = 10 / 1_000;
 const IDENTIFY = { output: 3_072, searches: 2, fetches: 2 };
 const INVESTIGATE = { output: 6_144, searches: MAX_SEARCHES - IDENTIFY.searches, fetches: 3 };
 const NORMALIZE = { output: 12_288, searches: 0, fetches: 0 };
@@ -43,22 +36,6 @@ type Model = z.output<typeof modelFile>;
 type Source = Model["sources"][number];
 type Connectors = z.input<typeof connectorsFile>;
 type Block = Anthropic.Message["content"][number];
-export type ResearchClient = {
-  stream(params: Anthropic.MessageCreateParamsNonStreaming): { finalMessage(): Promise<Anthropic.Message> };
-};
-
-function optionalText(file: string) {
-  try { return readFileSync(file, "utf8"); }
-  catch (error) {
-    if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
-    return undefined;
-  }
-}
-
-export function configuredResearchClient(root: string): ResearchClient | null {
-  const apiKey = (process.env.ANTHROPIC_API_KEY ?? parseEnv(optionalText(join(root, ".env")) ?? "").ANTHROPIC_API_KEY)?.trim();
-  return apiKey ? new Anthropic({ apiKey, baseURL: "https://api.anthropic.com", maxRetries: 0, logLevel: "off" }).messages : null;
-}
 
 function publicUrl(value: string): string | undefined {
   const url = URL.parse(value);
@@ -739,7 +716,7 @@ export function openResearch(dataDir: string, connectors: Connectors, client: Re
       const input = tools.length ? CONTEXT_TOKENS : Math.min(CONTEXT_TOKENS,
         PROMPT_OVERHEAD_TOKENS + Buffer.byteLength(JSON.stringify({ system, messages, format: structured ? FORMAT : null })));
       const remainingSearches = Math.max(0, limit.searches - (job.searches - initialSearches));
-      const upper = input * INPUT_USD + limit.output * OUTPUT_USD + remainingSearches * SEARCH_USD;
+      const upper = claudeCost(input,limit.output,remainingSearches);
       if (job.spentUsd + upper > BUDGET_USD) { stop = "budget"; break; }
       let message: Anthropic.Message;
       try {
@@ -753,10 +730,7 @@ export function openResearch(dataDir: string, connectors: Connectors, client: Re
       const usage = message.usage;
       const searches = usage.server_tool_use?.web_search_requests ?? 0;
       job.searches += searches;
-      job.spentUsd += usage.input_tokens * INPUT_USD + usage.output_tokens * OUTPUT_USD + searches * SEARCH_USD
-        + (usage.cache_creation?.ephemeral_5m_input_tokens ?? 0) * INPUT_USD * 1.25
-        + (usage.cache_creation?.ephemeral_1h_input_tokens ?? 0) * INPUT_USD * 2
-        + (usage.cache_read_input_tokens ?? 0) * CACHE_READ_USD;
+      job.spentUsd += usageCost(usage);
       job.raw.push(message);
       blocks.push(...message.content);
       write(job);

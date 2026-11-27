@@ -1,8 +1,10 @@
 // 시나리오 구매 목록을 판매 단위로 합산하고 같은 미확인 구매를 상쇄해 가격 차이를 구한다.
 import type { PriceBook, ProductRef, Quote } from "../server/prices.ts";
+import type { ReceiptResult } from "../server/receipt.ts";
+import type { BestBuyCandidate } from "../server/bestbuy.ts";
 import { compare, type Snapshot } from "../engine/compare.ts";
 import { evaluateInWorker, loadAssessment, type Documents } from "./assessment.ts";
-import { modelKey, type Item, type Library, type SceneDocument } from "./document.ts";
+import { modelKey, type InventoryItem, type Item, type Library, type SceneDocument } from "./document.ts";
 import { interval, verdictText, type ResultView } from "./results.ts";
 
 type Scenario = SceneDocument["scenarios"][number];
@@ -46,7 +48,7 @@ export function calculateBudget(scenario: Scenario, items: readonly Item[], book
   }
   const current = new Map<string, Quote>();
   for (const q of book.quotes) {
-    if (q.purchasedAt) continue;
+    if (q.purchasedAt || q.provider === "bestbuy" && !(Date.parse(q.expiresAt ?? "") > Date.now())) continue;
     const key = priceKey(q.modelRef,q);
     const previous = current.get(key);
     if (!previous || Date.parse(previous.retrievedAt) <= Date.parse(q.retrievedAt)) current.set(key,q);
@@ -117,8 +119,8 @@ function purchaseName(row: Purchase) {
 function productName(ref: ProductRef) {
   return ref.seller + " / " + ref.productId + (ref.saleUnit > 1 ? " (" + ref.saleUnit + "개 묶음)" : "");
 }
-async function json<T>(path: string, body?: unknown): Promise<T> {
-  const response = await fetch(path, body === undefined ? {} : {method:"PUT",
+async function json<T>(path: string, body?: unknown, method = "PUT"): Promise<T> {
+  const response = await fetch(path, body === undefined ? {} : {method,
     headers:{"Content-Type":"application/json"},body:JSON.stringify(body)});
   if (!response.ok) throw new Error((await response.json()).message ?? "가격 정보를 읽을 수 없습니다.");
   return await response.json() as T;
@@ -141,8 +143,81 @@ function technicalValue(snapshot: Snapshot, row: number | null) {
 }
 
 type BudgetState = {doc: SceneDocument; id: string | null; view: ResultView | undefined};
+function receiptTable(area: HTMLElement, result: ReceiptResult, library: Library, save: (row: unknown) => Promise<void>) {
+  const kind = document.createElement("select");
+  kind.setAttribute("aria-label","문서 종류");
+  kind.append(new Option("영수증","receipt"),new Option("장바구니","cart"));
+  kind.value = result.kind;
+  const scroll = el("div","");
+  scroll.className = "receipt-table";
+  const table = document.createElement("table");
+  const head = table.createTHead().insertRow();
+  for (const caption of ["상품 · 판매처","수량 · 금액","날짜 · 모델","확인"]) head.append(el("th",caption));
+  const body = table.createTBody();
+  scroll.append(table);
+  area.replaceChildren(kind,scroll);
+  for (const [index,row] of result.rows.entries()) {
+    const tr = body.insertRow();
+    const identity = tr.insertCell(), amounts = tr.insertCell(), match = tr.insertCell(), actions = tr.insertCell();
+    function control(parent: HTMLElement, title: string, type: string, value: string) {
+      const label = el("label",title), field = document.createElement("input");
+      field.type = type; field.value = value;
+      label.append(field); parent.append(label);
+      return field;
+    }
+    const name = control(identity,"상품명","text",row.name ?? ""), seller = control(identity,"판매처","text",row.seller ?? "");
+    const qty = control(amounts,"수량","number",row.quantity?.toString() ?? "");
+    qty.min = "1"; qty.step = "1";
+    const dollars = (cents: number | null) => cents === null ? "" : (cents/100).toFixed(2);
+    const total = control(amounts,"행 합계","number",dollars(row.lineTotalCents));
+    const unit = control(amounts,"단가","number",dollars(row.unitPriceCents));
+    total.step = unit.step = "0.01"; total.min = unit.min = "0";
+    const currency = control(amounts,"통화","text",row.currency ?? "");
+    const date = control(match,"구매일 또는 관측일","date",row.date ?? "");
+    const model = document.createElement("select");
+    model.setAttribute("aria-label","인벤토리 모델");
+    const normalized = (s: string) => s.normalize("NFKC").toLowerCase().replace(/[^\p{L}\p{N}]/gu,"");
+    const product = normalized(row.name ?? "");
+    const ranked = library.models.map(m => {
+      const score = Math.max(0,...[m.name,m.modelId].map(normalized).filter(word => word && product.includes(word)).map(word => word.length));
+      return {m,score};
+    }).sort((a,b) => b.score-a.score);
+    model.add(new Option("모델 선택",""));
+    for (const {m,score} of ranked) model.add(new Option((score ? "후보 · " : "")+m.name+" / "+modelKey(m),modelKey(m)));
+    if (ranked[0]?.score && ranked[0].score !== ranked[1]?.score) model.selectedIndex = 1;
+    match.append(model);
+    const stock = document.createElement("select");
+    stock.setAttribute("aria-label","관측일 재고");
+    stock.append(new Option("재고 미확인","unknown"),new Option("구매 가능","in"),new Option("품절","out"));
+    stock.value = row.stock; stock.hidden = kind.value !== "cart";
+    kind.addEventListener("change",() => {stock.hidden = kind.value !== "cart";});
+    match.append(stock);
+    const inventory = control(actions,"인벤토리에도 추가","checkbox","");
+    const button = el("button","확인한 행 저장");
+    const notice = el("p",[...row.issues,...row.warnings].join(" · "));
+    notice.className = "issue"; notice.setAttribute("role","status"); actions.append(button,notice);
+    button.onclick = async () => {
+      const readCents = (field: HTMLInputElement) => field.value === "" ? null : Math.round(field.valueAsNumber*100);
+      if (!model.value || !qty.checkValidity() || !total.checkValidity() || !unit.checkValidity()) {
+        notice.textContent = "모델과 수량·센트 단위의 금액을 확인하세요."; return;
+      }
+      const entry = {kind:kind.value,importId:result.id+"-"+index,modelRef:model.value,inventory:inventory.checked,
+        name:name.value.trim(),seller:seller.value.trim(),quantity:qty.valueAsNumber,lineTotalCents:readCents(total),
+        unitPriceCents:readCents(unit),currency:currency.value.trim(),date:date.value,stock:stock.value};
+      tr.inert = true;
+      try {
+        await save(entry);
+        kind.disabled = true;
+        for (const field of tr.querySelectorAll("input,select,button")) field.setAttribute("disabled","");
+        notice.textContent = "저장됨 · "+entry.modelRef;
+      } catch (error) { notice.textContent = error instanceof Error ? error.message : String(error); }
+      finally { tr.inert = false; }
+    };
+  }
+}
 export function mountBudget(root: HTMLElement, library: Library, documents: Documents,
-  state: () => BudgetState, edit: (next: SceneDocument, scenarioId: string) => boolean, inspectConnection: (id: string) => void) {
+  state: () => BudgetState, edit: (next: SceneDocument, scenarioId: string) => boolean, inspectConnection: (id: string) => void,
+  addInventory: (items: InventoryItem[]) => void) {
   const open = el("button","구매 예산");
   open.type = "button";
   root.querySelector(".view-controls")!.append(open);
@@ -160,7 +235,11 @@ export function mountBudget(root: HTMLElement, library: Library, documents: Docu
         .budget-dialog form {display:flex;gap:8px;flex-wrap:wrap;align-items:end;margin:8px 0}.budget-dialog form label {flex:1 1 135px}
         .budget-dialog ul {padding-left:1.3rem}.budget-dialog li {margin:4px 0;overflow-wrap:anywhere}.budget-dialog li button {margin-left:.5rem}
         .budget-dialog .old {color:#566663}.budget-dialog .budget-note {color:#46625c}.budget-dialog .compare-result {border-top:1px solid #cdd9d5;padding-top:6px}
+        .budget-dialog [hidden] {display:none}
         .budget-dialog .compare-result:empty,.budget-dialog [role=status]:empty {display:none}.budget-dialog [role=status] {color:#164c45}
+        .budget-dialog .receipt-table {overflow:auto}.receipt-table table {border-collapse:collapse;text-align:left}
+        .receipt-table :is(td,th) {padding:5px;vertical-align:top;border-bottom:1px solid #dae2df}.receipt-table input {width:8em}
+        .receipt-table select {max-width:13em}.receipt-table .issue {color:#8d401e}.budget-dialog .branding img {max-width:94px;max-height:38px;vertical-align:middle}
       </style>
       <header><h2>구매 예산</h2><button type="button" class="dismiss">닫기</button></header>
       <div class="creator-body"><section class="totals" aria-live="polite"></section>
@@ -170,6 +249,17 @@ export function mountBudget(root: HTMLElement, library: Library, documents: Docu
         <label>관련 결합 형태<select name="need"></select></label><button>목록에 추가</button></form>
         <form class="cap"><label>상품 예산 상한 (USD)<input name="limit" type="number" min="0" step="0.01"></label><button>상한 저장</button></form>
       </details><div class="needs"></div>
+      <details><summary>영수증 · 장바구니 가져오기</summary>
+        <p class="receipt-config"></p><form class="receipt"><label>이미지 한 장<input name="photo" type="file" accept="image/png,image/jpeg,image/webp" required></label>
+        <label><span><input name="consent" type="checkbox" required> 선택한 이미지를 Claude로 보내는 데 동의합니다.</span></label>
+        <button>이미지 읽기</button></form><div class="review"></div><ul class="history"></ul>
+      </details>
+      <details class="bestbuy-panel"><summary>Best Buy 상품 검색</summary><p class="bestbuy-config"></p>
+        <form class="search"><label>연결할 모델<select name="bbModel" required></select></label><label>검색할 상품명<input name="query" maxlength="160" required></label>
+        <button>Best Buy 검색</button></form><form class="offer" hidden><label>검색된 상품<select name="sku" required></select></label>
+        <label>판매 단위 (낱개 수)<input type="number" name="pack" min="1" step="1" value="1" required></label>
+        <a class="listing" target="_blank" rel="noreferrer">상품 페이지</a><button>선택한 견적 사용</button></form></details>
+      <div class="branding" hidden></div>
       <details><summary>수동 견적 입력</summary>
         <form class="quote"><label>견적 모델<select name="modelRef" required></select></label>
         <label>판매처<input name="seller" required></label><label>상품 번호<input name="productId" required></label>
@@ -198,7 +288,7 @@ export function mountBudget(root: HTMLElement, library: Library, documents: Docu
     get(".dismiss").onclick = () => dialog.close();
     root.append(dialog);
     dialog.showModal();
-    dialog.onclose = () => { refresh = undefined; dialog.remove(); };
+    dialog.onclose = () => { refresh = undefined; clearTimeout(expiryTimer); document.removeEventListener("visibilitychange",expire); dialog.remove(); };
     let book: PriceBook | undefined;
     let choices: Purchase[] = [];
     let requirements: NonNullable<Purchase["need"]>[] = [];
@@ -212,12 +302,46 @@ export function mountBudget(root: HTMLElement, library: Library, documents: Docu
     let comparisonVersion = 0;
     const comparison = get(".compare-result");
     function invalidateComparison() { comparisonVersion++; comparison.replaceChildren(); }
+    let expiryTimer: ReturnType<typeof setTimeout> | undefined;
+    let found: BestBuyCandidate[] = [];
+    function branding() {
+      const area = get(".branding");
+      const visible = !!book?.providers?.bestbuy && (get<HTMLDetailsElement>(".bestbuy-panel").open || !!book.quotes.some(q => q.provider === "bestbuy"));
+      area.hidden = !visible;
+      if (visible && !area.childElementCount) {
+        const link = el("a","");
+        link.href = "https://developer.bestbuy.com"; link.target = "_blank"; link.rel = "noreferrer";
+        const logo = document.createElement("img");
+        logo.alt = "Best Buy Developer API"; logo.referrerPolicy = "no-referrer";
+        logo.src = "https://developer.bestbuy.com/images/bestbuy-logo.png";
+        link.append(logo); area.append(link," · Best Buy Products API");
+      }
+    }
+    function scheduleExpiry() {
+      clearTimeout(expiryTimer);
+      const deadlines = [...found,...book?.quotes ?? []].flatMap(row => row.expiresAt ? [Date.parse(row.expiresAt)] : []);
+      if (dialog.open && deadlines.length) expiryTimer = setTimeout(expire,Math.max(0,Math.min(...deadlines)-Date.now()));
+    }
+    function expire() {
+      if (!book || !dialog.open) return;
+      const quotes = book.quotes.filter(q => !q.expiresAt || Date.parse(q.expiresAt)>Date.now());
+      if (found.some(p => Date.parse(p.expiresAt)<=Date.now())) showProducts([]);
+      if (quotes.length !== book.quotes.length) {
+        const compared = comparison.hasChildNodes();
+        displayBook({...book,quotes});
+        if (compared) comparison.textContent = "견적 만료 · 두 구성을 다시 비교하세요.";
+      }
+      scheduleExpiry();
+    }
+    document.addEventListener("visibilitychange",expire);
+    get<HTMLDetailsElement>(".bestbuy-panel").ontoggle = branding;
 
     function quoteDetail(q: Quote) {
       const old = Date.now() - Date.parse(q.retrievedAt) >= STALE_DAYS * 86400000;
       const detail = el("small", [q.seller + " / " + q.productId, usd(q.unitPriceCents) + " / " + q.saleUnit + "개",
         q.stock === "in" ? "재고 있음" : q.stock === "out" ? "품절" : "재고 미확인", q.source,
-        new Date(q.retrievedAt).toLocaleString("ko-KR"), old && "오래된 견적", q.coupon, q.discountCents && "적용 할인 " + usd(q.discountCents)].filter(Boolean).join(" · "));
+        q.provider === "cart" ? q.retrievedAt.slice(0,10)+" 관측" : new Date(q.retrievedAt).toLocaleString("ko-KR"),
+        old && "오래된 견적", q.coupon, q.discountCents && "적용 할인 " + usd(q.discountCents)].filter(Boolean).join(" · "));
       if (old) detail.className = "old";
       if (q.url) {
         const link = el("a","상품 링크");
@@ -246,7 +370,8 @@ export function mountBudget(root: HTMLElement, library: Library, documents: Docu
       for (const i of library.inventory) if (i.state === "owned" && !doc.items.some(item => item.instanceId === i.instanceId))
         add({ownedInstanceId:i.instanceId,modelRef:modelKey(i)},"보유 · " + (i.alias || i.instanceId) + " / " + i.instanceId);
       for (const model of library.models) add({modelRef:modelKey(model),quantity:1},"모델 · " + model.name + " / " + modelKey(model));
-      for (const q of book!.quotes) add({modelRef:q.modelRef,product:{seller:q.seller,productId:q.productId,saleUnit:q.saleUnit},quantity:1},"상품 · " + productName(q));
+      for (const q of book!.quotes) if (q.provider !== "bestbuy")
+        add({modelRef:q.modelRef,product:{seller:q.seller,productId:q.productId,saleUnit:q.saleUnit},quantity:1},"상품 · " + productName(q));
       const retained = choices.findIndex(row => JSON.stringify(row) === previous);
       if (retained >= 0) picker.selectedIndex = retained;
       const quantity = input("quantity");
@@ -332,13 +457,44 @@ export function mountBudget(root: HTMLElement, library: Library, documents: Docu
       showNeeds(scenario);
     }
     function displayBook(next: PriceBook) {
-      book = next;
+      if (!dialog.open) return;
+      book = {...next,quotes:next.quotes.filter(q => !q.expiresAt || Date.parse(q.expiresAt)>Date.now())};
       invalidateComparison();
       get<HTMLTextAreaElement>("[name=sellers]").value = book.preferredSellers.join("\n");
       get(".quotes").replaceChildren(...book.quotes.map(q => {
         const li = el("li",q.modelRef + " · ");
         li.append(quoteDetail(q)); return li;
       }));
+      const inventoryIds = new Set(library.inventory.map(i => i.instanceId));
+      get(".history").replaceChildren(...(book.observations ?? []).map(q => {
+        const item = el("li",[q.purchasedAt ? q.purchasedAt+" 구매" : q.retrievedAt.slice(0,10)+" 장바구니",q.seller,q.name+" × "+q.quantity,
+          "행 합계 "+usd(q.lineTotalCents!),q.modelRef].join(" · "));
+        if (q.quantity! <= (next.providers?.receipt.maxInventoryItems ?? 0)
+          && Array.from({length:q.quantity!},(_,i) => q.provider+"-"+q.importId+"-"+(i+1)).some(id => !inventoryIds.has(id))) {
+          const add = el("button","인벤토리에 추가");
+          add.onclick = async () => {
+            add.disabled = true;
+            try {
+              await confirmPurchase({kind:q.provider,importId:q.importId,modelRef:q.modelRef,name:q.name,seller:q.seller,
+                quantity:q.quantity,unitPriceCents:q.unitPriceCents,lineTotalCents:q.lineTotalCents,currency:q.currency,
+                date:q.purchasedAt ?? q.retrievedAt.slice(0,10),stock:q.stock,inventory:true});
+            } catch (error) {report(error); add.disabled = false;}
+          };
+          item.append(add);
+        }
+        return item;
+      }));
+      const config = book.providers?.receipt;
+      get(".receipt-config").textContent = config?.enabled
+        ? "PNG · JPEG · WebP "+(config.imageBytes/1048576)+" MiB 이하. 한 장 최대 US$"+config.budgetUsd.toFixed(2)+"."
+        : "ANTHROPIC_API_KEY를 설정하면 이미지를 읽을 수 있습니다.";
+      get<HTMLFormElement>(".receipt").inert = !config?.enabled;
+      get<HTMLButtonElement>(".receipt button").disabled = !config?.enabled;
+      get(".bestbuy-config").textContent = book.providers?.bestbuy ? "미국 온라인 판매가 · USD" : "BESTBUY_API_KEY를 설정하면 상품을 검색할 수 있습니다.";
+      get<HTMLFormElement>(".search").inert = !book.providers?.bestbuy;
+      get<HTMLButtonElement>(".search button").disabled = !book.providers?.bestbuy;
+      branding();
+      scheduleExpiry();
       render();
     }
     function submit(name: string, action: () => void | Promise<void>) {
@@ -382,6 +538,63 @@ export function mountBudget(root: HTMLElement, library: Library, documents: Docu
       status.textContent = "판매처 우선순위를 저장했습니다.";
     });
     select("modelRef").replaceChildren(...library.models.map(m => new Option(m.name + " / " + modelKey(m),modelKey(m))));
+    select("bbModel").replaceChildren(...library.models.map(m => new Option(m.name+" / "+modelKey(m),modelKey(m))));
+    const photo = input("photo"), consent = input("consent");
+    photo.onchange = () => {consent.checked = false; get(".review").replaceChildren();};
+    async function confirmPurchase(row: unknown) {
+      const saved = await json<{book:PriceBook;items:InventoryItem[]}>("/api/prices/confirm",row,"POST");
+      if (!root.contains(open)) return;
+      if (saved.items.length) addInventory(saved.items);
+      displayBook(saved.book);
+    }
+    submit("receipt",async () => {
+      const file = photo.files?.[0], config = book?.providers?.receipt;
+      if (!file || !config?.enabled || !consent.checked || file.size > config.imageBytes ||
+        !["image/png","image/jpeg","image/webp"].includes(file.type)) throw new Error("전송할 이미지의 형식·크기와 동의를 확인하세요.");
+      const data = await new Promise<string>((resolve,reject) => {
+        const reader = new FileReader();
+        reader.onload = () => resolve(String(reader.result).split(",")[1]!);
+        reader.onerror = () => reject(new Error("파일을 읽을 수 없습니다."));
+        reader.readAsDataURL(file);
+      });
+      if (!dialog.open || !consent.checked || file !== photo.files?.[0]) return;
+      consent.checked = false;
+      status.textContent = "선택한 이미지에서 상품 행을 읽는 중…";
+      const result = await json<ReceiptResult>("/api/prices/receipt",{consent:true,type:file.type,data},"POST");
+      if (!dialog.open || file !== photo.files?.[0]) return;
+      receiptTable(get(".review"),result,library,confirmPurchase);
+      status.textContent = "이미지 읽기 비용 US$"+result.spentUsd.toFixed(4);
+    });
+    function showProducts(rows: BestBuyCandidate[]) {
+      found = rows.filter(p => Date.parse(p.expiresAt)>Date.now());
+      select("sku").replaceChildren(...found.map(p => new Option(p.name+" / "+p.productId,p.productId)));
+      get(".offer").hidden = !found.length;
+      linkListing();
+      scheduleExpiry();
+    }
+    function linkListing() {
+      const link = get<HTMLAnchorElement>(".listing");
+      const entry = found.find(p => p.productId === select("sku").value);
+      if (entry) link.href = entry.url;
+      else link.removeAttribute("href");
+    }
+    select("sku").onchange = linkListing;
+    submit("search",async () => {
+      showProducts([]);
+      const modelRef = select("bbModel").value;
+      const rows = await json<BestBuyCandidate[]>("/api/prices/bestbuy",{action:"search",modelRef,query:text("query")},"POST");
+      if (!dialog.open || select("bbModel").value !== modelRef) return;
+      showProducts(rows);
+      status.textContent = "검색된 상품 "+found.length+"개";
+    });
+    select("bbModel").onchange = () => showProducts([]);
+    submit("offer",async () => {
+      const chosen = found.find(p => p.productId === select("sku").value && Date.parse(p.expiresAt)>Date.now());
+      if (!chosen) throw new Error("상품을 다시 검색하세요.");
+      displayBook(await json<PriceBook>("/api/prices/bestbuy",{action:"quote",modelRef:select("bbModel").value,
+        product:{seller:chosen.seller,productId:chosen.productId,saleUnit:input("pack").valueAsNumber}},"POST"));
+      status.textContent = "선택한 모델에 Best Buy 견적을 적용했습니다.";
+    });
     function selectScenarios(doc: SceneDocument) {
       scenarioSelect.replaceChildren(...doc.scenarios.map(s => new Option(s.id)));
       if (doc.scenarios.some(s => s.id === state().id)) scenarioSelect.value = state().id!;
@@ -416,6 +629,7 @@ export function mountBudget(root: HTMLElement, library: Library, documents: Docu
       const a = calculateBudget(left,before.items,book!), b = calculateBudget(right,after.items,book!);
       const [old,next] = await Promise.all([comparisonSnapshot(before,left,documents),
         comparisonSnapshot(after,right,sceneSelect.value ? otherDocuments : documents)]);
+      expire();
       if (version !== comparisonVersion || !dialog.open) return;
       comparison.replaceChildren(el("h3","가격 차이 " + difference(compareBudgets(a,b))),
         el("p",before.sceneId + " / " + left.id + " → " + after.sceneId + " / " + right.id));

@@ -18,7 +18,7 @@ const FORMATS = ["image/png", "image/jpeg", "image/webp"];
 const storedName = /^([a-f0-9]{64})(\.txt)?$/;
 const removal = z.strictObject({ ids: z.array(z.string().regex(/^[a-f0-9]{64}$/)).nonempty() });
 
-function imageType(bytes: Buffer) {
+export function imageType(bytes: Buffer) {
   if (bytes.length >= 45 && bytes.subarray(0, 8).equals(PNG) && bytes.readUInt32BE(8) === 13
     && bytes.toString("ascii", 12, 16) === "IHDR" && bytes.toString("ascii", bytes.length - 8, bytes.length - 4) === "IEND") return "image/png";
   if (bytes.length >= 5 && bytes.subarray(0, 3).equals(JPEG) && bytes.at(-2) === 255 && bytes.at(-1) === 217) return "image/jpeg";

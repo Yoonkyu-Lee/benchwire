@@ -1,0 +1,8 @@
+{
+  "kind": "receipt",
+  "rows": [
+    {"name":"연습 케이블", "seller":"연습 상점", "quantity":2, "lineTotalCents":3000, "unitPriceCents":null, "date":"2026-01-15", "currency":"USD"},
+    {"name":"모형 허브", "seller":"연습 상점", "quantity":2, "lineTotalCents":3000, "unitPriceCents":3000, "date":"2026-01-15", "currency":"USD"},
+    {"name":"연습 연결선", "seller":"연습 상점", "quantity":10, "lineTotalCents":5000, "unitPriceCents":500, "date":null, "currency":"USD"}
+  ]
+}

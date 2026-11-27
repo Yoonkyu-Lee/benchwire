@@ -39,7 +39,7 @@ node fixtures/demo.ts compare fixtures/compare/before.json fixtures/compare/afte
 | `typescript` (dev) | 형 검사만 한다. 실행은 Node가 형을 지워서 한다 |
 | `@types/node` (dev) | Node 내장 모듈의 형 |
 | `zod` | 아이템·장면 파일과 영역별 입력을 로드할 때 검증한다 |
-| `@anthropic-ai/sdk` | 로컬 서버에서 Claude의 공개 자료 조사와 구조화 출력을 요청한다 |
+| `@anthropic-ai/sdk` | 로컬 서버에서 공개 자료 조사와 사용자가 선택한 영수증·장바구니 이미지의 구조화 출력을 요청한다 |
 | `vite` (dev) | 브라우저 작업대를 개발 중에 띄우고 배포할 정적 파일을 빌드한다 |
 | `playwright` (dev) | 설치된 Edge에서 캔버스 조작과 프레임 시간을 검증한다 |
 
@@ -90,10 +90,16 @@ node fixtures/demo.ts compare fixtures/compare/before.json fixtures/compare/afte
 
 ### 가격 provider
 
+작업대의 **구매 예산**에서 판매처와 상품을 골라 USD 상품 소계를 비교한다. 수동 견적에는 키가 필요 없다. 아래 환경 변수를 저장소 루트의 `.env`에 넣고 로컬 서버를 다시 시작하면 해당 공급자가 켜진다.
+
+- **영수증 · 장바구니**는 `ANTHROPIC_API_KEY`를 쓴다. PNG, JPEG, WebP 한 장(최대 2 MiB)을 선택하고 Claude 전송에 동의한 뒤 **이미지 읽기**를 누른다. 한 장의 비용 상한은 US$0.15다. 화면에서 인식한 행의 판매처·수량·단가·합계·날짜와 모델을 고친 뒤 원하는 행만 저장한다. 구매일이 있는 영수증은 과거 가격으로 보인다. 장바구니는 확인한 관측일의 판매가로 예산에 참여한다. 인벤토리 추가를 선택하면 영수증의 수량은 보유품으로, 장바구니의 수량은 후보로 들어간다.
+- 읽기 한 건의 시각·모델·토큰 수·비용은 `userdata/receipt-usage.jsonl`에 기록한다. 확인한 행은 `userdata/prices.json`에 저장한다. 원본 이미지는 선택한 한 번의 읽기에만 사용한다.
+- **Best Buy 상품 검색**은 `BESTBUY_API_KEY`를 쓴다. 모델을 선택해 검색하고 실제 판매 상품과 묶음 수를 확인한 뒤 **선택한 견적 사용**을 누른다. 예산 패널은 API 검색 또는 견적이 보이는 위치에 공식 로고와 **Best Buy Products API** 출처를 표시하고, 견적에서 원래 상품 페이지로 연결한다. 로고는 Best Buy가 제공하는 이미지를 불러온다. 선택한 견적은 서버 메모리에만 보관한다. 조회 후 72시간이 지나거나 서버를 다시 시작하면 다시 검색해 선택할 수 있다. [Products API 문서](https://bestbuyapis.github.io/api-documentation/#products-api) · [공식 표시·캐싱 약관](https://developer.bestbuy.com/legal)
+
 | 후보 | 조건과 비용 | 판단 |
 |---|---|---|
-| 수동 입력 · 스크린샷 파싱 | 무료(파싱에 Claude 호출 비용) | 가장 먼저 만든다. 늘 동작하는 기본 |
-| [Best Buy API](https://bestbuyapis.github.io/api-documentation/) | 키 발급(개인 발급 가능 여부는 미확인), 하루 50,000회 · 초당 5회, 데이터 보관 최대 72시간, 출처 표시와 로고 의무. [약관](https://developer.bestbuy.com/legal) | 첫 공식 API 후보. 72시간이 지난 견적은 버린다 |
+| 수동 입력 · 스크린샷 파싱 | 수동 무료, 이미지 읽기는 Claude 사용 비용 | 키가 없을 때는 수동 견적 사용 |
+| [Best Buy API](https://bestbuyapis.github.io/api-documentation/) | 키 발급(개인 발급 가능 여부는 미확인), 하루 50,000회 · 초당 5회, 데이터 보관 최대 72시간, 출처 표시와 로고 의무. [약관](https://developer.bestbuy.com/legal) | 사용자가 키를 넣고 선택한 미국 온라인 판매 상품에 적용 |
 | [Keepa API](https://keepa.com/api-docs/plans-tokens.html) (공식 MCP 서버 `https://keepa.com/mcp`) | 월 €49부터, 쓰지 않은 토큰은 60분 뒤 사라짐. [MCP 문서](https://keepa.com/api-docs/mcp.html) | Amazon 현재가와 이력. 유료라 승인 뒤에만 |
 | [Amazon Creators API](https://affiliate-program.amazon.com/creatorsapi/docs/) | Associates 계정, 최근 30일 적격 판매 10건, 주 계정 소유자만 등록. PA-API 5.0은 이미 403을 돌려준다 | 새 앱은 조건을 못 채운다. 버림 |
 | 스크래핑 MCP ([Playwright MCP](https://github.com/microsoft/playwright-mcp), [Bright Data MCP](https://github.com/brightdata/brightdata-mcp)) | 쇼핑몰 약관 위반 위험 | 선택 플러그인, 기본 비활성. 아래 [약관 위험](#외부-서비스와-약관) |
