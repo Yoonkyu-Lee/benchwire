@@ -9,7 +9,11 @@ export interface Claim {
   conflictGroup?: number; inferredFrom?: string;
   reference?: number | null; domain: string; field: string; condition: string; value: Value; unit: string; confidence: Confidence;
 }
+// 순서가 같은 주장끼리는 앞선 행이 이긴다. 같은 소유자의 행 번호를 작은 번호부터 잇는다.
+interface ClaimIndex { first: Record<Owner, number[]>; next: number[] }
 export interface Scene {
+  // 평가 입구(evaluationScene)에서 만든다. 없으면 effectiveClaim이 주장 표 전체를 훑는다.
+  claimIndex?: ClaimIndex;
   id: string;
   models: { id: string; revision: string; kind: string; name: string; brand: string; category: string }[];
   items: { id: string; model: number; alias: string; state: string }[];
@@ -31,16 +35,37 @@ export interface Scene {
   claimSources: { claim: number; source: number; candidate?: { value: Exclude<Value, null>; confidence: Confidence; inferredFrom?: string } }[];
 }
 
+function buildClaimIndex(claims: readonly Claim[]): ClaimIndex {
+  const first: ClaimIndex["first"] = { item: [], port: [], interface: [], edge: [], resource: [],
+    mate: [], connector: [], connection: [], workload: [] };
+  const next = new Array<number>(claims.length);
+  for (let row = claims.length - 1; row >= 0; row--) {
+    const { ownerKind, owner } = claims[row]!;
+    const heads = first[ownerKind];
+    next[row] = heads[owner] ?? -1;
+    heads[owner] = row;
+  }
+  return { first, next };
+}
+
+// 평가마다 그 장면의 주장 표로 새로 만든다. 주장 수에 비례하는 비용이라 평가 시간에 견줘 작다.
+export function evaluationScene(scene: Scene): Scene {
+  return { ...scene, claimIndex: buildClaimIndex(scene.claims) };
+}
+
 // 조건이 맞는 주장을 먼저 쓰고 같은 조건에서는 개인 검증을 우선한다.
 export function effectiveClaim(scene: Scene, ownerKind: Owner, owner: number, domain: string, field: string, condition = ""): number | undefined {
   let best: number | undefined;
   let rank = -1;
-  scene.claims.forEach((c, row) => {
-    if (c.ownerKind !== ownerKind || c.owner !== owner || c.domain !== domain || c.field !== field) return;
-    if (c.condition && c.condition !== condition) return;
+  const index = scene.claimIndex;
+  const first = index ? index.first[ownerKind][owner] ?? -1 : 0;
+  for (let row = first; row >= 0 && row < scene.claims.length; row = index ? index.next[row]! : row + 1) {
+    const c = scene.claims[row]!;
+    if (c.ownerKind !== ownerKind || c.owner !== owner || c.domain !== domain || c.field !== field) continue;
+    if (c.condition && c.condition !== condition) continue;
     const priority = (c.condition === condition ? 2 : 0) + (c.scope === "personal" ? 1 : 0);
     if (priority > rank) { best = row; rank = priority; }
-  });
+  }
   return best;
 }
 

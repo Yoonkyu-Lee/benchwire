@@ -13,6 +13,7 @@ import { uncertainPreferences } from "./preference.ts";
 import { recordUsage, type GrossLimits } from "./resource-usage.ts";
 import { reserveStanding } from "./standing.ts";
 import { combinations, compareScores, MAX_COMBINATIONS, planModes, profileGroups, reservationAlternatives, type Candidate, type Plan } from "./selection.ts";
+import { evaluationScene } from "./scene.ts";
 import { resolveUnknowns } from "./unknown.ts";
 
 // 내부 자원이 쓰이는 간선의 운반 단위로 공정 몫을 비교한다. 실제 점유 비용은 consume의 계수를 따른다.
@@ -205,7 +206,8 @@ function render(scene: Scene, plugins: readonly DomainPlugin[], result: Results,
   return result;
 }
 
-function evaluatePlans(scene: Scene, plugins: readonly DomainPlugin[], scenario?: number) {
+function evaluatePlans(input: Scene, plugins: readonly DomainPlugin[], scenario?: number) {
+  const scene = evaluationScene(input);
   const prepared = prepare(scene,plugins), { scenarios, routes } = prepared;
   const primary = scenarios.map(plans => plans[0]!);
   function solve(selected: Plan[], explicit: boolean, tables: Results) {
