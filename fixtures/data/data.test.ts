@@ -130,6 +130,36 @@ test("T4 USB4 USB3·PCIe가 같은 방향 28 Gbps를 MB/s당 0.008로 소비하�
   }
 });
 
+test("T4 USB4 미지원 케이블이나 공통 USB4 모드가 없는 포트는 방향별 터널 예산을 0으로 낸다", () => {
+  for (const [allowed, modes] of [[false, "Gen 3x2"], [true, "Gen 2x2"]] as const) {
+    const scene = fixture();
+    const cable = scene.claims.findIndex(c => c.field === "cableUsb4");
+    scene.claims[cable]!.value = allowed;
+    scene.claims.find(c => c.field === "cableDataGbps")!.value = 40;
+    scene.claims.find(c => c.field === "throughput")!.value = 2_500;
+    const ends = scene.claims.flatMap((c, row) => c.ownerKind === "interface" && c.field === "modes" &&
+      scene.interfaces[c.owner]!.protocol === "USB4" ? [row] : []);
+    scene.claims[ends[0]!]!.value = "Gen 3x2";
+    scene.claims[ends[1]!]!.value = modes;
+
+    const { result, work: [w] } = run(scene);
+    assert.deepEqual([w!.verdict, w!.together.value], ["conditional", 2_200]);
+    const pools = result.linkResources.filter(r => r.pool?.id === "usb4-tunnel");
+    assert.deepEqual(pools.map(r => [r.direction, r.pool!.scope, r.pool!.unit, r.pool!.limit]), [
+      ["forward", "direction", "Gbps", 0], ["reverse", "direction", "Gbps", 0],
+    ]);
+    for (const { pool } of pools) {
+      assert.equal(pool!.bounds, undefined);
+      for (const input of [cable, ...ends]) {
+        assert.ok(pool!.inputs.includes(input));
+        assert.ok(scene.claimSources.some(s => s.claim === input));
+      }
+      for (const spec of ["usb4-link", "usb4-tunnels", "usb-c-data"]) assert.ok(pool!.specs.includes(spec));
+    }
+    assert.ok(result.options.every(o => o.pool?.id !== "usb4-tunnel"));
+  }
+});
+
 test("T4 USB4 가용 터널 예산이 미확인이면 규격과 알려진 상대 예산으로 상한을 제한한다", () => {
   const scene = fixture();
   scene.claims.find(c => c.field === "cableDataGbps")!.value = 40;
@@ -159,6 +189,10 @@ test("T4 USB4 통과 여부가 미확인이면 일반 USB 3.2로 연결될 때�
   assert.deepEqual([w!.verdict, w!.together.low, w!.together.high], ["unknown", 0, 2_200]);
   assert.ok(result.quests.some(q => q.outcome === w!.row && q.claim === compatibility));
   assert.ok(w!.specs.includes("usb4-link") && w!.specs.includes("usb3-estimate"));
+  const pools = result.linkResources.filter(r => r.pool?.id === "usb4-tunnel");
+  assert.deepEqual(pools.map(r => [r.direction, r.pool!.limit, r.pool!.bounds]), [
+    ["forward", null, { low: 0, high: 1 }], ["reverse", null, { low: 0, high: 1 }],
+  ]);
 });
 
 test("T2 USB 모드 저장 스키마는 중복 또는 모르는 모드를 거절하고 명시적 null은 받는다", () => {

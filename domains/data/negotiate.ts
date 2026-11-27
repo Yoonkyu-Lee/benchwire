@@ -59,21 +59,18 @@ export function usbServices({ scene, connection, ports }: Link): { options: Opti
     return allowed === false ? [0] : allowed === true ? [rating] : [rating, null];
   });
   const fabric = modeRange(USB4_LINK_MODES, fabricModes, fabricRates);
-  const pools: Pool[] = [];
+  const caps = fabric.possible ? fabricEnds.map(row => read("interface", row, "tunnelGbps") as number | null) : [];
+  const tunnelHigh = Math.min(fabric.possible?.payloadGbps ?? 0, ...caps.map(cap => cap ?? Infinity));
+  const known = tunnelHigh === 0 || fabric.possible === fabric.confirmed && !caps.includes(null);
+  const specs = [USB4_LINK, USB4_TUNNELS, CABLE_DATA];
+  const pools: Pool[] = [{ id: TUNNEL_POOL, scope: "direction", unit: "Gbps", limit: known ? tunnelHigh : null,
+    ...(known ? {} : { bounds: { low: 0, high: tunnelHigh } }), inputs: [...inputs], specs,
+    rule: fabric.possible ? `USB4 ${fabric.possible.mode} 방향별 공용 터널 예산 ${known ? tunnelHigh : "0–" + tunnelHigh} Gbps`
+      : "양 끝과 중간 부품에서 함께 쓸 USB4 모드가 없어 방향별 공용 터널 예산은 0 Gbps" }];
   const options: Option[] = [];
   let tunneledBulk: Option | undefined;
-  let tunnelBound = 0;
 
   if (fabric.possible) {
-    const caps = fabricEnds.map(row => read("interface", row, "tunnelGbps") as number | null);
-    const high = Math.min(fabric.possible.payloadGbps, ...caps.map(cap => cap ?? Infinity));
-    const known = high === 0 || fabric.possible === fabric.confirmed && !caps.includes(null);
-    const specs = [USB4_LINK, USB4_TUNNELS, CABLE_DATA];
-    const pool: Pool = { id: TUNNEL_POOL, scope: "direction", unit: "Gbps", limit: known ? high : null,
-      ...(known ? {} : { bounds: { low: 0, high } }), inputs: [...inputs], specs,
-      rule: `USB4 ${fabric.possible.mode} 방향별 공용 터널 예산 ${known ? high : "0–" + high} Gbps` };
-    pools.push(pool);
-    tunnelBound = high / GIGABITS_PER_MEGABYTE;
     const usb3 = modeRange(USB_3_2_PROTOCOL_ESTIMATES, modes(fabricEnds, "usb3Modes"), []);
     const pcie = fabricEnds.map(row => read("interface", row, "pcie"));
     const poolRef = { domain: DATA, id: TUNNEL_POOL, perUnit: GIGABITS_PER_MEGABYTE };
@@ -96,6 +93,7 @@ export function usbServices({ scene, connection, ports }: Link): { options: Opti
   const usb2 = native.possible === highSpeed;
   if (native.possible && (tunneledBulk?.verdict === "unknown" || !usb2 && fabric.possible && !fabric.confirmed)) {
     // 링크의 설정을 확정할 수 없어 공용 예산이 다른 대안들을 한 범위로 보존한다.
+    const tunnelBound = tunnelHigh / GIGABITS_PER_MEGABYTE;
     const tunnel = Math.min(tunnelBound, tunneledBulk?.bounds?.high ?? tunneledBulk?.limit ?? 0);
     const high = Math.max(native.possible.approxBestCaseMBPerSecond, tunnel);
     options.push({ mode: BULK, unit: MB_PER_SECOND, verdict: "unknown", condition: "", limit: null,

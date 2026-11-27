@@ -26,14 +26,16 @@ function inspect(scene: Scene, result = evaluate(scene, plugins)) {
       name: scene.connections[s.row]!.id, direction: s.direction, carrier: s.carrier, row: s.option, option: result.options[s.option]!,
     }] : []);
     const reasons = result.reasons.filter(r => r.outcome === row);
-    for (const stage of ["physical", "negotiate", "path", "allocate", "judge"])
+    const stages = ["physical", "negotiate", "path", "judge"];
+    if (result.paths[outcome.path]!.verdict !== "impossible") stages.push("allocate");
+    for (const stage of stages)
       assert.ok(reasons.some(r => r.stage === stage), id + " · " + stage);
     const inputs = result.reasonInputs.filter(r => result.reasons[r.reason]!.outcome === row).map(r => r.claim);
     const specs = result.reasonSpecs.filter(r => result.reasons[r.reason]!.outcome === row).map(r => result.specSources[r.source]!.id);
     const together = result.metrics.find(m => m.outcome === row && m.kind === "together")!;
     const solo = result.metrics.find(m => m.outcome === row && m.kind === "solo")!;
     const demand = result.paths[outcome.path]!.demand;
-    return { workload, scenarioRow, outcome, steps, links, reasons, inputs, specs, together, solo, demand };
+    return { row, workload, scenarioRow, outcome, steps, links, reasons, inputs, specs, together, solo, demand };
   }
   function cited(inputs: number[], field: string, value: unknown, locator: string) {
     return inputs.some(row => {
@@ -131,6 +133,46 @@ test("T4 동시 모드 선택이 B만 DSC로 바꿔 같은 방향 SSD와 NIC에 
   assert.deepEqual([receive.outcome.verdict, receive.together.value], ["ok", 100]);
   const ethernet = work("two-video", "ethernet");
   assert.deepEqual([ethernet.outcome.verdict, ethernet.together.value, ethernet.together.unit], ["ok", 800, "Mbps"]);
+});
+
+test("T4 USB4 미지원 업스트림 케이블은 두 영상의 DP 터널을 막고 케이블 주장을 근거에 남긴다", () => {
+  const scene = fixture("scene");
+  const upstream = scene.items.findIndex(i => i.id === "upstream");
+  const cable = effectiveClaim(scene, "item", upstream, "data", "cableUsb4")!;
+  scene.claims[cable]!.value = false;
+
+  const { result, work, cited } = inspect(scene);
+  for (const id of ["video-a", "video-b"]) {
+    const w = work("two-video", id);
+    assert.deepEqual([w.outcome.verdict, w.solo.value, w.together.value, w.together.unit], ["impossible", 0, 0, "Gbps"]);
+    assert.deepEqual(result.possibleVerdicts.filter(v => v.outcome === w.row).map(v => v.verdict), ["impossible"]);
+    const pool = w.links.find(l => l.name === "usb4-upstream")!.option.poolResource;
+    assert.ok(w.reasons.some(r => r.stage === "negotiate" && r.targetKind === "linkResource" && r.targetRow === pool));
+    assert.ok(cited(w.inputs, "cableUsb4", false, "fixture:t4/usb4-cable"));
+    assert.ok(cited(w.inputs, "modes", "Gen 3x2", "fixture:t4/host"));
+    assert.ok(cited(w.inputs, "modes", "Gen 3x2", "fixture:t4/dock"));
+    assert.ok(w.specs.includes("usb4-link") && w.specs.includes("usb4-tunnels") && w.specs.includes("usb-c-data"));
+  }
+});
+
+test("T4 업스트림 케이블의 USB4 지원이 미확인이면 두 영상의 가능 범위와 확인 퀘스트를 남긴다", () => {
+  const scene = fixture("scene");
+  const upstream = scene.items.findIndex(i => i.id === "upstream");
+  const cable = effectiveClaim(scene, "item", upstream, "data", "cableUsb4")!;
+  scene.claims[cable]!.value = null;
+  scene.claims[cable]!.confidence = "unknown";
+
+  const { result, work, cited } = inspect(scene);
+  for (const id of ["video-a", "video-b"]) {
+    const w = work("two-video", id);
+    assert.equal(w.outcome.verdict, "unknown");
+    for (const metric of [w.solo, w.together]) assert.deepEqual([metric.value, metric.low, metric.high, metric.unit], [null, 0, 16, "Gbps"]);
+    assert.deepEqual(result.possibleVerdicts.filter(v => v.outcome === w.row).map(v => v.verdict).sort(), ["impossible", "ok"]);
+    const pool = w.links.find(l => l.name === "usb4-upstream")!.option.poolResource!;
+    assert.deepEqual(result.linkResources[pool]!.pool!.bounds, { low: 0, high: 28 });
+    assert.ok(cited(w.inputs, "cableUsb4", null, "fixture:t4/usb4-cable"));
+    assert.ok(result.quests.some(q => q.outcome === w.row && q.claim === cable && q.instruction.includes("USB4")));
+  }
 });
 
 test("T4 스트림 예산 한 자리로는 두 영상의 동시 예약을 만족시킬 수 없다", () => {
