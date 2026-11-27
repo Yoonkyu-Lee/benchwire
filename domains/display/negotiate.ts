@@ -1,6 +1,7 @@
 // 방향별 영상 전송 한도와 DSC 인코더·디코더의 출처를 연결 옵션으로 낸다.
 // DP 터널 케이블의 한도는 data 예산에서 가져온다. 한 연결에서 공통 영상 프로토콜이 여럿이면 선택은 미확인이다.
 import { effectiveClaim, type Link, type Option, type Value, type Verdict } from "../../engine/contract.ts";
+import { altModeProfiles, supportsDisplayRole } from "./alt-mode.ts";
 import {
   DP_ALT_MODE_PIN_ASSIGNMENTS, DP_LINK_RATES, DP_MAX_LANES, DP_VERSION_MAX_LINK_RATES, HDMI_21_FRL_LINK_RATES,
   HDMI_TMDS_VERSION_LIMITS,
@@ -122,8 +123,8 @@ export function negotiateDisplay({ scene, connection, ports }: Link): DisplayOpt
     const last = ports.length - 1;
     const interfaces = declarations.flatMap((entries, i) => {
       if (protocol === "DP Tunnel" && i !== 0 && i !== last) return [];
-      return [entries.filter(entry => entry.protocol === protocol &&
-        (entry.role === "bidirectional" || (i === 0 ? entry.role === "source" : i === last && entry.role === "sink")))];
+      const role = i === 0 ? "source" : i === last ? "sink" : "bidirectional";
+      return [entries.filter(entry => entry.protocol === protocol && supportsDisplayRole(entry.role,role))];
     });
     return interfaces.every(entries => entries.length > 0) ? [{ protocol, interfaces }] : [];
   });
@@ -131,17 +132,8 @@ export function negotiateDisplay({ scene, connection, ports }: Link): DisplayOpt
   const chosen = common.length === 1 && common[0]!.interfaces.every(entries => entries.length === 1) ? common[0] : undefined;
   const rows = chosen?.interfaces.map(entries => entries[0]!.row) ?? [];
   if (chosen?.protocol === "DP Alt Mode") {
-    const profiles = [{ id: "dp-4lane", pins: ["C", "E"] }, { id: "dp-2lane", pins: ["D"] }];
-    const options = profiles.flatMap(profile => {
-      const ends = [rows[0]!, rows.at(-1)!] as const;
-      const claims = ends.map(row => effectiveClaim(scene, "interface", row, "display", "pin", profile.id));
-      const pinAt = (row: number | undefined) => row === undefined ? null : scene.claims[row]!.value as DpAltModePin | null;
-      const pins = [pinAt(claims[0]), pinAt(claims[1])] as const;
-      const [source, sink] = pins;
-      const pin = source ?? sink;
-      if (pin !== null && !profile.pins.includes(pin) || source !== null && sink !== null && source !== sink) return [];
-      return optionsFor(profile.id, pins, claims.filter(row => row !== undefined));
-    });
+    const profiles = altModeProfiles(scene,[[rows[0]!,rows.at(-1)!]]);
+    const options = profiles.flatMap(p => optionsFor(p.id,p.pins,p.inputs));
     if (options.length) return options;
   }
   return optionsFor();

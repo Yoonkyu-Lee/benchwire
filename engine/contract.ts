@@ -18,10 +18,13 @@ export interface Pool extends Trace {
   id: string; scope: "direction" | "connection"; unit: string; limit: number | null;
   bounds?: { low: number; high: number };
 }
+// 연결 설정 제공자가 대상 서비스에 남기는 레인 수다. 생략한 설정에서는 서비스 고유의 한도를 쓴다.
+export interface LaneProfile { domain: string; mode: string; profile: string; maxLanes?: number; inputs: number[] }
 export interface Link {
   scene: Scene; connection: number; direction: Direction;
   // 신호가 지나는 순서대로 양 끝과 사이 부품의 진입·이탈 포트를 담는다.
   ports: number[];
+  laneProfiles?: readonly LaneProfile[];
 }
 export interface Option extends Trace {
   verdict: Verdict; mode: string; limit: number | null; unit: string; condition: string; unused?: number;
@@ -53,6 +56,7 @@ export interface PolicyContext {
 // limit는 해당 자원 단위의 작업별 사용 상한이다. 적용할 표가 없으면 null을 돌려준다.
 export interface PolicyLimit extends Trace { workload: number; limit: number }
 export interface DomainPlugin {
+  laneProfiles?(link: Link): readonly LaneProfile[];
   // 소유 대상에 관계없이 유효한 미확인 주장의 이산 후보를 준다. 참조 필드는 파일의 지역 ID를 쓴다.
   profileValues?(claim: Claim): readonly Exclude<Value, null>[];
   standingLoads?(scene: Scene): readonly StandingLoad[];

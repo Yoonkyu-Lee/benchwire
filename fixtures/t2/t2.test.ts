@@ -5,7 +5,7 @@ import { test } from "node:test";
 import { printResults } from "../../cli/print.ts";
 import { plugins } from "../../domains/registry.ts";
 import { loadScene } from "../../cli/load.ts";
-import type { Scene } from "../../engine/contract.ts";
+import type { DomainPlugin, Scene } from "../../engine/contract.ts";
 import { evaluate, evaluateVariants } from "../../engine/evaluate.ts";
 
 function fixture(name: string) {
@@ -155,6 +155,32 @@ test("T2 두 방향에서 핀 D는 USB 3.x 한 레인만 남기고 USB 전용은
     assert.deepEqual(options.map(o => [o.profile, o.limit]), [[undefined, 53.248], ["usb-only", 2200], ["dp-2lane", 450]]);
     assert.equal(options[0]!.pool?.id, "usb2-bulk");
     assert.ok(options[2]!.inputs.some(row => scene.claims[row]!.field === "pin" && scene.claims[row]!.value === "D"));
+  }
+});
+
+test("T2 USB 벌크는 제공자가 바꾼 핀 표기와 설정 이름에서도 남은 레인과 그 출처를 쓴다", () => {
+  const scene = fixture("scene");
+  const published = scene.claims.findIndex(c => c.domain === "display" && c.field === "pin" && c.value === "D");
+  for (const c of scene.claims) {
+    if (c.domain === "data" && c.field === "modes") c.value = "High Speed, Gen 1x1, Gen 2x2";
+    if (c.field === "cableDataGbps") c.value = 20;
+    if (c.field === "pin") c.field = "배선표";
+  }
+  for (const iface of scene.interfaces) if (iface.domain === "display") iface.protocol = "시험 배선";
+  const provider: DomainPlugin = { ...plugins.find(p => p.id === "display")!, negotiate: () => [],
+    laneProfiles: ({scene}) => [{domain:"data", mode:"bulk", profile:"공유 설정",
+      maxLanes:scene.claims[published]!.value === "D" ? 1 : 2, inputs:[published]}] };
+  const data = plugins.find(p => p.id === "data")!;
+  scene.members = scene.members.filter(m => scene.workloads[m.workload]!.domain === data.id);
+  for (const [value,limit] of [["D",450],["전용",2200]] as const) {
+    scene.claims[published]!.value = value;
+    for (const order of [[provider,data],[data,provider]]) {
+      const r = evaluate(scene,order);
+      const options = r.options.filter(o => o.domain === data.id && o.profile === "공유 설정");
+      assert.deepEqual(options.map(o => [o.direction,o.limit]), [["forward",limit],["reverse",limit]]);
+      assert.ok(options.every(o => o.inputs.includes(published)));
+      assert.ok(r.choices.some(c => c.profile === "공유 설정"));
+    }
   }
 });
 

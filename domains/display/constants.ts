@@ -67,6 +67,10 @@ export const DP_ALT_MODE_PIN_ASSIGNMENTS = [
   { pin: "F", maxDpLanes: 2 },
 ] as const;
 
+// 출처: VESA USB DevDays (2019), pp. 21–23. 현재 선택할 수 있는 핀 배정과 USB 3.x에 남는 레인이다.
+export const DP_FOUR_LANE_PROFILE = { id:"dp-4lane", pins:["C","E"], usbLanes:0 } as const;
+export const DP_TWO_LANE_PROFILE = { id:"dp-2lane", pins:["D"], usbLanes:1 } as const;
+
 // 순차주사의 줄 주기(μs)는 (명목 프레임 주기 − 최소 수직 블랭킹 시간) ÷ 활성 줄 수로 추정한다.
 // 총 픽셀 × 총 줄 × 목표 Hz를 클록 단위로 내림하고, 픽셀 클록(Hz)에 bpp를 곱해 영상 수요(bps)를 구한다.
 // 출처: VESA Coordinated Video Timings 1.2 §3.4.3, §5.4 및 표 5-4 (신뢰도: official)

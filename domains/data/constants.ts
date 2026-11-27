@@ -8,10 +8,10 @@ export const USB_2_HIGH_SPEED_BULK_LIMIT_MB_PER_SECOND = 53.248;
 // 흐름 제어·프레이밍·프로토콜 오버헤드를 반영한 애플리케이션 처리량 추정 상한이다.
 // 출처: USB 3.2 Specification Rev 1.1 §4.4.11 및 표 5-1 (신뢰도: official)
 export const USB_3_2_PROTOCOL_ESTIMATES = [
-  { mode: "Gen 1x1", rawGbps: 5, approxBestCaseMBPerSecond: 450 },
-  { mode: "Gen 1x2", rawGbps: 10, approxBestCaseMBPerSecond: 900 },
-  { mode: "Gen 2x1", rawGbps: 10, approxBestCaseMBPerSecond: 1_100 },
-  { mode: "Gen 2x2", rawGbps: 20, approxBestCaseMBPerSecond: 2_200 },
+  { mode: "Gen 1x1", lanes: 1, rawGbps: 5, approxBestCaseMBPerSecond: 450 },
+  { mode: "Gen 1x2", lanes: 2, rawGbps: 10, approxBestCaseMBPerSecond: 900 },
+  { mode: "Gen 2x1", lanes: 1, rawGbps: 10, approxBestCaseMBPerSecond: 1_100 },
+  { mode: "Gen 2x2", lanes: 2, rawGbps: 20, approxBestCaseMBPerSecond: 2_200 },
 ] as const;
 
 // 방향별 부호 블록 페이로드다. 프레이밍·흐름 제어·대역폭 예약 전의 상한이다.

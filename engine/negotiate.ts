@@ -1,5 +1,5 @@
 // 양 끝과 부품의 협상 결과를 방향별로 모으고 연결 및 경로에 같은 옵션 선택 규칙을 적용한다.
-import type { Demand, DomainPlugin, Option, Scene, Verdict } from "./contract.ts";
+import type { Demand, DomainPlugin, Link, Option, Scene, Verdict } from "./contract.ts";
 import { availableOption, bindPools, registerPool } from "./pools.ts";
 import { physicalSteps } from "./physical.ts";
 import { checkedQuantity, checkedTrace, type Results } from "./results.ts";
@@ -44,8 +44,11 @@ export function negotiate(scene: Scene, plugins: readonly DomainPlugin[], result
       result.physical.push(...physical);
       const ports = physical.filter(s => s.kind === "mate").flatMap(s => [s.entry, s.exit]);
       const domains = new Set(scene.interfaces.filter(i => ports.includes(i.port)).map(i => i.domain));
-      for (const plugin of plugins.filter(p => domains.has(p.id))) {
-        const link = { scene, connection, direction, ports };
+      const active = plugins.filter(p => domains.has(p.id));
+      const link: Link = { scene, connection, direction, ports };
+      const profiles = active.flatMap(p => p.laneProfiles?.(link) ?? []);
+      if (profiles.length) link.laneProfiles = profiles;
+      for (const plugin of active) {
         const options = plugin.negotiate(link);
         const position = { connection, domain: plugin.id, direction };
         const linkResource = result.linkResources.length;
