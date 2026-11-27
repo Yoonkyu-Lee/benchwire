@@ -17,8 +17,9 @@ export function recordUsage(scene: Scene, r: Results, scenario: number, flows: F
     return usage;
   }
   scene.resources.forEach((resource, i) => {
-    const cap = scene.claims[resourceFacts(scene,i).capacity]!.value;
-    add(i, resource.unit, typeof cap === "number" ? cap : null);
+    const capacityClaim = resourceFacts(scene,i).capacity;
+    const cap = scene.claims[capacityClaim]!.value;
+    add(i, resource.unit, typeof cap === "number" ? cap : null).capacityClaim = capacityClaim;
   });
   r.linkResources.forEach((l,i) => { if (l.pool) add(offset+i, l.pool.unit, gross.pools[i]!); });
 

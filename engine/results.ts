@@ -32,7 +32,7 @@ export interface Results {
   matches: (Trace & { demand: number; option: number; verdict: Verdict })[];
   steps: (Step & { carrier?: Carrier; path: number; order: number })[];
   resourceUsage: { scenario: number; resourceKind: "scene" | "link"; resource: number; unit: string;
-    used: number | null; capacity: number | null; basis: "calculated" | "assumed"; reasonRows: number[] }[];
+    used: number | null; capacity: number | null; capacityClaim?: number; basis: "calculated" | "assumed"; reasonRows: number[] }[];
   allocations: { scenario: number; workload: number; run: Run; value: number | null; unit: string }[];
   bindings: { scenario: number; workload: number; run: Run; resourceKind: "scene" | "link"; resource: number }[];
   outcomes: { subjectKind: "connection" | "workload"; subjectRow: number; option?: number; path: number | null; soloPath?: number; direction: Direction | null; scenario: number | null; domain: string; unit?: string; pool?: { domain: string; id: string }; verdict: Verdict; mode: string; label: string }[];

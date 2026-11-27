@@ -1,11 +1,13 @@
-// 결합 판정 어댑터는 후보 문서를 받고 해당 연결 ID의 확정된 mate 불일치만 거절한다.
+// 편집할 포트의 점유와 후보 배선에 필요한 결합 형태를 확인한다.
+import type { Scene } from "../engine/contract.ts";
+import { physicalSteps } from "../engine/physical.ts";
 import { portKey, type SceneDocument } from "./document.ts";
 
-export type ConnectionCheck = (candidate: SceneDocument, id: string) =>
-  | ConnectionDecision | Promise<ConnectionDecision>;
-export type ConnectionDecision =
-  | { allowed: true }
-  | { allowed: false; reason: string; required: readonly string[] };
+export function requiredMateCapabilities(scene: Scene, id: string) {
+  const row = scene.connections.findIndex(connection => connection.id === id);
+  const steps = [...physicalSteps(scene, row, "forward"), ...physicalSteps(scene, row, "reverse")];
+  return [...new Set(steps.filter(step => step.kind === "mate" && step.verdict === "impossible").map(step => step.required))];
+}
 
 export function occupiedPorts(scene: SceneDocument) {
   return new Set(scene.connections.flatMap(c => [

@@ -36,15 +36,23 @@ export function field(container: HTMLElement, label: string, control: HTMLInputE
   return row;
 }
 
-export function showError(form: HTMLFormElement, message: string) {
-  const marker = message.indexOf(" — ");
-  const path = marker < 0 ? "" : message.slice(0, marker).split("#").at(-1)!;
-  const errors = [...form.querySelectorAll<HTMLElement>(".scenario-error")];
+export function showFieldError(root: HTMLElement, path: string, message: string) {
+  const errors = [...root.querySelectorAll<HTMLElement>(".scenario-error[data-path]")];
   const nearest = errors.filter(error => {
     const key = error.dataset.path;
     return key && (path === key || path.startsWith(key + "."));
   }).sort((a, b) => b.dataset.path!.length - a.dataset.path!.length)[0];
-  (nearest ?? errors.at(-1)!).textContent = marker < 0 ? message : message.slice(marker + 3);
+  if (!nearest) return false;
+  nearest.textContent = message;
+  return true;
+}
+
+export function showError(form: HTMLFormElement, message: string) {
+  const marker = message.indexOf(" — ");
+  const path = marker < 0 ? "" : message.slice(0, marker).split("#").at(-1)!;
+  const text = marker < 0 ? message : message.slice(marker + 3);
+  if (!showFieldError(form, path, text))
+    Array.from(form.querySelectorAll<HTMLElement>(".scenario-error")).at(-1)!.textContent = text;
 }
 
 function alternatives(schema: JSONSchema): JSONSchema[] {

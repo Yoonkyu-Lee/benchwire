@@ -38,7 +38,7 @@ export function place(scene: SceneDocument, instanceId: string, position: Point)
   return { ...scene, layout: { ...scene.layout, placements: [...placements, placement] } };
 }
 
-export function addConnection(scene: SceneDocument, from: PortRef, to: PortRef, cable?: { item: InventoryItem; part: Part }): SceneDocument {
+export function addConnection(scene: SceneDocument, from: PortRef, to: PortRef, cable?: { item: Item; part: Part }): SceneDocument {
   const locator = "canvas:placement";
   let source = scene.sources.find(s => s.locator === locator);
   let sources = scene.sources;

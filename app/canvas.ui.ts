@@ -2,6 +2,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import type { Page } from "playwright";
+import type { Library, SceneDocument } from "./document.ts";
 import { center, edgeSession, viewport, waitForAssessment } from "./edge-session.ts";
 
 const edge = edgeSession();
@@ -45,8 +46,8 @@ test("예제 한 케이블의 전력과 네트워크 레이어를 독립적으�
   } finally { await page.close(); }
 });
 
-async function movePse(page: Page, dx: number, dy: number) {
-  const card = page.locator('[data-instance="pse"]');
+async function movePse(page: Page, dx: number, dy: number, item = "pse") {
+  const card = page.locator(`[data-instance="${item}"]`);
   const point = await center(card.locator(".device-name"));
   await page.mouse.move(point.x, point.y);
   await page.mouse.down();
@@ -89,10 +90,20 @@ test("예제의 자동 저장은 사본으로 이어지고 새로고침·다른 
     await newer;
     await page.getByText("저장됨", { exact: true }).waitFor();
     moved = await card.getAttribute("transform");
-    await movePse(second, -18, 30);
-    await second.getByText("다른 곳에서 장면을 저장했습니다. 다시 열어 주세요.").waitFor();
-    await second.getByRole("button", { name: "다시 열기" }).click();
-    await second.waitForFunction(expected => document.querySelector('[data-instance="pse"]')?.getAttribute("transform") === expected, moved);
+    const pd = second.locator('[data-instance="pd"]');
+    const pdBefore = await pd.getAttribute("transform");
+    const stale = second.waitForResponse(r => r.request().method() === "PUT" && r.status() === 412);
+    const merged = second.waitForResponse(r => r.request().method() === "PUT" && r.status() === 204, { timeout: 3500 });
+    await movePse(second, -18, 30, "pd");
+    await stale;
+    await merged;
+    await second.getByText("저장됨", { exact: true }).waitFor();
+    const pdAfter = await pd.getAttribute("transform");
+    assert.notEqual(pdAfter, pdBefore);
+    assert.equal(await second.locator('[data-instance="pse"]').getAttribute("transform"), moved);
+    await second.reload();
+    await pd.waitFor();
+    assert.equal(await pd.getAttribute("transform"), pdAfter);
     assert.deepEqual(errors, []);
   } finally {
     await tabs.close();
@@ -355,7 +366,7 @@ test("PoE 예제의 작업량, 협상 출처와 자원 막대를 열고 의미 �
     const detail = panel.getByRole("region", { name: "선택한 항목 근거" });
     assert.match(await detail.innerText(), /PoE 성립/);
     assert.match(await detail.innerText(), /이더넷 성립/);
-    for (const label of [/→ 이더넷 성립/, /→ PoE 성립/]) {
+    for (const label of [/이더넷 성립.*정방향/, /PoE 성립.*정방향/]) {
       const negotiation = detail.locator(".negotiation-evidence").filter({ has: page.locator("summary").filter({ hasText: label }) });
       await negotiation.locator(":scope > summary").click();
       const link = negotiation.locator(".specs a").first();
@@ -384,6 +395,9 @@ test("PoE 예제의 작업량, 협상 출처와 자원 막대를 열고 의미 �
     await waitForAssessment(page);
     assert.deepEqual(await flow.allTextContents(), flowBefore.filter(text => text.includes("900 Mbps")));
     assert.equal(await wire.locator('[data-result-kind="negotiation"]').count(), 4);
+    const inactivePower = wire.locator('[data-direction="forward"][data-unit="W"][data-result-kind="negotiation"]');
+    assert.equal(await inactivePower.getAttribute("data-verdict"), null);
+    assert.match((await inactivePower.getAttribute("class"))!, /wire-capability/);
     assert.deepEqual(await page.evaluate(() => window.benchwire.read().layout), layout);
 
     assert.equal(await page.evaluate(() => {
@@ -635,6 +649,16 @@ test("충전 예제에서 세 포트와 소비 상태별 판정을 확인하고 
     await page.screenshot({ path: "work/m3-example-power.png" });
     await editor.locator("summary").click();
     await editor.getByLabel("작업", { exact: true }).selectOption("대기");
+    await page.getByRole("button", { name: "결과 · 근거" }).click();
+    const results = page.getByRole("complementary", { name: "결과와 근거" });
+    await results.getByRole("button", { name: /USB PD 충전.*50 W/ }).click();
+    const proof = results.getByRole("region", { name: "선택한 항목 근거" });
+    const verdictReasons = proof.locator(".reason-tree > li > details > summary").filter({ hasText: "순충전 전력" });
+    assert.equal(await verdictReasons.count(), 1);
+    await results.getByLabel("표시할 성능").selectOption("solo");
+    assert.equal(await verdictReasons.count(), 1);
+    await page.screenshot({ path: "work/m3-polish-solo.png" });
+    await results.getByRole("button", { name: "닫기" }).click();
     const target = editor.getByLabel("목표 순충전 (W)", { exact: true });
     assert.equal(await target.inputValue(), "30");
     await target.fill("35");
@@ -752,10 +776,12 @@ test("USB-C 충전기 초안을 저장·배치하고 재시도와 서버 재시�
     await page.getByText("저장됨", { exact: true }).waitFor();
     await waitForAssessment(page);
     const line = page.locator('[data-connection="connection-1"] [data-direction="forward"][data-unit="W"]');
-    assert.equal(await line.getAttribute("data-verdict"), "unknown");
+    assert.equal(await line.getAttribute("data-verdict"), null);
+    assert.match((await line.getAttribute("class"))!, /wire-capability/);
     await page.locator('[data-connection="connection-1"] .wire-name').click();
     const evidence = page.getByRole("region", { name: "선택한 항목 근거" });
     assert.match(await evidence.locator(".quests").innerText(), /maxW/);
+    assert.match(await evidence.locator(".negotiation-evidence > summary").first().innerText(), /❓/);
     await page.screenshot({ path: "work/m4-creator-charge.png" });
     assert.deepEqual(errors, []);
   } finally { await page.close(); }
@@ -766,7 +792,7 @@ test("USB-C 충전기 초안을 저장·배치하고 재시도와 서버 재시�
   try {
     await reopened.locator(`[data-instance="${instanceId}"]`).waitFor();
     assert.equal(await reopened.locator(`[data-inventory="${instanceId}"]`).count(), 1);
-    assert.equal(await reopened.locator('[data-connection="connection-1"] [data-direction="forward"][data-unit="W"]').getAttribute("data-verdict"), "unknown");
+    assert.equal(await reopened.locator('[data-connection="connection-1"] [data-direction="forward"][data-unit="W"].wire-capability').count(), 1);
   } finally { await reopened.close(); }
 });
 
@@ -792,5 +818,240 @@ test("등록한 영역의 어휘와 스키마 필드가 생성기와 시나리�
     assert(await request.isVisible());
     assert.equal(await request.locator("option:checked").textContent(), "아니요");
     assert.deepEqual(errors, []);
+  } finally { await page.close(); }
+});
+
+async function networkPage() {
+  const { page } = await newPage("/");
+  const picker = page.getByRole("combobox", { name: "장면" });
+  if (await picker.inputValue() !== "network") await picker.selectOption("network");
+  await page.locator('[data-instance="pse"]').waitFor();
+  await waitForAssessment(page);
+  return page;
+}
+
+test("저장 응답을 기다리는 동안 새로고침하기 전에 확인한다", async () => {
+  const page = await networkPage();
+  let release!: () => void;
+  try {
+    const blocked = new Promise<void>(resolve => { release = resolve; });
+    await page.route("**/api/scenes/*", async route => {
+      if (route.request().method() !== "PUT") { await route.continue(); return; }
+      await blocked;
+      await route.continue();
+    });
+    await movePse(page, 25, 16);
+    await page.getByText("저장 중…", { exact: true }).waitFor();
+    const dialog = page.waitForEvent("dialog", { timeout: 2500 });
+    const reload = page.reload({ timeout: 4000 }).catch(() => null);
+    const warning = await dialog;
+    assert.equal(warning.type(), "beforeunload");
+    await warning.dismiss();
+    release();
+    await page.getByText("저장됨", { exact: true }).waitFor({ timeout: 5000 });
+    await reload;
+  } finally { release?.(); await page.close(); }
+});
+
+test("서버 422 요청 오류는 작업 입력 칸에 붙인다", async () => {
+  const page = await networkPage();
+  try {
+    const editor = page.locator(".scenario-panel");
+    await editor.locator("summary").click();
+    await editor.getByLabel("작업", { exact: true }).selectOption("lan-a");
+    const input = editor.locator('.scenario-workload input[type="number"]').first();
+    await input.fill("750");
+    const path = "workloads.2.request.throughput.value";
+    const message = "저장 요청에서 허용하지 않는 전송량입니다";
+    await page.route("**/api/scenes/*", async route => {
+      if (route.request().method() !== "PUT") { await route.continue(); return; }
+      await route.fulfill({ status: 422, json: { path, message } });
+    }, { times: 1 });
+    const rejected = page.waitForResponse(r => r.request().method() === "PUT" && r.status() === 422);
+    await editor.getByRole("button", { name: "작업 적용" }).click();
+    await rejected;
+    const fieldError = input.locator("..").locator('[role="alert"]');
+    await fieldError.filter({ hasText: message }).waitFor({ timeout: 2500 });
+    assert(await page.locator("#storage-status").isHidden());
+    await page.screenshot({ path: "work/m3-polish-field.png" });
+  } finally { await page.close(); }
+});
+
+test("카드를 끄는 동안 흐름 화살표가 실제 방향을 따른다", async () => {
+  const { page } = await newPage("/testbed.html?example");
+  try {
+    await movePse(page, -420, -50, "pd");
+    const source = page.locator('[data-instance="pse"] .device-name');
+    const target = port(page, "pd", "pd");
+    const label = page.locator('[data-connection="poe"] .wire-result[data-workload="poe-12"]');
+    const start = await center(source);
+    const end = await center(target);
+    assert.match((await label.textContent())!, /→/);
+    await page.mouse.move(start.x, start.y);
+    await page.mouse.down();
+    await page.mouse.move(end.x + 360, start.y + 45, { steps: 5 });
+    assert.match((await label.textContent())!, /[←↖↙]/);
+    assert.equal(await page.locator(".stage[data-assessing]").count(), 0);
+    await page.mouse.up();
+    assert.match((await label.textContent())!, /[←↖↙]/);
+    await page.getByRole("button", { name: "전체 맞춤" }).click();
+    await page.screenshot({ path: "work/m3-polish-direction.png" });
+  } finally { await page.close(); }
+});
+
+async function readStored(page: Page, id: string) {
+  const response = await page.request.get(new URL("/api/scenes/" + id, page.url()).href);
+  assert.equal(response.status(), 200);
+  return { document: await response.json() as SceneDocument, tag: response.headers().etag! };
+}
+
+async function saveFromAnotherTab(page: Page, document: SceneDocument, tag?: string) {
+  const origin = new URL(page.url()).origin;
+  const response = await page.request.put(origin + "/api/scenes/" + document.sceneId, {
+    headers: { Origin: origin, ...(tag ? { "If-Match": tag } : {}) }, data: document,
+  });
+  assert.equal(response.status(), tag ? 204 : 201);
+}
+
+async function openStored(page: Page, id: string) {
+  await page.reload();
+  const scenes = page.getByRole("combobox", { name: "장면" });
+  if (await scenes.inputValue() !== id) await scenes.selectOption(id);
+  await page.waitForFunction(() => !document.querySelector<HTMLElement>("#app")?.inert);
+  await waitForAssessment(page);
+}
+
+test("저장 경합 뒤 작업과 시나리오 멤버를 순서대로 합치고 같은 칸의 충돌을 알린다", async () => {
+  const page = await networkPage();
+  const id = "network-merge";
+  let release!: () => void;
+  try {
+    const example = (await readStored(page, "network")).document;
+    await saveFromAnotherTab(page, { ...example, sceneId: id });
+    await openStored(page, id);
+    const editor = page.locator(".scenario-panel");
+    await editor.locator("summary").click();
+    const workload = editor.getByLabel("작업", { exact: true });
+    const value = editor.getByLabel("요청 처리량 (Mbps)", { exact: true });
+    const apply = editor.getByRole("button", { name: "작업 적용", exact: true });
+    const baseline = await readStored(page, id);
+    const remote = structuredClone(baseline.document);
+    remote.workloads.find(w => w.id === "lan-b")!.request.throughput!.value = 700;
+    remote.scenarios[0]!.members = remote.scenarios[0]!.members.filter(m => m !== "poe-ethernet");
+    await saveFromAnotherTab(page, remote, baseline.tag);
+
+    const blocked = new Promise<void>(resolve => { release = resolve; });
+    await page.route("**/api/scenes/" + id, async route => {
+      if (route.request().method() === "PUT") await blocked;
+      await route.continue();
+    }, { times: 1 });
+    await workload.selectOption("lan-a");
+    await value.fill("750");
+    await apply.click();
+    await editor.getByRole("checkbox", { name: /poe-12/ }).uncheck();
+    await editor.getByRole("button", { name: "시나리오 적용" }).click();
+    release();
+    await page.getByText("저장됨", { exact: true }).waitFor({ timeout: 4000 });
+    const merged = await readStored(page, id);
+    assert.equal(merged.document.workloads.find(w => w.id === "lan-a")!.request.throughput!.value, 750);
+    assert.equal(merged.document.workloads.find(w => w.id === "lan-b")!.request.throughput!.value, 700);
+    assert.deepEqual(merged.document.scenarios[0]!.members, ["lan-a", "lan-b"]);
+
+    merged.document.workloads.find(w => w.id === "lan-b")!.request.throughput!.value = 675;
+    await saveFromAnotherTab(page, merged.document, merged.tag);
+    await workload.selectOption("lan-b");
+    await value.fill("650");
+    await apply.click();
+    await page.getByText(/다시 적용하지 못한 편집.*lan-b 작업 편집/).waitFor({ timeout: 4000 });
+    assert.equal((await readStored(page, id)).document.workloads.find(w => w.id === "lan-b")!.request.throughput!.value, 675);
+  } finally { release?.(); await page.close(); }
+});
+
+test("저장 경합 뒤 새 실물 배치와 케이블 연결을 순서대로 다시 적용한다", async () => {
+  const page = await networkPage();
+  const id = "network-merge-wire";
+  let release!: () => void;
+  try {
+    const example = (await readStored(page, "network")).document;
+    const withoutHost = (row: { instanceId: string }) => row.instanceId !== "host-b";
+    await saveFromAnotherTab(page, { ...example, sceneId: id, connections: [], workloads: [], scenarios: [],
+      items: example.items.filter(withoutHost), layout: { placements: example.layout!.placements!.filter(withoutHost) } });
+    await openStored(page, id);
+    const remote = await readStored(page, id);
+    const router = remote.document.layout!.placements!.find(p => p.instanceId === "router")!;
+    router.x += 27;
+    const origin = new URL(page.url()).origin;
+    const listing = await (await page.request.get(origin + "/api/library")).json() as Library;
+    const model = { ...listing.models.find(m => m.modelId === "network-host")!, modelId: "review-network-host" };
+    const item = { instanceId: "remote-host", modelId: model.modelId, revision: model.revision, state: "owned" };
+    assert.equal((await page.request.put(origin + "/api/models/" + model.modelId + "/" + model.revision, {
+      headers: { Origin: origin }, data: model,
+    })).status(), 201);
+    assert.equal((await page.request.put(origin + "/api/inventory/" + item.instanceId, {
+      headers: { Origin: origin }, data: item,
+    })).status(), 201);
+    remote.document.items.push(item);
+    await saveFromAnotherTab(page, remote.document, remote.tag);
+    const blocked = new Promise<void>(resolve => { release = resolve; });
+    await page.route("**/api/scenes/" + id, async route => {
+      if (route.request().method() === "PUT") await blocked;
+      await route.continue();
+    }, { times: 1 });
+    await page.locator('[data-inventory="host-b"]').getByRole("button", { name: "캔버스에 놓기" }).click();
+    await page.locator('[data-inventory="spare-wire"]').getByRole("button", { name: "연결에 사용" }).click();
+    await port(page, "host-b", "lan").press("Enter");
+    await port(page, "router", "lan-b").press("Space");
+    release();
+    await page.getByText("저장됨", { exact: true }).waitFor({ timeout: 4000 });
+    const saved = (await readStored(page, id)).document;
+    assert(saved.items.some(i => i.instanceId === "host-b"));
+    assert(saved.items.some(i => i.instanceId === "spare-wire"));
+    assert(saved.items.some(i => i.instanceId === item.instanceId));
+    await page.locator('[data-instance="remote-host"]').waitFor();
+    assert.equal(saved.connections[0]!.from.instanceId, "host-b");
+    assert.equal(saved.connections[0]!.parts[0]!.instanceId, "spare-wire");
+    assert.deepEqual(saved.layout!.placements!.find(p => p.instanceId === "router"), router);
+  } finally { release?.(); await page.close(); }
+});
+
+test("사용하지 않는 자원의 용량 근거에 모델 출처를 표시한다", async () => {
+  const page = await networkPage();
+  try {
+    const editor = page.locator(".scenario-panel");
+    await editor.locator("summary").click();
+    for (const check of await editor.getByRole("checkbox").all()) await check.uncheck();
+    await editor.getByRole("button", { name: "시나리오 적용" }).click();
+    await page.getByText("저장됨", { exact: true }).waitFor();
+    await waitForAssessment(page);
+    await page.getByRole("button", { name: "결과 · 근거" }).click();
+    const panel = page.getByRole("complementary", { name: "결과와 근거" });
+    await panel.getByText(/^자원 \d+개$/).click();
+    await panel.getByRole("button", { name: /라우터 · uplink.*0 Mbps \/ 1200 Mbps/ }).click();
+    const proof = panel.getByRole("region", { name: "선택한 항목 근거" });
+    assert.match(await proof.innerText(), /용량 주장 · 1200 Mbps[\s\S]*fixture:network\/network-router/);
+    await page.screenshot({ path: "work/m3-polish-capacity.png" });
+  } finally { await page.close(); }
+});
+
+test("균등 분배 가정값을 배선과 작업 근거에 함께 표시한다", async () => {
+  const page = await networkPage();
+  try {
+    await page.route("**/api/library", async route => {
+      const response = await route.fetch();
+      const library = await response.json() as Library & { defaultSceneId: string };
+      const uplink = library.models.find(m => m.modelId === "network-router")!.resources.find(r => r.id === "uplink")!;
+      uplink.policy = { ...uplink.policy, value: null, confidence: "unknown" };
+      await route.fulfill({ response, json: { ...library, defaultSceneId: "network" } });
+    });
+    await openStored(page, "network");
+    const summary = "0–900 Mbps · 보수적 경계 · 가정 600 Mbps";
+    const label = exampleFlow(page, "uplink", "lan-a");
+    await label.filter({ hasText: summary }).waitFor({ state: "attached", timeout: 3000 });
+    await page.getByRole("button", { name: "결과 · 근거" }).click();
+    const panel = page.getByRole("complementary", { name: "결과와 근거" });
+    await panel.getByRole("button", { name: new RegExp(summary) }).first().click();
+    const proof = panel.getByRole("region", { name: "선택한 항목 근거" });
+    assert((await proof.innerText()).includes(summary));
+    await page.screenshot({ path: "work/m3-polish-assumption.png" });
   } finally { await page.close(); }
 });

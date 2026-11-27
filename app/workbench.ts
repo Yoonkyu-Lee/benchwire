@@ -1,12 +1,12 @@
 // 장면 편집을 확정하고 캔버스·엔진 결과·근거 패널을 연결한다.
-import { physicalSteps } from "../engine/physical.ts";
 import type { Results, Run } from "../engine/results.ts";
 import { evaluateInWorker, loadAssessment, type Assessment, type Documents, type Variants } from "./assessment.ts";
 import { mountCanvas } from "./canvas.ts";
 import { mountCreator, persistModel } from "./creator.ts";
-import { occupiedPorts } from "./connection.ts";
+import { occupiedPorts, requiredMateCapabilities } from "./connection.ts";
 import { addConnection, modelKey, place, portKey, type InventoryItem, type Library, type SceneDocument, type SceneIntent } from "./document.ts";
 import { mountEvidence } from "./evidence.ts";
+import { showFieldError } from "./field.ts";
 import { INVENTORY_DRAG, mountInventory } from "./inventory.ts";
 import { mountLayers } from "./layers.ts";
 import { CARD_WIDTH } from "./layout.ts";
@@ -101,6 +101,18 @@ export function mountWorkbench(root: HTMLElement, initial: SceneDocument, librar
   });
   let canvas = makeCanvas();
   let inventory = makeInventory();
+
+  function refreshCatalog(newModels: Library["models"], newItems: Library["inventory"]) {
+    for (const model of newModels) models.set(modelKey(model), model);
+    for (const item of newItems) stock.set(item.instanceId, item);
+    library.models = [...models.values()];
+    library.inventory = [...stock.values()];
+    stage.replaceChildren();
+    inventoryRoot.replaceChildren();
+    canvas = makeCanvas();
+    inventory = makeInventory();
+    for (const layer of hiddenLayers) canvas.setLayer(layer, false);
+  }
   const trigger = root.querySelector<HTMLButtonElement>(".creator-open")!;
   const dialog = root.querySelector("dialog")!;
   let openCreator: () => void;
@@ -124,16 +136,7 @@ export function mountWorkbench(root: HTMLElement, initial: SceneDocument, librar
         loaded = loadAssessment(next, withModel, readScenario());
         if ("error" in loaded) throw new Error(loaded.error);
       }
-      models.set(modelKey(model), model);
-      stock.set(item.instanceId, item);
-      library.models = [...models.values()];
-      library.inventory = [...stock.values()];
-      // 새 모델 판본을 캔버스와 목록의 색인에 함께 올린다.
-      stage.replaceChildren();
-      inventoryRoot.replaceChildren();
-      canvas = makeCanvas();
-      inventory = makeInventory();
-      for (const layer of hiddenLayers) canvas.setLayer(layer, false);
+      refreshCatalog([model], [item]);
       commit(next, { kind: "add-item", item, position }, loaded);
     });
     openCreator();
@@ -266,11 +269,9 @@ export function mountWorkbench(root: HTMLElement, initial: SceneDocument, librar
     });
     const loaded = load(candidate);
     if (!loaded) return;
-    const connection = loaded.scene.connections.findIndex(c => c.id === candidate.connections.at(-1)!.id);
-    const mates = [...physicalSteps(loaded.scene, connection, "forward"), ...physicalSteps(loaded.scene, connection, "reverse")];
-    const required = new Set(mates.filter(step => step.kind === "mate" && step.verdict === "impossible").map(step => step.required));
-    if (required.size) {
-      setStatus("커넥터가 맞지 않습니다. 필요한 결합 형태 " + [...required].join(" · "));
+    const required = requiredMateCapabilities(loaded.scene, candidate.connections.at(-1)!.id);
+    if (required.length) {
+      setStatus("커넥터가 맞지 않습니다. 필요한 결합 형태 " + required.join(" · "));
       return;
     }
     cable = undefined;
@@ -315,5 +316,12 @@ export function mountWorkbench(root: HTMLElement, initial: SceneDocument, librar
       return true;
     },
     editScenario,
+    finishGesture: () => new Promise<void>(resolve => canvas.afterGesture(resolve)),
+    refreshCatalog,
+    showFieldError(path: string, message: string) {
+      if (!showFieldError(scenarioPanel, path, message)) return false;
+      scenarioPanel.open = true;
+      return true;
+    },
   };
 }

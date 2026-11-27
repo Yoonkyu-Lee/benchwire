@@ -6,6 +6,7 @@ import { network } from "../domains/network/network.ts";
 import { power } from "../domains/power/power.ts";
 import { effectiveClaim } from "./contract.ts";
 import { evaluate } from "./evaluate.ts";
+import { recordUsage } from "./resource-usage.ts";
 import { evidenceRows } from "./evidence.ts";
 
 test("T8 총 100 W 중 상시 10 W와 작업 45 W가 55 W를 차지한다", () => {
@@ -52,4 +53,25 @@ test("T8 작업이 없는 시나리오에서도 상시 부하의 실물 출처�
   const reasons = new Set(evidenceRows(r,{reasons:u.reasonRows}).map(s => s.reason));
   assert.ok(r.reasonInputs.some(i => reasons.has(i.reason) && scene.claims[i.claim]!.field === "reserveW" &&
     scene.claimSources.some(cs => cs.claim === i.claim)));
+});
+
+test("T5 쓰지 않는 자원의 용량과 출처를 기존 판정·근거와 독립해서 보여 준다", () => {
+  const dir = "fixtures/network";
+  const scene = loadScene("fixtures/example/scene.json", { modelsDir: dir, connectorsFile: dir + "/connectors.json" }, [network]);
+  scene.members = [];
+  const r = evaluate(scene, [network]);
+  const resource = scene.resources.findIndex(r => r.id === "uplink");
+  const capacity = effectiveClaim(scene, "resource", resource, "network", "capacity")!;
+  const usage = r.resourceUsage.find(u => u.resourceKind === "scene" && u.resource === resource)!;
+  assert.deepEqual([usage.used, usage.capacity, usage.capacityClaim], [0, 1200, capacity]);
+  assert.ok(scene.claimSources.some(link => link.claim === capacity && scene.sources[link.source]!.locator === "fixture:network/network-router"));
+
+  r.resourceUsage = [];
+  const before = structuredClone(r);
+  recordUsage(scene, r, 0, [], [], {
+    options: r.options.map(o => o.limit),
+    pools: r.linkResources.map(l => l.pool?.limit ?? null),
+  }, []);
+  r.resourceUsage = [];
+  assert.deepEqual(r, before);
 });

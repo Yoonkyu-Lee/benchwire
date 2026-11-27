@@ -167,6 +167,8 @@ h1 { margin: 0; font-size: 17px; font-weight: 700; white-space: nowrap; }
   stroke-linejoin: round; text-anchor: middle; font-size: 11px; font-weight: 680; cursor: pointer;
 }
 .wire-result[data-workload] { font-weight: 740; }
+.wire-line.wire-capability { stroke: #82939b; opacity: .55; }
+.wire-result.wire-capability { fill: #61767f; font-weight: 500; }
 .assessment-error {
   position: absolute; top: 14px; left: 14px; max-width: min(62%, 540px); padding: 8px 11px;
   overflow-wrap: anywhere; border: 1px solid #e1a9a9; border-radius: 6px; background: #fff4f3; color: #842828;

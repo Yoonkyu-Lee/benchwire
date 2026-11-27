@@ -163,7 +163,7 @@ function detail(root: HTMLElement, view: ResultView, selected: Selection) {
     const bindings = result.bindings.filter(b => b.scenario === outcome.scenario && b.workload === outcome.subjectRow && b.run === view.run);
     list(root, "병목 자원", bindings.map(b => resourceName(scene, result, b.resourceKind, b.resource)));
     outcomeNotes(root, result, [row], view.run);
-    root.append(el("h4", "판정 근거"), tree(view, { outcome: row }));
+    root.append(el("h4", "판정 근거"), tree(view, { outcome: row, run: view.run }));
   } else if (selected.kind === "resource") {
     const resource = view.resources[selected.row];
     if (!resource) return;
@@ -187,7 +187,18 @@ function detail(root: HTMLElement, view: ResultView, selected: Selection) {
       for (const w of view.workloads) if (result.outcomes[w.row]!.subjectRow === b.workload) outcomes.add(w.row);
     }
     outcomeNotes(root, result, [...outcomes]);
-    root.append(el("h4", "배분 근거"), tree(view, { reasons: resource.reasonRows }));
+    root.append(el("h4", "배분 근거"));
+    if (resource.used === 0 && resource.capacityClaim !== undefined) {
+      const claim = scene.claims[resource.capacityClaim]!;
+      const declared = typeof claim.value === "number" ? claim.value : null;
+      const entry = el("li", ["용량 주장", quantity(declared, unit), confidence[claim.confidence], claim.condition].filter(Boolean).join(" · "));
+      appendClaimSources(entry, scene, resource.capacityClaim);
+      const capacityEvidence = el("ul");
+      capacityEvidence.className = "reason-inputs";
+      capacityEvidence.append(entry);
+      root.append(capacityEvidence);
+    }
+    root.append(tree(view, { reasons: resource.reasonRows }));
   }
 }
 

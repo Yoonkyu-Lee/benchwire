@@ -15,3 +15,15 @@ test("T10 두 갈래가 공유하는 근거는 처음 한 번만 펼치고 자�
   ]);
   assert.deepEqual(evidenceRows(graph,{reasons:[2]}).map(s => s.reason),[2,0]);
 });
+
+test("T8 단독·동시 근거에서 선택한 실행의 판정과 공통 선행 단계만 펼친다", () => {
+  const reasons: Results["reasons"] = [
+    { outcome: 0, stage: "path", rule: "공통 경로", targetKind: "workload", targetRow: 0 },
+    { outcome: 0, stage: "judge", rule: "단독 순충전", targetKind: "workload", targetRow: 0, run: "solo" },
+    { outcome: 0, stage: "judge", rule: "동시 순충전", targetKind: "workload", targetRow: 0, run: "together" },
+  ];
+  const graph = { reasons, reasonParents: [{ reason: 1, prior: 0 }, { reason: 2, prior: 0 }] };
+  assert.deepEqual(evidenceRows(graph, { outcome: 0, run: "solo" }).map(row => row.reason), [1, 0]);
+  assert.deepEqual(evidenceRows(graph, { outcome: 0, run: "together" }).map(row => row.reason), [2, 0]);
+  assert.deepEqual(evidenceRows(graph, { outcome: 0 }).map(row => row.reason), [1, 0, 2, 0]);
+});

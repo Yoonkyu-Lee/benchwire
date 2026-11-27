@@ -9,7 +9,7 @@ const verdictIcon = { ok: "✅", conditional: "⚠️", impossible: "❌", unkno
 const MAX_WIRE_WIDTH = 5;
 
 export interface WireMark {
-  kind: "negotiation" | "flow"; direction: Direction | null; layer: Layer; verdict: Verdict | null;
+  kind: "physical" | "negotiation" | "flow"; direction: Direction | null; layer: Layer; verdict: Verdict | null;
   text: string; title: string; unit: string; pool?: string; width?: number; dashed?: boolean; workload?: string;
 }
 export type Selection = { kind: "connection" | "workload"; id: string } | { kind: "resource"; row: number };
@@ -40,7 +40,8 @@ function outcomeVerdict(result: Results, row: number, run: Run): Verdict | null 
   return assessed.length ? assessed.length === 1 ? assessed[0]!.verdict : "unknown" : null;
 }
 
-function connectionMarks(result: Results, rows: readonly number[], limits: ReadonlyMap<number, Metric>): WireMark[] {
+function connectionMarks(result: Results, rows: readonly number[], limits: ReadonlyMap<number, Metric>,
+  used: ReadonlyMap<string, ReadonlySet<string>> | undefined): WireMark[] {
   return rows.map(row => {
     const o = result.outcomes[row]!;
     const option = o.option === undefined ? undefined : result.options[o.option];
@@ -49,12 +50,15 @@ function connectionMarks(result: Results, rows: readonly number[], limits: Reado
     const capacity = limit ? interval(limit, unit) : option?.bounds ? interval(option.bounds, unit)
       : option?.limit != null ? quantity(option.limit, unit) : "";
     const ranged = limit ? limit.value === null || limit.low !== limit.high : !!option?.bounds;
-    const arrow = o.direction === "reverse" ? "←" : "→";
+    const units = used?.get(o.direction + "/" + o.domain);
+    const verdict = !o.domain || units && (!o.unit || units.has(o.unit)) ? o.verdict : null;
+    const direction = o.direction === "reverse" ? "역방향" : "정방향";
     const pool = o.pool ? `${o.pool.domain}/${o.pool.id}` : undefined;
-    const text = [verdictIcon[o.verdict], arrow, o.label, capacity].filter(Boolean).join(" ");
-    return { kind: "negotiation", direction: o.direction, layer: layerFor(o.domain, unit), verdict: o.verdict, text, unit,
-      title: [text, domainName(o.domain), pool, option?.condition].filter(Boolean).join(" · "),
-      ...(pool && { pool }), dashed: o.verdict === "unknown" || ranged };
+    const capability = [o.label, capacity].filter(Boolean).join(" ");
+    const text = verdict ? `${verdictIcon[verdict]} ${capability}` : capability;
+    return { kind: "negotiation", direction: o.direction, layer: layerFor(o.domain, unit), verdict, text, unit,
+      title: [`${verdictIcon[o.verdict]} ${capability}`, direction, domainName(o.domain), pool, option?.condition].filter(Boolean).join(" · "),
+      ...(pool && { pool }), dashed: verdict === "unknown" || ranged };
   });
 }
 
@@ -70,6 +74,16 @@ export function resultView(scene: Scene, result: Results, scenario: number | nul
       connections.set(outcome.subjectRow, entries);
     }
   }
+  const used = new Map<number, Map<string, Set<string>>>();
+  for (const w of workloads) for (const step of w.steps) {
+    const option = step.option === null ? undefined : result.options[step.option];
+    const domains = used.get(step.row) ?? new Map<string, Set<string>>();
+    const key = step.direction + "/" + (option?.domain ?? step.carrier?.domain ?? w.domain);
+    const units = domains.get(key) ?? new Set<string>();
+    units.add(option?.unit ?? w.metric?.unit ?? "");
+    domains.set(key, units);
+    used.set(step.row, domains);
+  }
   const limits = new Map(result.metrics.filter(metric => metric.kind === "limit").map(metric => [metric.outcome, metric]));
   const wires = new Map<string, WireMark[]>();
   const negotiations = new Map<string, number[]>();
@@ -77,7 +91,16 @@ export function resultView(scene: Scene, result: Results, scenario: number | nul
     const selected = entries.some(i => result.outcomes[i]!.scenario === scenario)
       ? entries.filter(i => result.outcomes[i]!.scenario === scenario) : entries;
     const id = scene.connections[row]!.id;
-    wires.set(id, connectionMarks(result, selected, limits));
+    const marks = connectionMarks(result, selected, limits, used.get(row));
+    for (const direction of ["forward", "reverse"] as const) {
+      if (selected.some(i => !result.outcomes[i]!.domain && result.outcomes[i]!.direction === direction)) continue;
+      const steps = result.physical.filter(step => step.connection === row && step.direction === direction);
+      const verdict = steps.some(step => step.verdict === "impossible") ? "impossible"
+        : steps.some(step => step.verdict === "unknown") ? "unknown" : null;
+      if (verdict) marks.push({ kind: "physical", direction, layer: "unclassified", verdict, unit: "",
+        text: "물리 연결 · " + verdictText[verdict], title: "물리 연결 · " + verdictText[verdict] });
+    }
+    wires.set(id, marks);
     negotiations.set(id, selected);
   }
   const maxima = new Map<string, number>();
@@ -92,8 +115,7 @@ export function resultView(scene: Scene, result: Results, scenario: number | nul
       const wire = wires.get(scene.connections[s.row]!.id);
       if (!wire) continue;
       const unit = metric.unit;
-      const arrow = s.direction === "reverse" ? "←" : "→";
-      const text = [w.verdict && verdictIcon[w.verdict], arrow, w.name, w.summary].filter(Boolean).join(" ");
+      const text = [w.verdict && verdictIcon[w.verdict], w.name, w.summary].filter(Boolean).join(" ");
       const maximum = maxima.get(unit);
       const width = maximum && metric.value !== null ? 2 + (MAX_WIRE_WIDTH - 2) * metric.value / maximum : 2;
       wire.push({ kind: "flow", workload: w.id, direction: s.direction, layer: layerFor(s.carrier?.domain ?? w.domain, unit),
@@ -116,9 +138,10 @@ function workloadView(scene: Scene, result: Results, row: number, o: Outcome, ru
   const carriers = new Set(steps.flatMap(s => s.carrier && s.carrier.domain !== o.domain ? [domainName(s.carrier.domain)] : []));
   const name = workloadKindName(o.domain, workload.kind);
   const metric = result.metrics.find(m => m.outcome === row && m.kind === run);
-  const qualifiers = [metric?.basis === "assumed" ? "가정" : "", metric?.range === "conservative" ? "보수적 경계" : ""].filter(Boolean);
-  const range = metric ? interval(metric, metric.unit) : "미확인";
-  const summary = [range, ...qualifiers].join(" · ");
+  const summary = metric ? [interval(metric, metric.unit),
+    metric.range === "conservative" ? "보수적 경계" : "",
+    metric.basis === "assumed" ? "가정 " + quantity(metric.value, metric.unit) : "",
+  ].filter(Boolean).join(" · ") : "미확인";
   const measures = result.measures.filter(m => m.outcome === row && m.run === run);
   return { id: workload.id, row, domain: o.domain, name: [name, ...[...carriers].map(c => c + " 경유")].join(" · "),
     verdict: outcomeVerdict(result, row, run), label: o.label, metric, summary, steps, measures };

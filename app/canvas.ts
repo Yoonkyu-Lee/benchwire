@@ -40,6 +40,7 @@ const MIN_ZOOM = 0.14;
 const MAX_ZOOM = 2.6;
 const DRAG_DISTANCE = 3;
 const WIRE_LABEL_ZOOM = 1;
+const WIRE_ARROWS = ["→", "↘", "↓", "↙", "←", "↖", "↑", "↗"];
 
 
 export function mountCanvas(root: HTMLElement, library: Library,
@@ -63,7 +64,7 @@ export function mountCanvas(root: HTMLElement, library: Library,
   let camera = { x: 0, y: 0, zoom: 1 };
   let cameraFrame: number | undefined;
   let gesture: Gesture | undefined;
-  let afterPointer: (() => void) | undefined;
+  const afterPointer: (() => void)[] = [];
   let selected: Socket | undefined;
   let highlighted: string | undefined;
   let drawn = false;
@@ -130,7 +131,14 @@ export function mountCanvas(root: HTMLElement, library: Library,
 
   function paintWire(wire: Wire) {
     const a = coords(wire.from), b = coords(wire.to);
-    wire.lines.forEach((line, i) => line.setAttribute("d", curve(a, b, (i - (wire.lines.length - 1) / 2) * 5)));
+    const octant = Math.round(Math.atan2(b.y - a.y, b.x - a.x) / (Math.PI / 4));
+    wire.lines.forEach((line, i) => {
+      line.setAttribute("d", curve(a, b, (i - (wire.lines.length - 1) / 2) * 5));
+      const direction = line.dataset.direction;
+      const arrow = direction ? WIRE_ARROWS[(octant + (direction === "reverse" ? 4 : 0) + 8) % 8] + " " : "";
+      const prefix = wire.labels[i]?.firstChild;
+      if (prefix && prefix.textContent !== arrow) prefix.textContent = arrow;
+    });
     const [left, right] = a.x <= b.x ? [wire.from.card, wire.to.card] : [wire.to.card, wire.from.card];
     const [top, bottom] = a.y <= b.y ? [wire.from.card, wire.to.card] : [wire.to.card, wire.from.card];
     const rightEdge = left.position.x + CARD_WIDTH;
@@ -235,12 +243,13 @@ export function mountCanvas(root: HTMLElement, library: Library,
           line.dataset.direction = mark.direction ?? "";
           line.dataset.unit = mark.unit;
           if (mark.verdict) line.dataset.verdict = mark.verdict;
+          else if (mark.kind === "negotiation") line.classList.add("wire-capability");
           if (mark.pool) line.dataset.pool = mark.pool;
           if (mark.width !== undefined) line.style.setProperty("--flow-width", String(mark.width));
           if (mark.dashed) line.classList.add("range-wire");
           if (mark.workload) line.dataset.workload = mark.workload;
           const title = svg("title");
-          title.textContent = mark.title;
+          title.textContent = mark.kind === "negotiation" && !mark.verdict ? mark.text : mark.title;
           line.append(title);
         }
         return line;
@@ -255,7 +264,9 @@ export function mountCanvas(root: HTMLElement, library: Library,
       const caption = svg("g", { class: "wire-caption", "aria-hidden": "true" });
       const labels = marks.map((mark, index) => {
         const text = label(mark.text, 0, -(marks.length - index) * 15, "wire-result");
+        text.prepend(svg("tspan"));
         if (mark.verdict) text.dataset.verdict = mark.verdict;
+        else if (mark.kind === "negotiation") text.classList.add("wire-capability");
         if (mark.workload) text.dataset.workload = mark.workload;
         return text;
       });
@@ -317,14 +328,12 @@ export function mountCanvas(root: HTMLElement, library: Library,
   }
 
   function afterGesture(draw: () => void) {
-    if (gesture) afterPointer = draw;
+    if (gesture) afterPointer.push(draw);
     else draw();
   }
 
   function finishGesture() {
-    const draw = afterPointer;
-    afterPointer = undefined;
-    draw?.();
+    for (const draw of afterPointer.splice(0)) draw();
   }
 
   function cancel() {
