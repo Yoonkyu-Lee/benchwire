@@ -6,9 +6,11 @@ const verdicts: Record<Verdict, string> = { ok: "✅", conditional: "⚠️", im
 const stages = { physical: "물리 호환", negotiate: "링크 협상", path: "경로 합성", allocate: "자원 배분", judge: "판정" };
 const metrics = { solo: "단독 성능", together: "동시 성능", drop: "하락량", dropPercent: "하락률", unused: "미사용 성능" };
 
+// 사람이 읽는 출력이라 소수 셋째 자리까지만 보인다. 계산값은 결과 표에 그대로 있다.
+const SHOWN_DECIMALS = 3;
 function quantity(value: number | null, unit: string) {
   if (value === null) return "미확인";
-  return `${value}${unit && unit !== "%" ? " " : ""}${unit}`;
+  return `${Number(value.toFixed(SHOWN_DECIMALS))}${unit && unit !== "%" ? " " : ""}${unit}`;
 }
 
 export function printResults(scene: Scene, result: Results): string {

@@ -2,13 +2,15 @@
 import { dirname, join } from "node:path";
 import { parseArgs } from "node:util";
 import { evaluate } from "../engine/evaluate.ts";
+import { display } from "../domains/display/display.ts";
+import { storageDomain } from "../domains/storage/copy.ts";
 import { trialDomain } from "../fixtures/trial.ts";
 import { loadScene } from "./load.ts";
 import { printResults } from "./print.ts";
 
 function main() {
   const trial = trialDomain();
-  const plugins = [trial];
+  const plugins = [display, storageDomain, trial];
   let scene;
   try {
     const { positionals, values } = parseArgs({
