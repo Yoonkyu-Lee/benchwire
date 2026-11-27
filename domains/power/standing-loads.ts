@@ -3,6 +3,11 @@ import { effectiveClaim, readClaim, type FeedLoad, type Scene } from "../../engi
 import { PD, POWER, POWER_UNIT } from "./input.ts";
 import { PD_FIXED } from "./sources.ts";
 
+export function sourceNodes(scene: Pick<Scene,"interfaces" | "ports" | "nodes">, iface: number) {
+  const item=scene.ports[scene.interfaces[iface]!.port]!.item;
+  return scene.nodes.flatMap((n,row)=>n.item===item ? [row] : []);
+}
+
 export function standingLoads(scene: Scene): FeedLoad[] {
   const loads: FeedLoad[] = [], sources: FeedLoad["feed"]["sources"][number][] = [];
   const connected=new Set(scene.connections.flatMap(c=>[c.from,c.to]));
@@ -22,11 +27,12 @@ export function standingLoads(scene: Scene): FeedLoad[] {
     if (iface.domain!==POWER || iface.protocol!==PD || iface.role!=="source" || !connected.has(iface.port)) continue;
     const claim=effectiveClaim(scene,"interface",row,POWER,"sourceNode");
     const value=claim===undefined ? null : readClaim(scene,claim).value;
-    const item=scene.ports[iface.port]!.item;
-    scene.nodes.forEach((n,node)=>{
-      if (n.item===item && (value===null || n.id===value)) sources.push({
-        node,outputPort:iface.port,possible:value===null,inputs:claim===undefined ? [iface.evidence] : [claim,iface.evidence],specs:[],rule:"송전 포트의 독립 전원 노드"
-      });
+    if (value==="") continue;
+    const nodes=sourceNodes(scene,row);
+    const known=nodes.find(node=>scene.nodes[node]!.id===value);
+    for (const node of known===undefined ? nodes : [known]) sources.push({
+      node,outputPort:iface.port,possible:known===undefined,inputs:claim===undefined ? [iface.evidence] : [claim,iface.evidence],
+      specs:[],rule:"송전 포트의 독립 전원 노드"
     });
   }
   return loads;

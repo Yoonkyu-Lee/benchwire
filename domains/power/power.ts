@@ -4,7 +4,8 @@ import { assessCharge, DEFAULT_TARGET_W } from "./charge.ts";
 import { attributes, params, paramsFor, PD, POWER, POWER_UNIT, request } from "./input.ts";
 import { negotiatePower } from "./negotiate.ts";
 import { sources } from "./sources.ts";
-import { standingLoads } from "./standing-loads.ts";
+import { sourceNodes, standingLoads } from "./standing-loads.ts";
+import { portBudgetError } from "./port-budget.ts";
 
 const labels: Record<Verdict, string> = { ok: "성립", conditional: "조건부", impossible: "불가", unknown: "미확인" };
 
@@ -15,8 +16,17 @@ export const power: DomainPlugin = {
   requiredParams(protocol,role) { return protocol===PD && role==="source" ? {sourceNode:""} : undefined; },
   profileValues(claim,scene) {
     if (claim.ownerKind!=="interface" || claim.field!=="sourceNode") return [];
-    const item=scene.ports[scene.interfaces[claim.owner]!.port]!.item;
-    return ["",...scene.nodes.filter(n=>n.item===item).map(n=>n.id)];
+    return ["",...sourceNodes(scene,claim.owner).map(n=>scene.nodes[n]!.id)];
+  },
+  referenceError(claim,value,scene) {
+    if (claim.ownerKind==="item" && claim.field.startsWith("budget:")) {
+      const message=portBudgetError(scene,claim.owner,claim.field);
+      if (message) return {at:"field",message};
+    }
+    if (claim.ownerKind==="interface" && claim.field==="sourceNode" && value!==null && value!=="" &&
+        !sourceNodes(scene,claim.owner).some(node=>scene.nodes[node]!.id===value))
+      return {at:"value",message:"이 모델에 없는 독립 전원 노드: "+value};
+    return undefined;
   },
   demand(scene, workload) {
     const claim = effectiveClaim(scene, "workload", workload, POWER, "requestedW")!;

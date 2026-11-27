@@ -188,6 +188,8 @@ export function loadSceneDocuments(document: unknown, library: { connectors: unk
     fact.conflicts?.forEach((c,i) => cite(c, at + ".conflicts." + i));
     return row;
   }
+  // 앞쪽 포트가 뒤쪽 자원을 가리킬 수 있으므로 모든 실물을 펼친 뒤 참조를 대조한다.
+  const references: {row:number; fact:Fact; at:string; fieldAt?:string}[]=[];
   function fields(ownerKind: Claim["ownerKind"], owner: number, scope: Claim["scope"], domain: string,
     values: Record<string, Fact>, schema: InputSchema, citations: Map<string, number>, at: string,
     generated?: { values: Record<string, Fact>; citations: Map<string, number>; recovered: boolean }) {
@@ -201,6 +203,7 @@ export function loadSceneDocuments(document: unknown, library: { connectors: unk
       const sourceRows = generated && Object.hasOwn(generated.values, key) ? generated.citations : citations;
       const row = claim(ownerKind, owner, scope, domain, key, fact, sourceRows, where);
       claimDomain(scene.claims[row]!, schema);
+      if (Object.hasOwn(values,key) && domains.get(domain)?.referenceError) references.push({row,fact,at:where});
     }
   }
 
@@ -404,6 +407,7 @@ export function loadSceneDocuments(document: unknown, library: { connectors: unk
       const values = Object.fromEntries(group.map(c => [c.field, { value: c.value, unit: c.unit }]));
       const schema = ownerKind === "item" ? plugin.attributes : interfaceSchema(plugin, scene.interfaces[owner]!.protocol);
       claimDomain(measured, schema);
+      if (plugin.referenceError) references.push({row,fact:p.claim,at:at+".claim",fieldAt:at+".field"});
       const recovered = ownerKind === "item" && recoveredAttributes.has(JSON.stringify([owner, domain]));
       checkValues(p.claim, at + ".claim", (sample,where) =>
         validateFields(schema, { ...values, [field]: { value: sample.value, unit: sample.unit } }, where, field, recovered));
@@ -470,6 +474,15 @@ export function loadSceneDocuments(document: unknown, library: { connectors: unk
     scene.workloads.push({ id, domain, kind, from: endpoint(w.from, "nodes", at + ".from"), to: endpoint(w.to, "nodes", at + ".to") });
     fields("workload", workload, "scene", domain, w.request, ref(domains, domain, at + ".domain").request, sceneSources, at + ".request");
   });
+  for (const {row,fact,at,fieldAt} of references) {
+    const c=scene.claims[row]!;
+    const request=c.ownerKind==="workload" ? saved.workloads[c.owner]!.request : {};
+    const check=domains.get(c.domain)!.referenceError!;
+    checkValues(fact,at,(sample,where)=>{
+      const error=check(c,sample.value,scene,request);
+      if (error) fail(error.at==="field" ? fieldAt??at : where+".value",error.message);
+    });
+  }
   const scenarios = new Map<string, number>();
   const scenarioNames = new Set<string>();
   saved.scenarios.forEach((s, scenario) => {

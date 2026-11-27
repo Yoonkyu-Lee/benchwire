@@ -23,6 +23,13 @@ export const network: DomainPlugin = {
     const item=scene.ports[scene.interfaces[claim.owner]!.port]!.item;
     return poeBudgets(scene,item).map(row=>scene.resources[row]!.id);
   },
+  referenceError(claim,value,scene) {
+    if (claim.ownerKind!=="interface" || claim.field!=="budgetResource" || value===null) return undefined;
+    const item=scene.ports[scene.interfaces[claim.owner]!.port]!.item;
+    if (!poeBudgets(scene,item).some(row=>scene.resources[row]!.id===value))
+      return {at:"value",message:"이 모델에 없는 PoE 전력 예산 자원(W): "+value};
+    return undefined;
+  },
   negotiate(link) {
     const ends = link.scene.interfaces.filter(i => i.domain === NETWORK && [link.ports[0], link.ports.at(-1)].includes(i.port));
     const options = [];

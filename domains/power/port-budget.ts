@@ -2,13 +2,27 @@
 import { hasClaimPrefix, readClaim, effectiveClaim, type Scene } from "../../engine/contract.ts";
 import { PD, POWER } from "./input.ts";
 
+function outletPorts(scene:Pick<Scene,"interfaces" | "ports">,item:number) {
+  return new Set(scene.interfaces.filter(i => i.domain === POWER && i.protocol === PD && i.role === "source" &&
+    scene.ports[i.port]!.item === item).map(i => i.port));
+}
+
+export function portBudgetError(scene:Pick<Scene,"interfaces" | "ports">,item:number,field:string) {
+  const [,combination,output]=field.split(":");
+  const ports=combination!.split("+");
+  const outlets=new Set([...outletPorts(scene,item)].map(row=>encodeURIComponent(scene.ports[row]!.id)));
+  const missing=ports.find(id=>!outlets.has(id));
+  if (missing!==undefined || !outlets.has(output!)) return "이 모델에 없는 출력 포트: "+(missing??output);
+  if (!ports.includes(output!)) return "접속 조합에 없는 출력 포트: "+output;
+  return undefined;
+}
+
 export function portBudget(scene: Scene, sourcePort: number) {
   const { item, id } = scene.ports[sourcePort]!;
   if (!hasClaimPrefix(scene,"item",item,POWER,"budget:"))
     return undefined;
 
-  const outlets = new Set(scene.interfaces.filter(i => i.domain === POWER && i.protocol === PD && i.role === "source" &&
-    scene.ports[i.port]!.item === item).map(i => i.port));
+  const outlets = outletPorts(scene,item);
   const attached = new Set<number>();
   const inputs: number[] = [];
   scene.connections.forEach((c, connection) => {

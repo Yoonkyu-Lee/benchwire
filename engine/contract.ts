@@ -91,6 +91,11 @@ export interface DomainPlugin {
   // 한 관측 행의 { [필드]: { value, unit } }를 검증한다. 각 필드를 독립적으로 입력할 수 있어야 한다.
   observations?: InputSchema;
   paramsFor?(protocol: string): InputSchema | undefined;
+  // 파일의 본값과 각 후보를 대상 표와 대조한다. 작업의 복합 참조는 같은 요청에 적힌 후보를 함께 읽는다.
+  referenceError?(claim: Pick<Claim,"ownerKind" | "owner" | "field">, value: Value,
+    topology: Pick<Scene,"items" | "nodes" | "ports" | "interfaces" | "resources">,
+    request: Readonly<Record<string,{value: Value; conflicts?: readonly {value: Value}[] | undefined}>>):
+      { at: "field" | "value"; message: string } | undefined;
   // 해당 송수신 역할에서 빠진 모델 필드를 지정한 단위의 미확인 주장으로 복원한다.
   requiredParams?(protocol: string, role: string): Readonly<Record<string,string>> | undefined;
   // 속성이 필요한 모델과 필드별 단위. 연결 프로토콜은 부품을 끼운 배선의 양 끝에 공통으로 선언된 것만 준다.
