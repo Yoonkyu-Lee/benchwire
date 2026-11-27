@@ -2,7 +2,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import type { Page } from "playwright";
-import { modelKey, type Library, type SceneDocument } from "./document.ts";
+import { modelKey, type Library, type Model, type SceneDocument } from "./document.ts";
 import { edgeSession, waitForAssessment } from "./edge-session.ts";
 
 const edge = edgeSession();
@@ -113,6 +113,152 @@ test("인벤토리 교체의 여러 호환 포트는 비교 전에 화면에서 
     assert.deepEqual(copy.workloads.find(row => row.id === "lan-a")?.from, { instanceId: item.instanceId, id: "nic" });
     assert.deepEqual(copy.scenarios[0]?.members, original.scenarios[0]?.members);
     assert.deepEqual(await read<SceneDocument>(page, "/api/scenes/" + sceneId), original);
+    assert.deepEqual(errors, []);
+  } finally { await page.close(); }
+});
+
+test("같은 이더넷 성능에서 지정 단자의 목표만 깨지는 교체를 두 비교 화면에 표시한다", { timeout: 25_000 }, async () => {
+  const { page, errors } = await edge.newPage("/");
+  page.setDefaultTimeout(7_000);
+  try {
+    const base = await read<SceneDocument>(page, "/api/scenes/network");
+    const library = await read<Library>(page, "/api/library");
+    const pse = library.models.find(model => model.modelId === "network-pse")!;
+    const pd = library.models.find(model => model.modelId === "network-pd")!;
+    function alternatePort(port: Model["ports"][number], node: string) {
+      return { ...port, id: "backup", label: "예비 단자", attachment: { ...port.attachment, value: node },
+        interfaces: port.interfaces.map(iface => ({ ...iface, id: iface.id + "-backup" })) };
+    }
+    const source = { ...pse, revision: "dual-port", ports: [...pse.ports, alternatePort(pse.ports[0]!, "supply")] };
+    const receiver = { ...pd, revision: "dual-port", nodes: [...pd.nodes, { id: "park", label: "예비 노드", kind: "junction" }],
+      ports: [...pd.ports, alternatePort(pd.ports[0]!, "park")] };
+    const replacement = { ...receiver, revision: "reversed", name: "예비 단자에 부하가 연결된 장비",
+      ports: receiver.ports.map(port => ({ ...port, attachment: { ...port.attachment, value: port.id === "pd" ? "park" : "load" } })) };
+    for (const model of [source, receiver, replacement]) await put(page, "/api/models/" + model.modelId + "/" + model.revision, model);
+
+    const wire = base.connections.find(row => row.id === "poe")!;
+    const sceneId = "swap-goal-fixture", workload = "poe-ethernet";
+    const goal = { id: "specified-port", label: "지정 단자로 받기", kind: "port" as const, workloads: [workload], instanceId: "pd", portId: "pd" };
+    const scenario = { id: "포트 기준", members: [workload], goals: [goal] };
+    const original: SceneDocument = { ...base, sceneId,
+      items: [...base.items.filter(row => ["pse", "pd", "poe-wire"].includes(row.instanceId))
+        .map(item => item.instanceId === "poe-wire" ? item : { ...item, revision: "dual-port" }),
+        { ...base.items.find(row => row.instanceId === "poe-wire")!, instanceId: "backup-wire" }],
+      connections: [wire, { ...wire, id: "backup", from: { ...wire.from, id: "backup" }, to: { ...wire.to, id: "backup" },
+        parts: [{ ...wire.parts[0]!, instanceId: "backup-wire" }] }],
+      workloads: base.workloads.filter(row => row.id === workload), scenarios: [scenario],
+      layout: { placements: base.layout!.placements!.filter(row => row.instanceId === "pse" || row.instanceId === "pd") },
+    };
+    await put(page, "/api/scenes/" + sceneId, original);
+    await openScene(page, sceneId);
+
+    await page.getByRole("button", { name: "모델", exact: true }).click();
+    await page.locator('[data-model-card="' + modelKey(replacement) + '"]').dragTo(page.locator('[data-instance="pd"] .device-name'));
+    const swap = page.getByRole("dialog", { name: "슬롯 교체", exact: true });
+    const change = "지정 단자로 받기 · ✅ 달성 → ❌ 미달";
+    await swap.getByText(change, { exact: true }).waitFor({ timeout: 5000 });
+    await swap.getByText("기술 차이 없음", { exact: true }).waitFor();
+    await swap.getByText("비용 차이 $0.00", { exact: true }).waitFor();
+    await page.screenshot({ path: "work/m7-swap-goal-change.png" });
+
+    const saved = page.waitForResponse(response => response.request().method() === "PUT" &&
+      response.url().includes("/api/scenes/swap-") && response.status() === 201);
+    await swap.getByRole("button", { name: "사본 저장", exact: true }).click();
+    const copy = await read<SceneDocument>(page, (await saved).headers()["location"]!);
+    const newId = copy.items.find(row => row.revision === replacement.revision)!.instanceId;
+    assert.deepEqual(copy.scenarios[0]?.goals, [{ ...goal, instanceId: newId }]);
+    assert.deepEqual(await read<SceneDocument>(page, "/api/scenes/" + sceneId), original);
+    await swap.getByRole("button", { name: "닫기", exact: true }).click();
+
+    await page.getByRole("button", { name: "구매 예산", exact: true }).click();
+    const budget = page.getByRole("dialog", { name: "구매 예산", exact: true });
+    await budget.getByText("로드아웃 비교", { exact: true }).click();
+    await budget.getByLabel("비교할 장면").selectOption(copy.sceneId);
+    await budget.getByLabel("비교할 시나리오").selectOption(scenario.id);
+    await budget.getByRole("button", { name: "두 구성 비교", exact: true }).click();
+    await budget.getByText(change, { exact: true }).waitFor({ timeout: 5000 });
+    await budget.getByText("기술 차이 없음", { exact: true }).waitFor();
+    await budget.getByText("가격 차이 $0.00", { exact: true }).waitFor();
+    await budget.getByText(change, { exact: true }).scrollIntoViewIfNeeded();
+    await page.screenshot({ path: "work/m7-loadout-goal-change.png" });
+    assert.deepEqual(errors, []);
+  } finally { await page.close(); }
+});
+
+test("로드아웃 비교는 목표 이름이 바뀌어도 ID로 맞추고 한쪽에만 있는 목표를 표시한다", { timeout: 20_000 }, async () => {
+  const { page, errors } = await edge.newPage("/");
+  try {
+    const base = await read<SceneDocument>(page, "/api/scenes/network");
+    const sceneId = "loadout-goal-fixture";
+    const passed = { kind: "workload" as const, workload: "poe-ethernet" };
+    const baseline = { ...base.scenarios[0]!, id: "기준", goals: [
+      { ...passed, id: "same", label: "처음 이름" }, { ...passed, id: "left", label: "기준에만 있는 목표" },
+    ] };
+    const alternate = { ...baseline, id: "대안", goals: [
+      { ...passed, id: "same", label: "바뀐 이름" }, { ...passed, id: "right", label: "대안에만 있는 목표" },
+    ] };
+    await put(page, "/api/scenes/" + sceneId, { ...base, sceneId, scenarios: [baseline, alternate] });
+    await openScene(page, sceneId);
+    await page.getByRole("button", { name: "구매 예산", exact: true }).click();
+    const budget = page.getByRole("dialog", { name: "구매 예산", exact: true });
+    await budget.getByText("로드아웃 비교", { exact: true }).click();
+    await budget.getByLabel("비교할 시나리오").selectOption(alternate.id);
+    await budget.getByRole("button", { name: "두 구성 비교", exact: true }).click();
+    const goals = budget.getByRole("region", { name: "목표 변화", exact: true });
+    await goals.getByRole("heading", { name: "목표 변화 2건", exact: true }).waitFor({ timeout: 5000 });
+    assert.deepEqual((await goals.getByRole("listitem").allTextContents()).sort(), [
+      "기준에만 있는 목표 · ✅ 달성 → 없음", "대안에만 있는 목표 · 없음 → ✅ 달성",
+    ]);
+    await budget.getByText("기술 차이 없음", { exact: true }).waitFor();
+    assert.deepEqual(errors, []);
+  } finally { await page.close(); }
+});
+
+
+test("슬롯과 로드아웃 비교에 교체 후 목표의 미확인 판정과 미완료 사유가 표시된다", { timeout: 30_000 }, async () => {
+  const { page, errors } = await edge.newPage("/");
+  page.setDefaultTimeout(7_000);
+  try {
+    const base = await read<SceneDocument>(page, "/api/scenes/three-ports");
+    const library = await read<Library>(page, "/api/library");
+    const supply = structuredClone(library.models.find(model => model.modelId === "supply")!);
+    supply.revision = "swap-open-capacity";
+    Object.assign(supply.resources[0]!.capacity, { value: null, confidence: "unknown" });
+    await put(page, "/api/models/supply/" + supply.revision, supply);
+
+    const sceneId = "swap-open-goal", work = base.workloads[0]!;
+    const scenario = { id: "충전 검증", members: [work.id],
+      goals: [{ id: "charge", label: "충전 목표", kind: "workload" as const, workload: work.id }] };
+    await put(page, "/api/scenes/" + sceneId, { ...base, sceneId,
+      items: base.items.filter(item => ["supply", "a", "wire-a"].includes(item.instanceId)),
+      workloads: [work], connections: base.connections.slice(0, 1), scenarios: [scenario],
+      layout: { placements: [{ instanceId: "supply", x: 60, y: 60 }, { instanceId: "a", x: 420, y: 60 }] } });
+    await openScene(page, sceneId);
+    await page.getByRole("button", { name: "모델", exact: true }).click();
+    await page.locator('[data-model-card="' + modelKey(supply) + '"]').dragTo(page.locator('[data-instance="supply"] .device-name'));
+
+    const swap = page.getByRole("dialog", { name: "슬롯 교체" });
+    const change = "충전 목표 · ✅ 달성 → ❓ 미확인";
+    const cause = /총 출력.*규격 걸음이 없어 모든 값을 확인할 수 없습니다/;
+    await swap.getByText(change, { exact: true }).waitFor({ timeout: 5000 });
+    await swap.getByText(cause).waitFor({ timeout: 5000 });
+    await page.screenshot({ path: "work/m7-swap-goal-incomplete.png" });
+
+    const saved = page.waitForResponse(response => response.request().method() === "PUT" &&
+      response.url().includes("/api/scenes/swap-") && response.status() === 201);
+    await swap.getByRole("button", { name: "사본 저장", exact: true }).click();
+    const copy = await read<SceneDocument>(page, (await saved).headers()["location"]!);
+    await swap.getByRole("button", { name: "닫기", exact: true }).click();
+    await page.getByRole("button", { name: "구매 예산", exact: true }).click();
+    const budget = page.getByRole("dialog", { name: "구매 예산" });
+    await budget.getByText("로드아웃 비교", { exact: true }).click();
+    await budget.getByLabel("비교할 장면").selectOption(copy.sceneId);
+    await budget.getByLabel("비교할 시나리오").selectOption(scenario.id);
+    await budget.getByRole("button", { name: "두 구성 비교", exact: true }).click();
+    await budget.getByText(change, { exact: true }).waitFor({ timeout: 5000 });
+    await budget.getByText(cause).waitFor({ timeout: 5000 });
+    await budget.getByText(cause).scrollIntoViewIfNeeded();
+    await page.screenshot({ path: "work/m7-loadout-goal-incomplete.png" });
     assert.deepEqual(errors, []);
   } finally { await page.close(); }
 });

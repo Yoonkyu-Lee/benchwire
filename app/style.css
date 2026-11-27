@@ -322,9 +322,10 @@ h1 { margin: 0; font-size: 17px; font-weight: 700; white-space: nowrap; }
 .swap-dialog .creator-body > p > small { display: block; margin-top: 4px; color: var(--muted); }
 .swap-dialog label { display: grid; gap: 4px; margin: 6px 0; }
 .swap-dialog select { width: 100%; padding: 6px; border: 1px solid var(--line); border-radius: 4px; background: #fff; }
-.swap-comparison { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
+.swap-comparison { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 190px), 1fr)); gap: 12px; }
 .swap-comparison section { padding: 12px; border: 1px solid var(--line); border-radius: 7px; }
 .swap-comparison h3 { margin: 0 0 8px; }
+.swap-comparison ul { margin: 0; padding-left: 18px; }
 .swap-dialog footer { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 0 14px; }
 .swap-dialog footer p { min-height: 1em; }
 .swap-dialog button { border: 1px solid var(--line); border-radius: 5px; padding: 5px 10px; background: #fff; }

@@ -1,4 +1,4 @@
-// 슬롯 교체 사본을 만들고, 대응이 확인되지 않은 연결과 작업 끝점의 선택지를 돌려준다.
+// 슬롯 교체 사본을 만들고, 연결·작업·목표에서 대응이 불확실한 위치의 선택지를 돌려준다.
 import { compare, type Snapshot } from "../engine/compare.ts";
 import type { Documents } from "./assessment.ts";
 import { modelKey, type Model, type Port, type PortRef, type SceneDocument } from "./document.ts";
@@ -58,6 +58,12 @@ export function swapSlot(scene: SceneDocument, documents: Documents, options: Sw
       usePort(a, "연결 " + edge.id, b);
       usePort(b, "연결 " + edge.id, a);
       if (a.instanceId === originalId && b.instanceId === originalId) localPairs.push([a.id, b.id]);
+    }
+  }
+
+  for (const scenario of scene.scenarios) for (const goal of scenario.goals ?? []) {
+    if (goal.kind === "port" && goal.portId !== undefined) {
+      usePort({ instanceId: goal.instanceId, id: goal.portId }, "목표 " + (goal.label ?? goal.id));
     }
   }
 
@@ -147,10 +153,14 @@ export function swapSlot(scene: SceneDocument, documents: Documents, options: Sw
           : part),
       })),
       workloads: scene.workloads.map(work => ({ ...work, from: remap(work.from, nodeTargets), to: remap(work.to, nodeTargets) })),
-      scenarios: scene.scenarios.map(scenario => !scenario.purchases ? scenario : {
-        ...scenario, purchases: scenario.purchases.map(row =>
+      scenarios: scene.scenarios.map(scenario => !scenario.purchases && !scenario.goals ? scenario : {
+        ...scenario,
+        ...(scenario.purchases && { purchases: scenario.purchases.map(row =>
           ("instanceId" in row && row.instanceId === originalId || "ownedInstanceId" in row && row.ownedInstanceId === originalId)
-            ? { instanceId: replacementId, ...(row.need && { need: row.need }) } : row),
+            ? { instanceId: replacementId, ...(row.need && { need: row.need }) } : row) }),
+        ...(scenario.goals && { goals: scenario.goals.map(goal => goal.kind === "port" && goal.instanceId === originalId
+          ? { ...goal, instanceId: replacementId, ...(goal.portId !== undefined && { portId: portTargets.get(goal.portId)! }) }
+          : goal) }),
       }),
       ...(scene.personal && { personal: scene.personal.filter(row => row.instanceId !== originalId) }),
       ...(scene.layout?.placements && { layout: { ...scene.layout, placements: scene.layout.placements.map(row =>

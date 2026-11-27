@@ -6,6 +6,7 @@ import { compare, type Snapshot } from "../engine/compare.ts";
 import { scenarioName } from "../scene/files.ts";
 import { evaluateInWorker, loadAssessment, type Documents } from "./assessment.ts";
 import { modelKey, type InventoryItem, type Item, type Library, type SceneDocument } from "./document.ts";
+import { renderGoalChanges } from "./goal-changes.ts";
 import { directionArrow, interval, resultView, verdictText, type ResultView } from "./results.ts";
 
 type Scenario = SceneDocument["scenarios"][number];
@@ -790,6 +791,8 @@ export function mountBudget(root: HTMLElement, library: Library, documents: Docu
         comparison.append(el("p",[id, directionArrow(o.direction)].filter(Boolean).join(" ") + " · " + d.changed.map(k => fields[k]).join(", ") + " · " +
           technicalValue(old,d.before) + " → " + technicalValue(next,d.after)));
       }
+      const goals = renderGoalChanges(leftSide.view, rightSide.view, [...(left.goals ?? []), ...(right.goals ?? [])]);
+      if (goals) comparison.append(goals);
     });
     refresh = render;
     const body = get(".creator-body");

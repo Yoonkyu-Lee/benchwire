@@ -80,17 +80,21 @@ test("포트 대응이 여럿이면 배선 위치 선택이 필요하고 호환 
   const replacement = { ...host, revision: "ports-swap", ports: ["left", "right"].map(id => ({
     ...p, id, interfaces: p.interfaces.map(iface => ({ ...iface, id: iface.id + "-" + id })),
   })) };
-  const waiting = swap(base, "host-a", replacement);
+  const goal = { id: "host-port", label: "LAN 단말 포트", kind: "port" as const, workloads: ["lan-a"], instanceId: "host-a", portId: "lan" };
+  const before: SceneDocument = { ...base, scenarios: [{ ...base.scenarios[0]!, goals: [goal] }] };
+  const waiting = swap(before, "host-a", replacement);
   assert.equal(waiting.document, null);
   assert.equal(waiting.pending.length, 1);
   const choice = waiting.pending[0]!;
   assert.equal(choice.kind, "port");
   assert.equal(choice.source, "lan");
   assert.deepEqual(choice.options.map(port => port.id), ["left", "right"]);
-  assert.equal(swap(base, "host-a", replacement, [], new Map([[choice.key, "missing"]])).document, null);
-  const { document: after } = swap(base, "host-a", replacement, [], new Map([[choice.key, "right"]]));
+  assert.deepEqual(choice.uses, ["연결 lan-a", "목표 LAN 단말 포트"]);
+  assert.equal(swap(before, "host-a", replacement, [], new Map([[choice.key, "missing"]])).document, null);
+  const { document: after } = swap(before, "host-a", replacement, [], new Map([[choice.key, "right"]]));
   assert(after);
   assert.deepEqual(after.connections.find(row => row.id === "lan-a")?.from, { instanceId: copy.replacementId, id: "right" });
+  assert.deepEqual(after.scenarios[0]?.goals, [{ ...goal, instanceId: copy.replacementId, portId: "right" }]);
   assert.equal(after.workloads.length, base.workloads.length);
   snapshot(after, docs([replacement]));
 });
@@ -141,4 +145,89 @@ test("포트 이름의 작업 끝점은 대응 포트의 내부 노드를 쓰고
   assert.deepEqual(part.connections.find(row => row.id === "lan-a")?.parts, [{ instanceId: copy.replacementId, entry: "a", exit: "b" }]);
   assert.deepEqual(part.scenarios[0]?.purchases, [{ instanceId: copy.replacementId, need }, { instanceId: "lan-b-wire" }, unrelated]);
   snapshot(part, docs([cable]));
+});
+
+test("같은 수전 모델로 바꾸면 시나리오의 포트 목표가 새 실물을 참조하고 계속 달성된다", () => {
+  const pd = model("network-pd");
+  const explicit = { id: "pd-port", kind: "port" as const, workloads: ["poe-12"], instanceId: "pd", portId: "pd" };
+  const any = { id: "any-input", kind: "port" as const, workloads: ["poe-12"], instanceId: "pd" };
+  const unaffected = { ...explicit, id: "pse-port", instanceId: "pse", portId: "pse" };
+  const before: SceneDocument = { ...base, scenarios: [{ ...base.scenarios[0]!, goals: [explicit, unaffected] },
+    { id: "나머지 시나리오", members: ["poe-12"], goals: [any] }] };
+  const { document: after, pending } = swapSlot(before, docs(), {
+    originalId: "pd", replacementId: "pd-new", sceneId: "network-goal-swap", replacement: pd,
+  });
+  assert(after);
+  assert.deepEqual(pending, []);
+  const next = snapshot(after);
+  assert.deepEqual(after.scenarios[0]?.goals, [{ ...explicit, instanceId: "pd-new" }, unaffected]);
+  assert.deepEqual(after.scenarios[1]?.goals, [{ ...any, instanceId: "pd-new" }]);
+  assert.deepEqual(next.result.goals.map(row => [row.id, row.verdict]), [["pd-port", "ok"], ["pse-port", "ok"], ["any-input", "ok"]]);
+  assert.equal(before.scenarios[0]?.goals?.[0], explicit);
+  assert.equal(before.scenarios[1]?.goals?.[0], any);
+});
+
+test("배선 밖의 목표 포트도 호환 위치가 모호하거나 없으면 선택을 요청한다", () => {
+  const pd = model("network-pd"), port = pd.ports[0]!;
+  const extraPort = (id: string) => ({ ...port, id, interfaces: [] });
+  const original = { ...pd, ports: [port, extraPort("spare")] };
+  const replacement = { ...pd, revision: "goal-port-choice", ports: [port, extraPort("left"), extraPort("right")] };
+  const goal = { id: "spare-port", label: "장비의 별도 단자", kind: "port" as const, workloads: ["poe-12"], instanceId: "pd", portId: "spare" };
+  const before: SceneDocument = { ...base, scenarios: [{ ...base.scenarios[0]!, goals: [goal] }] };
+
+  const waiting = swap(before, "pd", replacement, [original]);
+  assert.equal(waiting.document, null);
+  assert.equal(waiting.pending.length, 1);
+  const choice = waiting.pending[0]!;
+  assert.deepEqual([choice.kind, choice.source, choice.uses, choice.options.map(row => row.id)],
+    ["port", "spare", ["목표 장비의 별도 단자"], ["pd", "left", "right"]]);
+  const selected = swap(before, "pd", replacement, [original], new Map([[choice.key, "right"]]));
+  assert(selected.document);
+  const saved = selected.document.scenarios[0]?.goals?.[0];
+  assert.deepEqual(saved, { ...goal, instanceId: copy.replacementId, portId: "right" });
+  assert.deepEqual(selected.document.connections.find(row => row.id === "poe")?.to, { instanceId: copy.replacementId, id: "pd" });
+  snapshot(selected.document, docs([replacement]));
+
+  const plug = model("network-copper").ports[0]!.connector;
+  const incompatible = { ...original, ports: [port, { ...extraPort("spare"), connector: plug }] };
+  const noMatch = swap(before, "pd", replacement, [incompatible]);
+  assert.equal(noMatch.document, null);
+  assert.deepEqual(noMatch.pending.map(row => [row.source, row.options]), [["spare", []]]);
+});
+
+
+test("교체 사본의 포트 목표는 새 실물에서 읽은 PoE 유형의 고정 세계를 합친 결과와 같다", () => {
+  const replacement = structuredClone(model("network-pd"));
+  replacement.revision = "goal-world-swap";
+  const type = replacement.ports[0]!.interfaces.find(i => i.protocol === "PoE PD")!.params.poeType!;
+  const wire = base.connections.find(row => row.id === "poe")!;
+  const goal = { id: "poe-input", kind: "port" as const, workloads: ["poe-12"], instanceId: "pd", portId: wire.to.id };
+  const before: SceneDocument = { ...base, connections: [wire], workloads: base.workloads.filter(w => w.id === "poe-12"),
+    scenarios: [{ id: "poe", members: ["poe-12"], goals: [goal] }] };
+  Object.assign(type, { value: null, confidence: "unknown" });
+  const { document: after, pending } = swap(before, "pd", replacement);
+  assert.deepEqual(pending, []);
+  assert(after);
+  assert.equal(snapshot(before).result.goals[0]!.verdict, "ok");
+  const next = snapshot(after, docs([replacement]));
+  const port = next.scene.ports[next.scene.goals![0]!.kind === "port" ? next.scene.goals![0]!.port! : -1]!;
+  assert.equal(next.scene.items[port.item]!.id, copy.replacementId);
+  assert.equal(port.id, goal.portId);
+  const pd = next.scene.interfaces.findIndex(i => i.port === next.scene.ports.indexOf(port) && i.protocol === "PoE PD");
+  const claim = next.scene.claims.findIndex(row => row.ownerKind === "interface" && row.owner === pd &&
+    row.field === "poeType" && row.value === null);
+  assert.ok(claim >= 0);
+  const samples = next.scene.claims[claim]!.discrete!;
+  assert.deepEqual(samples, [0, 1, 2, 3, 4]);
+  assert.deepEqual(new Set(next.result.profileWorlds.filter(w => w.claim === claim).map(w => w.value)), new Set(samples));
+  assert.ok(next.result.goalEvidence.some(e => e.claims.includes(claim)));
+  assert.ok(next.scene.claimSources.some(s => s.claim === claim && next.scene.sources[s.source]!.id === "network-pd"));
+
+  const verdicts = samples.map(value => {
+    Object.assign(type, { value, confidence: "inferred" });
+    return snapshot(after, docs([replacement])).result.goals[0]!.verdict;
+  });
+  assert.deepEqual(new Set(verdicts), new Set(["ok", "impossible"]));
+  assert.equal(next.result.goals[0]!.verdict, "unknown");
+  assert.equal(next.result.goals[0]!.truncated, false);
 });

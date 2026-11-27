@@ -5,13 +5,11 @@ import type { PriceBook } from "../server/prices.ts";
 import { calculateBudget } from "./budget.ts";
 import type { SceneDocument } from "./document.ts";
 import { interval, verdictText as workVerdict, type ResultView } from "./results.ts";
-import { hasUnsteppedNumber } from "./field.ts";
-import { claimQuest } from "./quests.ts";
+import { goalVerdictText, renderIncompleteGoal } from "./goal-changes.ts";
 
 type Scenario = SceneDocument["scenarios"][number];
 type Goal = NonNullable<Scenario["goals"]>[number];
 type State = { doc: SceneDocument; id: string | null; view: ResultView | undefined };
-const verdictText = { ok:"✅ 달성", impossible:"❌ 미달", unknown:"❓ 미확인" };
 const kinds = {metric:"수치 하한", workload:"작업 성립", scenario:"모든 작업 성립", port:"포트 하나로"};
 const runs = {solo:"단독",together:"동시"};
 
@@ -217,36 +215,9 @@ export function mountGoals(root: HTMLElement, state: () => State,
       const title = g.kind === "metric" ? runs[g.run] + " " + (m?.label ?? g.metric) + " ≥ " + g.minimum + " " + g.unit
         : g.kind === "port" ? (item?.alias || (item && view?.scene.models[item.model]?.name) || g.instanceId) + " · " +
           (g.portId ? "포트 " + g.portId : "어느 포트든 하나") : kinds[g.kind];
-      row.append(element("p",(outcome ? verdictText[outcome.verdict] : "판정 중…") + " · " + title));
+      row.append(element("p",(outcome ? goalVerdictText[outcome.verdict] : "판정 중…") + " · " + title));
       if (outcome?.truncated && view) {
-        const claimRow=(claim:number, cause:"limit"|"open")=>{
-          const q=claimQuest(view,claim), name=[q.subject,q.template?.title ?? q.property?.title ?? q.title].filter(Boolean).join(" · ");
-          const li=element("li",name);
-          if (cause==="open") li.append(hasUnsteppedNumber(q.property)
-            ? " 값은 규격 걸음이 없어 모든 값을 확인할 수 없습니다." : "의 가능한 값을 모두 확인할 수 없습니다.");
-          if (openQuest) {
-            const verify=button("확인 퀘스트 열기",()=>{dialog.close();openQuest(claim);});
-            verify.setAttribute("aria-label",name+" 확인 퀘스트 열기");
-            li.append(" ",verify);
-          }
-          return li;
-        };
-        if (outcome.limitClaims) {
-          row.append(element("p","후보 조합 수가 검산 상한을 넘었습니다."));
-          if (outcome.limitClaims.length) {
-            const details=element("details"), claims=element("ul");
-            details.append(element("summary","조합을 이루는 주장 "+outcome.limitClaims.length+"개"),claims);
-            claims.append(...outcome.limitClaims.map(claim=>claimRow(claim,"limit")));
-            row.append(details);
-          }
-        }
-        if (outcome.openClaims?.length) {
-          const claims=element("ul");
-          claims.append(...outcome.openClaims.map(claim=>claimRow(claim,"open")));
-          row.append(claims);
-        }
-        if (!outcome.limitClaims && !outcome.openClaims?.length)
-          row.append(element("p","전달량이 범위로만 알려져 이 목표를 판정할 수 없습니다."));
+        row.append(renderIncompleteGoal(view, outcome, openQuest && (claim => { dialog.close(); openQuest(claim); })));
       } else if (outcome?.combined) {
         const why = {ok:"모든 후보에서 지정한 작업이 함께 목표를 달성합니다.",
           impossible:"지정한 작업이 함께 목표를 달성하는 후보가 없습니다.",unknown:"후보에 따라 달라지거나 아직 확인할 값이 있습니다."};

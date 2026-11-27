@@ -1,9 +1,10 @@
-// 슬롯 사본의 연결 위치를 확인하고 기술·비용을 비교한 뒤 별도 장면으로 저장한다.
+// 슬롯 사본의 위치를 확인하고 기술·비용·목표를 비교한 뒤 별도 장면으로 저장한다.
 import type { Snapshot } from "../engine/compare.ts";
 import type { PriceBook } from "../server/prices.ts";
 import { evaluateInWorker, loadAssessment, type Documents } from "./assessment.ts";
 import { calculateBudget, compareBudgets, unknownPrices } from "./budget.ts";
 import { modelKey, type Model, type SceneDocument } from "./document.ts";
+import { renderGoalChanges } from "./goal-changes.ts";
 import { directionArrow, interval, resultView, verdictText } from "./results.ts";
 import { compareSwap, swapSlot, type SwapChoice } from "./swap.ts";
 
@@ -122,7 +123,7 @@ export function mountSwap(root: HTMLElement, documents: Documents, saveCopy: (do
       if (focused >= 0) selection.querySelectorAll("select")[focused]?.focus({ preventScroll: true });
       output.replaceChildren();
       if (!candidate) {
-        status.textContent = "연결과 작업의 위치를 고르면 비교할 수 있습니다.";
+        status.textContent = "연결·작업·목표에 사용할 위치를 고르면 비교할 수 있습니다.";
         return;
       }
 
@@ -147,9 +148,11 @@ export function mountSwap(root: HTMLElement, documents: Documents, saveCopy: (do
         const costs = el("section");
         costs.setAttribute("aria-label", "비용 차이");
         const left = before.scenarios[0], right = newDocument.scenarios[0];
+        const oldView = resultView(a.scene, a.result, left ? 0 : null, "together");
+        const nextView = resultView(b.scene, b.result, right ? 0 : null, "together");
         if (left && right && offers) {
-          const oldBudget = calculateBudget(left, before.items, offers, resultView(a.scene,a.result,0,"together"));
-          const newBudget = calculateBudget(right, candidate.items, offers, resultView(b.scene,b.result,0,"together"));
+          const oldBudget = calculateBudget(left, before.items, offers, oldView);
+          const newBudget = calculateBudget(right, candidate.items, offers, nextView);
           const delta = compareBudgets(oldBudget, newBudget);
           const total = ({ subtotalCents, unknownRange }: typeof oldBudget) =>
             money(subtotalCents) + (unknownRange.high===0n ? "" : " + " + unknownPrices(unknownRange));
@@ -158,6 +161,8 @@ export function mountSwap(root: HTMLElement, documents: Documents, saveCopy: (do
         } else costs.append(el("h3", "비용 차이 미확인"),
           el("p", left && right ? "견적을 읽을 수 없습니다." : "구매 목록을 비교할 시나리오가 없습니다."));
         output.replaceChildren(technical, costs);
+        const goals = renderGoalChanges(oldView, nextView, [...(left?.goals ?? []), ...(right?.goals ?? [])]);
+        if (goals) output.append(goals);
         ready = candidate;
         save.disabled = false;
         status.textContent = "";
