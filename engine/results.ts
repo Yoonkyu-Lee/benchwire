@@ -18,7 +18,7 @@ export interface Results {
   reasonSpecs: { reason: number; source: number }[];
   options: (Option & { linkResource: number; connection: number; domain: string; direction: Direction })[];
   demands: (Demand & { workload: number })[];
-  paths: { workload: number; demand: number; verdict: Verdict; bestCase?: Verdict; disconnected?: number[]; key: string; truncated: boolean }[];
+  paths: { workload: number; demand: number; verdict: Verdict; bestCase?: Verdict; disconnected?: number[]; disconnectedEdges?: number[]; key: string; truncated: boolean }[];
   steps: (Step & { path: number; order: number })[];
   allocations: { scenario: number; workload: number; run: Run; value: number | null; unit: string }[];
   bindings: { scenario: number; workload: number; run: Run; resourceKind: "scene" | "link"; resource: number }[];

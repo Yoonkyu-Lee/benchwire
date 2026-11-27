@@ -65,6 +65,7 @@ function through(scene: Scene, arcs: PathArc[], stops: number[]) {
     const witness = sections.map((s, i) => s.found[0] ?? routes(arcs, stops[i]!, stops[i + 1]!, 1).found[0]);
     if (witness.every(s => s !== undefined)) return { found: [witness.flat()], truncated: false };
     const disconnected = new Set<number>();
+    const disconnectedEdges = new Set<number>();
     for (const [i, route] of witness.entries()) {
       if (route) continue;
       // 단절 양쪽에서 실제로 닿는 노드에 접한 연결이 마지막으로 고려한 배선이다.
@@ -74,10 +75,14 @@ function through(scene: Scene, arcs: PathArc[], stops: number[]) {
         if ([c.from, c.to].some(port => terminalItems.includes(scene.ports[port]!.item))) disconnected.add(row);
       });
       const forward = reachable(arcs, start, false), backward = reachable(arcs, end, true);
+      const incident = new Set([...forward, ...backward]);
+      scene.edges.forEach((edge, row) => {
+        if (incident.has(edge.from) || incident.has(edge.to)) disconnectedEdges.add(row);
+      });
       for (const a of arcs) if (forward.has(a.from) || backward.has(a.to))
         for (const step of a.steps) if (step.kind === "connection") disconnected.add(step.row);
     }
-    return { found: [], truncated: false, disconnected: [...disconnected] };
+    return { found: [], truncated: false, disconnected: [...disconnected], disconnectedEdges: [...disconnectedEdges] };
   }
   let found: PathArc[][] = [[]], truncated = sections.some(s => s.truncated);
   for (const section of sections) {
@@ -111,7 +116,7 @@ export function paths(scene: Scene, plugins: readonly DomainPlugin[], result: Re
       const demand = result.demands.push({ ...d, workload }) - 1;
       const arcs = [...internal, ...connectionArcs(scene, result, w.domain, d)];
       const stops = [w.from, ...d.via, w.to];
-      const { found, truncated, disconnected } = through(scene, arcs, stops);
+      const { found, truncated, disconnected, disconnectedEdges } = through(scene, arcs, stops);
       const relevant = new Set(found.filter(route => route.every(a => a.verdict !== "impossible")).flat());
       if (truncated) {
         // 열거에서 잘린 후보도 이 구간의 출발점에서 닿고 도착점까지 이어지는 호에만 의존한다.
@@ -144,6 +149,7 @@ export function paths(scene: Scene, plugins: readonly DomainPlugin[], result: Re
         const bestCase = verdict === "unknown" && d.requested !== null ? (highest === "ok" && d.preference > 0 ? "conditional" : highest) : verdict;
         const path = result.paths.push({ workload, demand, verdict, key, bestCase,
           ...(disconnected?.length ? { disconnected } : {}),
+          ...(disconnectedEdges?.length ? { disconnectedEdges } : {}),
           truncated: verdict !== "impossible" && (truncated || selected.some(a => a.truncated)) }) - 1;
         selected.flatMap(a => a.steps).forEach((s, order) => result.steps.push({ ...s, path, order }));
       }

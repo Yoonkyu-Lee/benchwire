@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { display } from "../domains/display/display.ts";
 import { loadScene } from "../cli/load.ts";
+import { trialDomain } from "../fixtures/trial.ts";
 import { effectiveClaim } from "./contract.ts";
 import { evaluate } from "./evaluate.ts";
 import { portFacts } from "./scene.ts";
@@ -62,4 +63,27 @@ test("T3 작업 양 끝의 노드가 모두 고립되어도 그 장비의 포트
   const wire = scene.connections.find(c => c.id === "native")!;
   assert.equal(r.outcomes[row]!.verdict, "impossible");
   for (const p of [wire.from, wire.to]) assert.ok(r.reasonInputs.some(i => r.reasons[i.reason]!.outcome === row && i.claim === portFacts(scene,p).attachment));
+});
+
+test("T3 외부 연결 없는 장비에서 역방향 내부 간선의 방향과 모델 출처가 불가 근거에 남는다", () => {
+  const trial = trialDomain();
+  const scene = loadScene("fixtures/three-flows.json", { modelsDir: "fixtures", connectorsFile: "fixtures/connectors.json" }, [trial]);
+  scene.connections = [];
+  scene.members = scene.members.slice(0, 1);
+  const work = scene.workloads[0]!, row = scene.edges.findIndex(e => e.from === work.from);
+  const edge = scene.edges[row]!;
+  work.from = edge.to;
+  work.to = edge.from;
+  for (const verdict of ["impossible", "ok"] as const) {
+    if (verdict === "ok") [edge.from, edge.to] = [edge.to, edge.from];
+    const result = evaluate(scene, [trial]), outcome = result.outcomes.findIndex(o => o.subjectKind === "workload" && o.subjectRow === 0);
+    assert.equal(result.outcomes[outcome]!.verdict, verdict);
+    const proof = result.reasons.flatMap((r, i) => r.outcome === outcome && r.stage === "path" && r.targetKind === "edge" ? [i] : []);
+    assert.deepEqual(proof.map(i => result.reasons[i]!.targetRow), [row]);
+    const reason = proof[0]!;
+    assert.ok(result.reasonParents.some(p => p.prior === reason && result.reasons[p.reason]!.outcome === outcome));
+    if (verdict === "impossible") assert.ok(result.reasons[reason]!.rule.includes(scene.nodes[edge.from]!.id + " → " + scene.nodes[edge.to]!.id));
+    assert.ok(result.reasonInputs.some(i => i.reason === reason && i.claim === edge.evidence));
+    assert.ok(scene.claimSources.some(s => s.claim === edge.evidence && scene.sources[s.source]!.locator === "fixture:source"));
+  }
 });

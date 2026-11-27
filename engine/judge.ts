@@ -109,11 +109,17 @@ export function judgeWork(scene: Scene, result: Results, plugin: DomainPlugin, s
     if (o.unused !== undefined) metric("unused", o.unused, o.unit);
   }
   function cutReasons(path: Results["paths"][number] | null) {
-    return (path?.disconnected ?? []).map(row => {
+    const reasons = (path?.disconnected ?? []).map(row => {
       const c = scene.connections[row]!;
       return addReason(result, { outcome, stage: "path", rule: "끊긴 경로 양쪽의 포트 부착점", targetKind: "connection", targetRow: row },
         [c.evidence, portFacts(scene, c.from).attachment, portFacts(scene, c.to).attachment]);
     });
+    for (const row of path?.disconnectedEdges ?? []) {
+      const edge = scene.edges[row]!;
+      const rule = "끊긴 경로의 내부 간선 " + scene.nodes[edge.from]!.id + " → " + scene.nodes[edge.to]!.id;
+      reasons.push(addReason(result, { outcome, stage: "path", rule, targetKind: "edge", targetRow: row }, [edge.evidence]));
+    }
+    return reasons;
   }
   const parents: number[] = [];
   for (const [run, share] of [["단독", solo], ["동시", together]] as const) for (const limit of share.policies ?? []) {
