@@ -10,7 +10,8 @@ export interface Claim {
   reference?: number | null; domain: string; field: string; condition: string; value: Value; unit: string; confidence: Confidence;
 }
 // 순서가 같은 주장끼리는 앞선 행이 이긴다. 같은 소유자의 행 번호를 작은 번호부터 잇는다.
-interface ClaimIndex { first: Record<Owner, number[]>; next: number[] }
+// claims는 색인을 만든 주장 표다. 다른 표를 가진 장면(플러그인이 만든 복사본)에는 쓰지 않는다.
+interface ClaimIndex { claims: readonly Claim[]; first: Record<Owner, number[]>; next: number[] }
 export interface Scene {
   // 평가 입구(evaluationScene)에서 만든다. 없으면 effectiveClaim이 주장 표 전체를 훑는다.
   claimIndex?: ClaimIndex;
@@ -45,7 +46,7 @@ function buildClaimIndex(claims: readonly Claim[]): ClaimIndex {
     next[row] = heads[owner] ?? -1;
     heads[owner] = row;
   }
-  return { first, next };
+  return { claims, first, next };
 }
 
 // 평가마다 그 장면의 주장 표로 새로 만든다. 주장 수에 비례하는 비용이라 평가 시간에 견줘 작다.
@@ -57,7 +58,7 @@ export function evaluationScene(scene: Scene): Scene {
 export function effectiveClaim(scene: Scene, ownerKind: Owner, owner: number, domain: string, field: string, condition = ""): number | undefined {
   let best: number | undefined;
   let rank = -1;
-  const index = scene.claimIndex;
+  const index = scene.claimIndex?.claims === scene.claims ? scene.claimIndex : undefined;
   const first = index ? index.first[ownerKind][owner] ?? -1 : 0;
   for (let row = first; row >= 0 && row < scene.claims.length; row = index ? index.next[row]! : row + 1) {
     const c = scene.claims[row]!;

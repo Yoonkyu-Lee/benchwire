@@ -1,7 +1,7 @@
 // 미확인 부착점과 연결 설정을 장면 전체에서 일관되게 고정하고 후보별 판정·범위·출처를 합친다.
 import type { DomainPlugin, Scene } from "./contract.ts";
 import type { RouteInputs } from "./path.ts";
-import { attachmentCandidates, effectiveClaim, portFacts } from "./scene.ts";
+import { attachmentCandidates, effectiveClaim, evaluationScene, portFacts } from "./scene.ts";
 import { availableOption } from "./pools.ts";
 import { addReason, type Results } from "./results.ts";
 
@@ -443,7 +443,7 @@ export function resolveUnknowns(scene: Scene, plugins: readonly DomainPlugin[], 
       }) : scene.members;
       const claimSources = disputed ? scene.claimSources.filter(s => !s.candidate || claims[s.claim]!.value === null ||
         claims[s.claim]!.value === s.candidate.value) : scene.claimSources;
-      const concrete = { ...scene, claims, members, claimSources }, answer = evaluateWiring(concrete, plugins, profileChanged, disputed);
+      const concrete = evaluationScene({ ...scene, claims, members, claimSources }), answer = evaluateWiring(concrete, plugins, profileChanged, disputed);
       if (!disputed) completeUnknowns(concrete, plugins, answer);
       const sameChoice = (c: Results["choices"][number]) => answer.choices.some(other =>
         other.scenario === c.scenario && other.connection === c.connection && other.profile === c.profile);
