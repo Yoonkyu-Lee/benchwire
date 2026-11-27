@@ -120,3 +120,106 @@ test("T9 같은 미확인 상품은 비교에서 상쇄하고 다른 상품은 �
     assert.deepEqual(errors,[]);
   } finally { await page.close(); }
 });
+
+test("T9 결합품을 고르기 전에는 상한 충족이 미확인이고 보유품을 지정하면 확인된다",async () => {
+  const {page} = await edge.newPage("/");
+  try {
+    await page.evaluate(async () => {
+      const doc = await (await fetch("/api/scenes/network")).json() as SceneDocument;
+      const next = {...doc,sceneId:"budget-unassigned",
+        connections:doc.connections.map((c,i) => i ? c : {...c,parts:[]}),
+        scenarios:[{...doc.scenarios[0]!,budget:0}]};
+      const put = await fetch("/api/scenes/" + next.sceneId, {method:"PUT",headers:{"Content-Type":"application/json"},body:JSON.stringify(next)});
+      if (!put.ok) throw new Error(await put.text());
+    });
+    await page.reload();
+    await waitForAssessment(page);
+    await page.getByRole("button",{name:"구매 예산",exact:true}).click();
+    const panel = page.getByRole("dialog",{name:"구매 예산"});
+    const need = panel.locator(".needs p").filter({hasText:"lan-a · "}).first();
+    await need.getByText(/해결 품목 미지정/).waitFor();
+    const totals = panel.locator(".totals");
+    assert.match(await totals.innerText(),/가격 미확인 [1-9]\d*개/);
+    assert.match(await totals.innerText(),/상품 예산 \$0.00 · 충족 여부 미확인/);
+    await page.screenshot({path:resolve("work/m6-budget-unassigned.png")});
+    for (const pending of await panel.locator(".needs p").all()) {
+      await pending.getByRole("button",{name:"품목 지정"}).click();
+      await panel.getByLabel("구매할 항목").selectOption({label:"보유 · LAN 케이블 A / lan-a-wire"});
+      await panel.getByRole("button",{name:"목록에 추가"}).click();
+      await pending.filter({hasText:"lan-a-wire"}).waitFor();
+    }
+    await totals.getByText("상품 예산 $0.00 이내",{exact:true}).waitFor();
+    await page.screenshot({path:resolve("work/m6-budget-assigned.png")});
+  } finally { await page.close(); }
+});
+
+test("T9 다른 탭에서 시나리오 이름이 먼저 바뀌어도 상한을 저장하고 충돌 안내는 예산 창에 표시한다",async () => {
+  const {page,errors} = await edge.newPage("/");
+  try {
+    await page.evaluate(async () => {
+      const doc = await (await fetch("/api/scenes/network")).json() as SceneDocument;
+      const next = {...doc,sceneId:"budget-race",scenarios:doc.scenarios.with(-1,{...doc.scenarios.at(-1)!,id:"공유망 기존 이름"})};
+      const put = await fetch("/api/scenes/" + next.sceneId,{method:"PUT",headers:{"Content-Type":"application/json"},body:JSON.stringify(next)});
+      if (!put.ok) throw new Error(await put.text());
+    });
+    await page.reload();
+    await waitForAssessment(page);
+    const editor = page.locator(".scenario-panel").first();
+    await editor.locator("summary").first().click();
+    await editor.getByLabel("현재 시나리오",{exact:true}).selectOption("공유망 기존 이름");
+    const open = page.getByRole("button",{name:"구매 예산",exact:true});
+    const panel = page.getByRole("dialog",{name:"구매 예산"});
+    await open.click();
+    await panel.getByRole("heading",{name:"공유망 기존 이름",exact:true}).waitFor();
+    const updateOtherTab = (id:string, budget?:number) => page.evaluate(async ({id,budget}) => {
+      const path = "/api/scenes/budget-race";
+      const get = await fetch(path), doc = await get.json() as SceneDocument;
+      const next = {...doc,scenarios:doc.scenarios.with(-1,{...doc.scenarios.at(-1)!,id,...(budget !== undefined && {budget})})};
+      const put = await fetch(path,{method:"PUT",headers:{"Content-Type":"application/json","If-Match":get.headers.get("ETag")!},body:JSON.stringify(next)});
+      if (!put.ok) throw new Error(await put.text());
+    },{id,budget});
+    await updateOtherTab("공유망 이름 변경");
+    await panel.getByText("구매 목록 편집",{exact:true}).click();
+    const limit = panel.getByLabel("상품 예산 상한 (USD)");
+    const save = panel.getByRole("button",{name:"상한 저장"});
+    const storage = page.locator("#storage-status");
+    await limit.fill("121");
+    await save.click();
+    await storage.getByText(/저장됨|다시 적용하지 못한 편집/).waitFor();
+    const readSaved = () => page.evaluate(async () => (await (await fetch("/api/scenes/budget-race")).json() as SceneDocument).scenarios.at(-1));
+    assert.equal((await readSaved())?.budget,121);
+    await panel.getByRole("heading",{name:"공유망 이름 변경",exact:true}).waitFor();
+    await updateOtherTab("공유망 이름 변경",122);
+    await limit.fill("123");
+    await save.click();
+    await panel.getByText(/다시 적용하지 못한 편집/).waitFor();
+    assert.equal((await readSaved())?.budget,122);
+    await page.screenshot({path:resolve("work/m6-budget-conflict.png")});
+    assert.deepEqual(errors,[]);
+  } finally { await page.close(); }
+});
+
+test("T9 안전한 범위의 수동 단가·할인을 센트로 그대로 저장하고 초과액은 입력 오류로 표시한다",async () => {
+  const {page} = await edge.newPage("/");
+  try {
+    await page.getByRole("button",{name:"구매 예산",exact:true}).click();
+    const panel = page.getByRole("dialog",{name:"구매 예산"});
+    await panel.getByText("수동 견적 입력",{exact:true}).click();
+    await panel.getByLabel("견적 모델").selectOption("network-copper@1");
+    await panel.getByLabel("판매처",{exact:true}).fill("센트 확인점");
+    await panel.getByLabel("상품 번호").fill("high-cents");
+    const price = panel.getByLabel("판매 단가 (USD)");
+    const discount = panel.getByLabel("묶음당 확인된 할인 (USD)");
+    const save = panel.getByRole("button",{name:"견적 저장"});
+    await price.fill("70368744177664.01");
+    await discount.fill("70368744177664.01");
+    await save.click();
+    await panel.getByText("견적을 저장했습니다.",{exact:true}).waitFor();
+    const sold = await page.evaluate(async () => (await (await fetch("/api/prices")).json()).quotes.find((q: {productId:string}) => q.productId === "high-cents"));
+    assert.equal(sold.unitPriceCents,7_036_874_417_766_401);
+    assert.equal(sold.discountCents,7_036_874_417_766_401);
+    await price.fill("90071992547409.92");
+    await save.click();
+    await panel.getByText(/안전하게 저장할 수 있는 금액/).waitFor();
+  } finally { await page.close(); }
+});

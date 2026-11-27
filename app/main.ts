@@ -14,6 +14,8 @@ picker.setAttribute("aria-label", "장면");
 
 function status(text = "", canReopen = false) {
   message.textContent = text;
+  const budgetStatus = root.querySelector<HTMLElement>("dialog[open] [data-scene-save-status]");
+  if (budgetStatus) budgetStatus.textContent = text;
   reopen.hidden = !canReopen;
   notice.hidden = text === "";
 }
@@ -50,7 +52,8 @@ function mergeFields<T>(before: ReadonlyMap<string, T>, wanted: ReadonlyMap<stri
 }
 
 function mergeRows<T extends { id: string }>(latest: T[], before: T[], wanted: T[],
-  sourced: (row: T) => T, merge: (old: T, next: T, current: T) => T | typeof CONFLICT): T[] | undefined {
+  sourced: (row: T) => T, merge: (old: T, next: T, current: T) => T | typeof CONFLICT,
+  findEdited?: (before: T[], latest: T[], index: number) => number): T[] | undefined {
   if (before === wanted) return latest;
   let rows = latest;
   // 폼의 한 제출은 표마다 한 행을 바꾸거나 끝에 더한다.
@@ -58,7 +61,7 @@ function mergeRows<T extends { id: string }>(latest: T[], before: T[], wanted: T
     const old = before[index];
     if (old === next) continue;
     const row = sourced(next);
-    const at = rows.findIndex(r => r.id === (old?.id ?? row.id));
+    const at = old && findEdited ? findEdited(before,rows,index) : rows.findIndex(r => r.id === (old?.id ?? row.id));
     if (!old) {
       if (at < 0) rows = [...rows, row];
       else if (!same(rows[at], row)) return undefined;
@@ -78,6 +81,16 @@ function mergeRows<T extends { id: string }>(latest: T[], before: T[], wanted: T
 type Scenario = SceneDocument["scenarios"][number];
 type Workload = SceneDocument["workloads"][number];
 type Claim = Workload["request"][string];
+
+function findScenario(before: Scenario[], latest: Scenario[], index: number) {
+  const old = before[index]!;
+  const byName = latest.findIndex(s => s.id === old.id);
+  if (byName >= 0) return byName;
+  const row = latest[index];
+  // 편집기는 기존 행을 같은 자리에 둔다. 다른 행이 이동했으면 이름을 추정하지 않는다.
+  return row && !before.some(s => s.id === row.id) && same(old.members,row.members)
+    && before.every((s,i) => i === index || s.id === latest[i]?.id) ? index : -1;
+}
 
 function mergeScenario(before: Scenario, wanted: Scenario, latest: Scenario) {
   const id = mergeField(before.id, wanted.id, latest.id);
@@ -123,7 +136,7 @@ function replayScenario(latest: SceneDocument, { before, after }: Edit) {
   }), mergeWorkload);
   const scenarios = mergeRows(latest.scenarios, before.scenarios, after.scenarios, s => ({
     ...s, members: s.members.map(m => typeof m === "string" ? m : { ...m, priority: cite(m.priority) }),
-  }), mergeScenario);
+  }), mergeScenario, findScenario);
   return workloads && scenarios ? { ...latest, sources, workloads, scenarios } : undefined;
 }
 
@@ -253,8 +266,11 @@ async function start() {
   }
 
   function reapply(discarded: string[]) {
-    draft = saved;
     const scenarioId = workbench.readScenario();
+    const before = edits[0]?.before.scenarios ?? draft.scenarios;
+    const index = before.findIndex(s => s.id === scenarioId);
+    const rebased = index < 0 ? -1 : findScenario(before,saved.scenarios,index);
+    draft = saved;
     for (const edit of edits.splice(0)) {
       const next = replay(draft, edit);
       if (!next) { discarded.push(editName(edit)); edit.done?.(false); continue; }
@@ -271,7 +287,8 @@ async function start() {
       draft = next;
     }
     workbench.replaceDocument(draft);
-    if (scenarioId) workbench.setScenario(scenarioId);
+    if (scenarioId && !workbench.setScenario(scenarioId) && rebased >= 0)
+      workbench.setScenario(saved.scenarios[rebased]!.id);
   }
 
   async function save() {

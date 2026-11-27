@@ -63,3 +63,30 @@ test("T9 같은 미확인 상품·수량만 상쇄하고 다른 상품, SKU 또�
     assert.equal(compareBudgets(left,total([{instanceId:"a"},{instanceId:"b"},different,extra],150,data)),null);
   }
 });
+
+test("T9 지정한 묶음의 남은 칸과 여러 판매 단위를 함께 써서 선호점에서 최소 금액을 고른다", () => {
+  const single = {...offer,unitPriceCents:600};
+  const pair = {...offer,productId:"두개",saleUnit:2,unitPriceCents:1000};
+  const triple = {...offer,productId:"세개",saleUnit:3,unitPriceCents:1100};
+  const other = {...offer,seller:"다음점",productId:"다른 낱개",unitPriceCents:1};
+  const pinned = {modelRef:pair.modelRef,quantity:1,product:{seller:pair.seller,productId:pair.productId,saleUnit:pair.saleUnit}};
+  const data = {...stock,quotes:[single,pair,triple,other]};
+  const reused = total([pinned,{instanceId:"a"}],10,data);
+  assert.equal(reused.subtotalCents,1000n);
+  assert.equal(reused.limitStatus,"within");
+  assert.deepEqual(reused.lines.flatMap(line => line.instances),["a"]);
+  const mixed = total([{modelRef:offer.modelRef,quantity:7}],100,data);
+  assert.equal(mixed.subtotalCents,2800n);
+  assert.deepEqual(mixed.lines.map(line => [line.quote?.productId,line.packs]).sort(),[["낱개",1n],["세개",2n]]);
+  assert.equal(mixed.lines.reduce((count,line) => count+line.quantity,0n),7n);
+});
+
+test("T9 조합 탐색 상한을 넘기면 비용을 미확인으로 남기고 한 판매 단위는 큰 수량도 계산한다", () => {
+  const demand = [{modelRef:offer.modelRef,quantity:50_001}];
+  const pair = {...offer,productId:"두개",saleUnit:2};
+  const bounded = total(demand,1,{...stock,quotes:[offer,pair]});
+  assert.equal(bounded.unknownCount,50_001n);
+  assert.equal(bounded.limitStatus,"unknown");
+  assert.equal(bounded.lines[0]?.searchExceeded,true);
+  assert.equal(total(demand,1,{...stock,quotes:[pair]}).subtotalCents,100_004_000n);
+});

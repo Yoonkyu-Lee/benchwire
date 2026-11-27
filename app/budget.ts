@@ -11,17 +11,68 @@ type Scenario = SceneDocument["scenarios"][number];
 type Purchase = NonNullable<Scenario["purchases"]>[number];
 interface BudgetLine {
   key: string; modelRef: string; product?: ProductRef | undefined; quantity: bigint; quote?: Quote | undefined;
-  instances: string[]; skippedSellers: string[]; packs: bigint; cents: bigint | null;
+  instances: string[]; skippedSellers: string[]; packs: bigint; cents: bigint | null; searchExceeded?: true;
 }
 const priceKey = (model: string, ref?: ProductRef) => JSON.stringify([model, ref?.seller, ref?.productId, ref?.saleUnit]);
 const packPrice = (q: Quote) => BigInt(q.unitPriceCents) - BigInt(q.discountCents ?? 0);
 const packCount = (units: bigint, q: Quote) => (units + BigInt(q.saleUnit) - 1n) / BigInt(q.saleUnit);
-function dollarsToCents(amount: number) {
-  const [dollars, fraction = ""] = String(amount).split(".");
-  return BigInt(dollars!) * 100n + BigInt(fraction.padEnd(2,"0"));
+
+// 여러 판매 단위를 비교할 때 모델별 탐색의 상태 수 × 판매 단위 수를 제한한다.
+const MAX_PACK_SEARCH_STEPS = 100_000n;
+function leastCostPacks(units: bigint, offers: Quote[]) {
+  const counts = offers.map(() => 0n);
+  const prices = offers.map(packPrice);
+  const distinct = new Map<bigint, number>();
+  for (const [index, offer] of offers.entries()) {
+    const size = BigInt(offer.saleUnit);
+    const cover = size < units ? size : units;
+    const prior = distinct.get(cover);
+    if (prior === undefined || prices[index]! < prices[prior]!) distinct.set(cover, index);
+  }
+  if (distinct.size === 1) {
+    const index = distinct.values().next().value!;
+    counts[index] = packCount(units, offers[index]!);
+    return counts;
+  }
+  // 무료 묶음 하나의 판매 단위를 반복하면 수량과 무관하게 최저 금액이다.
+  const free = prices.indexOf(0n);
+  if (free >= 0) { counts[free] = packCount(units, offers[free]!); return counts; }
+  if (units * BigInt(distinct.size) > MAX_PACK_SEARCH_STEPS) return;
+
+  const choices = [...distinct].map(([size,index]) => [Number(size),index] as const);
+  const costs = [0n], selected: (typeof choices)[number][] = [];
+  // 수요 이하의 상태만 두고, 더 큰 묶음은 남은 수요 전부를 채운다.
+  for (let remaining = 1; remaining <= Number(units); remaining++) {
+    for (const choice of choices) {
+      const [size,index] = choice;
+      const cost = costs[Math.max(0,remaining-size)]! + prices[index]!;
+      if (costs[remaining] === undefined || cost < costs[remaining]!) {
+        costs[remaining] = cost;
+        selected[remaining] = choice;
+      }
+    }
+  }
+  for (let remaining = Number(units); remaining > 0;) {
+    const [size,index] = selected[remaining]!;
+    counts[index] = counts[index]! + 1n;
+    remaining -= size;
+  }
+  return counts;
 }
 
-export function calculateBudget(scenario: Scenario, items: readonly Item[], book: PriceBook) {
+function centsFromDollars(text: string) {
+  const value = /^(\d*)(?:\.(\d{1,2}))?$/.exec(text);
+  if (!value || !(value[1] || value[2])) throw new Error("금액을 소수 둘째 자리까지 입력하세요.");
+  const cents = BigInt(value[1] + (value[2] ?? "").padEnd(2,"0"));
+  if (cents > BigInt(Number.MAX_SAFE_INTEGER)) throw new Error("안전하게 저장할 수 있는 금액을 넘었습니다.");
+  return Number(cents);
+}
+
+function newLine(modelRef: string, product?: ProductRef): BudgetLine {
+  return {key:priceKey(modelRef,product),modelRef,product,quantity:0n,instances:[],skippedSellers:[],packs:0n,cents:null};
+}
+
+export function calculateBudget(scenario: Scenario, items: readonly Item[], book: PriceBook, unassignedNeeds = 0) {
   const grouped = new Map<string, BudgetLine>();
   const owned: string[] = [];
   const seen = new Set<string>();
@@ -41,7 +92,7 @@ export function calculateBudget(scenario: Scenario, items: readonly Item[], book
       product = row.product;
     }
     const key = priceKey(model, product);
-    const line = grouped.get(key) ?? {key, modelRef:model, product, quantity:0n, instances:[], skippedSellers:[], packs:0n, cents:null};
+    const line = grouped.get(key) ?? newLine(model,product);
     line.quantity += BigInt(quantity);
     if ("instanceId" in row) line.instances.push(row.instanceId);
     grouped.set(key,line);
@@ -57,33 +108,66 @@ export function calculateBudget(scenario: Scenario, items: readonly Item[], book
     const index = book.preferredSellers.indexOf(q.seller);
     return index < 0 ? book.preferredSellers.length : index;
   };
-  const ordered = new Map<string, BudgetLine>();
-  for (const line of grouped.values()) {
-    const offers = [...current.values()].filter(q => q.modelRef === line.modelRef &&
-      (!line.product || priceKey(q.modelRef,q) === line.key));
-    const cost = (q: Quote) => packCount(line.quantity, q) * packPrice(q);
-    const chosen = offers.filter(q => q.stock === "in").sort((a,b) => rank(a) - rank(b) || Number(cost(a) - cost(b))
-      || a.seller.localeCompare(b.seller) || a.productId.localeCompare(b.productId))[0];
-    line.skippedSellers = book.preferredSellers.filter((seller, i) => (!chosen || i < rank(chosen))
+  const quotesByModel = Map.groupBy(current.values(),q => q.modelRef);
+  const lines = [];
+  for (const [model, demands] of Map.groupBy(grouped.values(),line => line.modelRef)) {
+    const offers = quotesByModel.get(model) ?? [];
+    const stocked = offers.filter(q => q.stock === "in").sort((a,b) => rank(a)-rank(b)
+      || a.seller.localeCompare(b.seller) || a.productId.localeCompare(b.productId) || a.saleUnit-b.saleUnit);
+    const preferred = stocked.filter(q => rank(q) === rank(stocked[0]!));
+    const skipped = book.preferredSellers.filter((seller,i) => (!stocked.length || i < rank(stocked[0]!))
       && offers.some(q => q.seller === seller && q.stock === "out") && !offers.some(q => q.seller === seller && q.stock !== "out"));
-    line.quote = chosen;
-    const key = chosen ? priceKey(line.modelRef, chosen) : line.key;
-    const prior = ordered.get(key);
-    if (prior) {
-      prior.quantity += line.quantity;
-      prior.instances.push(...line.instances);
-      prior.skippedSellers = [...new Set([...prior.skippedSellers, ...line.skippedSellers])];
-    } else ordered.set(key,line);
+    const products = new Map<string,BudgetLine>();
+    for (const line of demands) {
+      if (!line.product) continue;
+      const exact = current.get(line.key);
+      if (exact?.stock === "in") {
+        line.quote = exact;
+        line.packs = packCount(line.quantity,exact);
+      } else if (exact?.stock === "out" && book.preferredSellers.includes(exact.seller)) {
+        line.skippedSellers = [exact.seller];
+      }
+      products.set(line.key,line);
+    }
+    const flexible = demands.find(line => !line.product);
+    if (flexible) {
+      const assign = (line: BudgetLine, capacity: bigint) => {
+        const used = capacity < flexible.quantity ? capacity : flexible.quantity;
+        line.quantity += used;
+        flexible.quantity -= used;
+        line.instances = line.instances.concat(flexible.instances.splice(0,Number(used)));
+      };
+      // 직접 고른 상품의 남는 낱개는 추가 주문 없이 같은 모델 수요를 채운다.
+      for (const line of products.values()) if (line.quote)
+        assign(line,line.packs * BigInt(line.quote.saleUnit) - line.quantity);
+      if (flexible.quantity && preferred.length) {
+        const counts = leastCostPacks(flexible.quantity,preferred);
+        if (!counts) flexible.searchExceeded = true;
+        else for (const [index,count] of counts.entries()) {
+          if (!count) continue;
+          const quote = preferred[index]!, key = priceKey(model,quote);
+          const line = products.get(key) ?? newLine(model,quote);
+          line.quote = quote;
+          line.packs += count;
+          line.skippedSellers = skipped;
+          assign(line,count * BigInt(quote.saleUnit));
+          products.set(key,line);
+        }
+      }
+      if (flexible.quantity) {
+        flexible.skippedSellers = skipped;
+        products.set(flexible.key,flexible);
+      }
+    }
+    lines.push(...products.values());
   }
-  const lines = [...ordered.values()];
-  let subtotalCents = 0n, unknownCount = 0n;
+  let subtotalCents = 0n, unknownCount = BigInt(unassignedNeeds);
   for (const line of lines) {
     if (!line.quote) { unknownCount += line.quantity; continue; }
-    line.packs = packCount(line.quantity,line.quote);
     line.cents = line.packs * packPrice(line.quote);
     subtotalCents += line.cents;
   }
-  const limitCents = scenario.budget === undefined ? null : dollarsToCents(scenario.budget);
+  const limitCents = scenario.budget === undefined ? null : BigInt(centsFromDollars(String(scenario.budget)));
   const limitStatus = limitCents === null ? "unset" : subtotalCents > limitCents ? "over" : unknownCount ? "unknown" : "within";
   return { lines, owned, subtotalCents, unknownCount, limitCents, limitStatus };
 }
@@ -168,7 +252,7 @@ function receiptTable(area: HTMLElement, result: ReceiptResult, library: Library
     const name = control(identity,"상품명","text",row.name ?? ""), seller = control(identity,"판매처","text",row.seller ?? "");
     const qty = control(amounts,"수량","number",row.quantity?.toString() ?? "");
     qty.min = "1"; qty.step = "1";
-    const dollars = (cents: number | null) => cents === null ? "" : (cents/100).toFixed(2);
+    const dollars = (cents: number | null) => cents === null ? "" : usd(cents).slice(1).replaceAll(",","");
     const total = control(amounts,"행 합계","number",dollars(row.lineTotalCents));
     const unit = control(amounts,"단가","number",dollars(row.unitPriceCents));
     total.step = unit.step = "0.01"; total.min = unit.min = "0";
@@ -197,15 +281,15 @@ function receiptTable(area: HTMLElement, result: ReceiptResult, library: Library
     const notice = el("p",[...row.issues,...row.warnings].join(" · "));
     notice.className = "issue"; notice.setAttribute("role","status"); actions.append(button,notice);
     button.onclick = async () => {
-      const readCents = (field: HTMLInputElement) => field.value === "" ? null : Math.round(field.valueAsNumber*100);
       if (!model.value || !qty.checkValidity() || !total.checkValidity() || !unit.checkValidity()) {
         notice.textContent = "모델과 수량·센트 단위의 금액을 확인하세요."; return;
       }
-      const entry = {kind:kind.value,importId:result.id+"-"+index,modelRef:model.value,inventory:inventory.checked,
-        name:name.value.trim(),seller:seller.value.trim(),quantity:qty.valueAsNumber,lineTotalCents:readCents(total),
-        unitPriceCents:readCents(unit),currency:currency.value.trim(),date:date.value,stock:stock.value};
       tr.inert = true;
       try {
+        const receiptCents = (field: HTMLInputElement) => field.value === "" ? null : centsFromDollars(field.value);
+        const entry = {kind:kind.value,importId:result.id+"-"+index,modelRef:model.value,inventory:inventory.checked,
+          name:name.value.trim(),seller:seller.value.trim(),quantity:qty.valueAsNumber,lineTotalCents:receiptCents(total),
+          unitPriceCents:receiptCents(unit),currency:currency.value.trim(),date:date.value,stock:stock.value};
         await save(entry);
         kind.disabled = true;
         for (const field of tr.querySelectorAll("input,select,button")) field.setAttribute("disabled","");
@@ -276,7 +360,7 @@ export function mountBudget(root: HTMLElement, library: Library, documents: Docu
         <form class="compare"><label>비교할 장면<select name="scene"></select></label>
         <label>비교할 시나리오<select name="scenario" required></select></label><button>두 구성 비교</button></form>
         <div class="compare-result" aria-live="polite"></div>
-      </details><p role="status"></p></div>`;
+      </details><p role="status"></p><p role="status" data-scene-save-status></p></div>`;
     const get = <T extends HTMLElement = HTMLElement>(selector: string) => dialog.querySelector<T>(selector)!;
     const status = get("[role=status]");
     const select = (name: string) => get<HTMLSelectElement>(`select[name="${name}"]`);
@@ -385,7 +469,8 @@ export function mountBudget(root: HTMLElement, library: Library, documents: Docu
       const area = get(".needs");
       area.replaceChildren();
       requirements = [];
-      if (view && view.scenario !== null && view.scene.scenarios[view.scenario]?.id === id) {
+      const assessed = view && view.scenario !== null && view.scene.scenarios[view.scenario]?.id === id;
+      if (assessed) {
         for (const [connection,outcomes] of view.negotiations) {
           const capabilities = new Set(view.result.needs.filter(n => outcomes.includes(n.outcome)).map(n => n.requiredCapability));
           for (const capability of capabilities) requirements.push({connection,capability});
@@ -393,10 +478,12 @@ export function mountBudget(root: HTMLElement, library: Library, documents: Docu
       }
       picker.replaceChildren(new Option("일반 구매",""));
       if (requirements.length) area.append(el("h3","필요한 결합 형태"));
+      let unassigned = 0;
       for (const need of requirements) {
         const label = need.connection + " · " + need.capability;
         picker.add(new Option(label,JSON.stringify(need)));
         const selected = scenario.purchases?.filter(p => p.need?.connection === need.connection && p.need.capability === need.capability);
+        if (!selected?.length) unassigned++;
         const connection = doc.connections.find(c => c.id === need.connection)!;
         const endpoints = [connection.from,connection.to].map(p => p.instanceId + "/" + p.id).join(" ↔ ");
         const line = el("p",label + " (" + endpoints + ") · " + (selected?.length ? selected.map(purchaseName).join(", ") : "해결 품목 미지정 · 추가 비용 미확인"));
@@ -412,6 +499,7 @@ export function mountBudget(root: HTMLElement, library: Library, documents: Docu
         area.append(line);
       }
       if ([...picker.options].some(o => o.value === before)) picker.value = before;
+      return assessed ? unassigned : undefined;
     }
     let lastScenario: Scenario | undefined;
     function render() {
@@ -420,18 +508,20 @@ export function mountBudget(root: HTMLElement, library: Library, documents: Docu
       area.replaceChildren();
       for (const name of ["add","cap","compare"]) get<HTMLButtonElement>("."+name+" button").disabled = !scenario;
       if (!scenario) { area.append(el("p","예산을 작성할 시나리오를 먼저 만드세요.")); return; }
-      const budget = calculateBudget(scenario,doc.items,book);
+      const unassigned = showNeeds(scenario);
+      const budget = calculateBudget(scenario,doc.items,book,unassigned);
       area.append(el("h3",scenario.id),el("strong","확인된 상품 소계 " + usd(budget.subtotalCents)),
         el("p","가격 미확인 " + budget.unknownCount + "개 · 세금과 배송비 미확인"));
       area.querySelector("strong")!.className = "budget-total";
       const remaining = budget.limitCents === null ? "상품 예산 상한 미설정" : budget.limitStatus === "over"
         ? "상품 예산 " + usd(budget.subtotalCents - budget.limitCents) + " 초과" : "상품 예산 " + usd(budget.limitCents) +
-          (budget.limitStatus === "within" ? " 이내" : " · 충족 여부 미확인");
+          (budget.limitStatus === "within" && unassigned !== undefined ? " 이내" : " · 충족 여부 미확인");
       area.append(el("p",remaining));
       if (budget.limitStatus === "over") area.lastElementChild!.className = "over";
       const list = el("ul","");
       for (const line of budget.lines) {
         const li = el("li",line.modelRef + " × " + line.quantity + " · " + (line.cents === null ? "가격 미확인" : usd(line.cents) + " (" + line.packs + "묶음)"));
+        if (line.searchExceeded) li.append(" · 묶음 조합 계산 범위 초과");
         if (line.instances.length) li.append(" · " + line.instances.join(", "));
         if (line.skippedSellers.length) li.append(" · " + line.skippedSellers.join(", ") + " 품절");
         if (line.quote) li.append(el("br",""),quoteDetail(line.quote));
@@ -454,7 +544,6 @@ export function mountBudget(root: HTMLElement, library: Library, documents: Docu
         purchases.append(li);
       }
       optionRows();
-      showNeeds(scenario);
     }
     function displayBook(next: PriceBook) {
       if (!dialog.open) return;
@@ -521,14 +610,18 @@ export function mountBudget(root: HTMLElement, library: Library, documents: Docu
     submit("cap",() => {
       const {budget:old, ...s} = chosen()!;
       const limit = text("limit");
-      if ((limit ? Number(limit) : undefined) !== old) updateScenario({...s,...(limit && {budget:Number(limit)})});
+      const cents = limit === "" ? undefined : centsFromDollars(limit);
+      const budget = cents === undefined ? undefined : Number(limit);
+      if (budget !== undefined && cents !== centsFromDollars(String(budget)))
+        throw new Error("이 예산 상한을 센트 단위로 저장할 수 없습니다.");
+      if (budget !== old) updateScenario({...s,...(budget !== undefined && {budget})});
     });
     submit("quote",async () => {
       const q: Quote = {modelRef:select("modelRef").value,seller:text("seller"),productId:text("productId"),
-        unitPriceCents:Math.round(input("price").valueAsNumber*100),saleUnit:input("saleUnit").valueAsNumber,
+        unitPriceCents:centsFromDollars(text("price")),saleUnit:input("saleUnit").valueAsNumber,
         currency:"USD", stock:select("stock").value as Quote["stock"],retrievedAt:new Date(text("time")).toISOString(),
         source:text("source"),provider:"manual",...(text("url") && {url:text("url")}),...(text("coupon") && {coupon:text("coupon")}),
-        ...(text("discount") && {discountCents:Math.round(input("discount").valueAsNumber*100)})};
+        ...(text("discount") && {discountCents:centsFromDollars(text("discount"))})};
       displayBook(await json<PriceBook>("/api/prices",q));
       status.textContent = "견적을 저장했습니다.";
     });
