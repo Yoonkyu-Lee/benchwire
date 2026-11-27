@@ -1,19 +1,14 @@
 // 요청 해상도·색과 허용한 DSC·주사율 폴백을 고정 영상 대역폭 행으로 바꾼다.
-import { effectiveClaim, type Demand, type Scene } from "../../engine/contract.ts";
+import { effectiveClaim, type Scene } from "../../engine/contract.ts";
+import { DSC_MODE, type DisplayDemand } from "./dsc.ts";
 import { CHROMA, CVT_RB_V2, DSC } from "./sources.ts";
 import { cvtRbV2PixelClockHz, uncompressedVideoBandwidthGbps, videoBandwidthGbps, type VideoChroma } from "./video-demand.ts";
 
 export const UNCOMPRESSED = "uncompressed";
 export const SUBSAMPLED = "uncompressed:subsampled";
-export const DSC_PREFIX = "dsc:";
 export const VIDEO_UNIT = "Gbps";
 
-export function dscTarget(scene: Scene, workload: number) {
-  const claim = effectiveClaim(scene, "workload", workload, "display", "dscBpp");
-  return claim === undefined ? undefined : { claim, value: scene.claims[claim]!.value as number | null };
-}
-
-export function displayDemand(scene: Scene, workload: number): Demand[] {
+export function displayDemand(scene: Scene, workload: number): DisplayDemand[] {
   const inputs: number[] = [];
   function read(field: string) {
     const row = effectiveClaim(scene, "workload", workload, "display", field);
@@ -44,16 +39,18 @@ export function displayDemand(scene: Scene, workload: number): Demand[] {
   }
 
   const requestedClock = clock(refresh);
-  const demands: Demand[] = [{
+  const demands: DisplayDemand[] = [{
     ...common, mode, preference: 0, requested: uncompressed(requestedClock),
     rule: "CVT-RB v2 요청 타이밍의 비압축 영상 대역폭", inputs: requestInputs, specs,
   }];
-  const target = dscTarget(scene, workload);
-  if (target) {
+  const dscClaim = effectiveClaim(scene, "workload", workload, "display", "dscBpp");
+  if (dscClaim !== undefined) {
+    const dscBpp = scene.claims[dscClaim]!.value as number | null;
     demands.push({
-      ...common, mode: DSC_PREFIX + (target.value ?? "unknown"), preference: 1,
-      requested: requestedClock === null || bpc === null || chroma === null || target.value === null ? null : videoBandwidthGbps(requestedClock, target.value),
-      rule: target.value === null ? "요청 타이밍의 DSC 목표 bpp 미확인" : `요청 타이밍에 허용한 DSC ${target.value} bpp 영상 대역폭`, inputs: [...requestInputs, target.claim], specs: [...specs, DSC],
+      ...common, mode: DSC_MODE, preference: 1, dscBpp, dscClaim,
+      requested: requestedClock === null || bpc === null || chroma === null || dscBpp === null ? null : videoBandwidthGbps(requestedClock, dscBpp),
+      rule: dscBpp === null ? "요청 타이밍의 DSC 목표 bpp 미확인" : `요청 타이밍에 허용한 DSC ${dscBpp} bpp 영상 대역폭`,
+      inputs: [...requestInputs, dscClaim], specs: [...specs, DSC],
     });
   }
   const fallbackClaim = effectiveClaim(scene, "workload", workload, "display", "fallbackRefresh");

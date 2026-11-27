@@ -2,6 +2,7 @@
 export const DP_RATES = "dp-rates";
 export const DP_VERSIONS = "dp-versions";
 export const DP_ALT_MODE = "dp-alt-mode";
+export const DP_TUNNEL = "dp-tunnel";
 export const HDMI_FRL = "hdmi-frl";
 export const HDMI_TMDS = "hdmi-tmds";
 export const CVT_RB_V2 = "cvt-rb-v2";
@@ -15,6 +16,8 @@ export const sources = [
     locator: "https://compliance.vesa.org/" },
   { id: DP_ALT_MODE, title: "VESA DisplayPort Alt Mode over USB Type-C (2019), pp. 21–23",
     locator: "https://www.usb.org/sites/default/files/D2T1-4%20-%20VESA%20DP%20Alt%20Mode%20over%20USB%20Type-C.pdf" },
+  { id: DP_TUNNEL, title: "USB-IF USB4 System Overview (2019), DP Tunneling, p. 27",
+    locator: "https://www.usb.org/sites/default/files/D1T1-3%20-%20USB4%20System%20Overview.pdf#page=27" },
   { id: HDMI_FRL, title: "HDMI FPGA IP User Guide, SCDC FRL rate 및 FRL Clocking Scheme",
     locator: "https://cdrdv2-public.intel.com/772809/ug_hdmi-683798-772809.pdf" },
   { id: HDMI_TMDS, title: "HDMI Specification 1.4b §3, §5.4 및 HDMI Forum의 HDMI 2.0 대역폭 발표",

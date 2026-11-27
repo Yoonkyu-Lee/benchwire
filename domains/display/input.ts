@@ -28,7 +28,8 @@ const hdmiParams = z.strictObject({
 export const params = z.strictObject({});
 export function paramsFor(protocol: string) {
   switch (protocol) {
-    case "DP": return dpParams;
+    case "DP":
+    case "DP Tunnel": return dpParams;
     case "DP Alt Mode": return altModeParams;
     case "HDMI": return hdmiParams;
     default: return undefined;

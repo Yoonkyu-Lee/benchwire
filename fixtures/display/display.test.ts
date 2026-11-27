@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { test } from "node:test";
 import { loadScene } from "../../cli/load.ts";
 import { display } from "../../domains/display/display.ts";
-import type { Scene, Value } from "../../engine/contract.ts";
+import type { DomainPlugin, Scene, Value } from "../../engine/contract.ts";
 import { evaluate } from "../../engine/evaluate.ts";
 
 function load(modelsDir = import.meta.dirname, sceneFile = join(import.meta.dirname, "scene.json")) {
@@ -35,8 +35,8 @@ function setWorkloadValue(scene: Scene, id: string, field: string, value: Value)
   claim.value = value;
 }
 
-function inspect(scene: Scene, id: string) {
-  const result = evaluate(scene, [display]);
+function inspect(scene: Scene, id: string, plugins = [display]) {
+  const result = evaluate(scene, plugins);
   assert.deepEqual(result.errors, []);
   const workload = scene.workloads.findIndex(w => w.id === id);
   const index = result.outcomes.findIndex(o => o.subjectKind === "workload" && o.subjectRow === workload);
@@ -94,32 +94,49 @@ test("4K 144 Hz 10 bpc가 양 끝의 공통 DSC 12 bpp에서 조건부로 성립
   const scene = load();
   const r = inspect(scene, "dsc");
   assert.equal(r.outcome.verdict, "conditional");
-  assert.equal(r.outcome.mode, "dsc:12");
+  assert.equal(r.outcome.mode, "dsc");
   assert.equal(r.option.limit, 25.92);
   const work = r.demand.workload;
   assert.ok(r.result.demands.find(d => d.workload === work && d.preference === 0)!.requested! > r.option.limit);
   assert.ok(r.demand.requested! < r.option.limit);
-  assert.ok(r.reasons.some(reason => reason.stage === "negotiate" && reason.rule.includes("DSC 12 bpp")));
+  assert.ok(r.reasons.some(reason => reason.stage === "path" && reason.rule.includes("DSC 12 bpp")));
   assert.ok(r.specs.includes("dsc") && r.specs.includes("dp-rates"));
   assert.ok(r.claims.includes(portClaim(scene, "host", "dp", "dscBpp")));
   assert.ok(r.claims.includes(portClaim(scene, "native", "dp", "dscBpp")));
   assert.ok(r.claims.some(row => scene.claims[row]!.ownerKind === "workload" && scene.claims[row]!.field === "dscBpp"));
 });
 
-test("송신만 DSC를 지원하면 요청은 불가하고 명시한 60 Hz 폴백은 조건부로 성립한다", () => {
+test("DSC 목표를 수신기가 거절하면 양 끝과 요청의 출처가 남고 60 Hz 폴백이 성립한다", () => {
   const scene = load();
-  setPortValue(scene, "native", "dp", "dscBpp", 0);
-  const blocked = inspect(scene, "dsc");
-  assert.equal(blocked.outcome.verdict, "impossible");
-  assert.equal(blocked.result.options.find(o => o.connection === blocked.option.connection && o.direction === "forward" && o.mode === "dsc:12")?.verdict, "impossible");
-  const fallback = inspect(scene, "with-fallback");
-  assert.equal(fallback.outcome.verdict, "conditional");
-  assert.equal(fallback.outcome.mode, "uncompressed");
-  assert.equal(fallback.demand.preference, 2);
-  assert.ok(fallback.reasons.some(reason => reason.stage === "path" && reason.rule.includes("60 Hz 폴백")));
-  assert.ok(fallback.reasons.some(reason => reason.stage === "negotiate" && reason.rule.includes("공통 DSC 목표가 없음")));
-  assert.ok(fallback.claims.includes(portClaim(scene, "native", "dp", "dscBpp")));
-  assert.ok(fallback.specs.includes("dsc"));
+  for (const capability of [0, 8]) {
+    setPortValue(scene, "native", "dp", "dscBpp", capability);
+    const blocked = inspect(scene, "dsc");
+    assert.equal(blocked.outcome.verdict, "impossible");
+    assert.equal(blocked.result.options.find(o => o.connection === blocked.option.connection && o.direction === "forward" && o.mode === "dsc")?.verdict, "conditional");
+    const fallback = inspect(scene, "with-fallback");
+    assert.equal(fallback.outcome.verdict, "conditional");
+    assert.equal(fallback.outcome.mode, "uncompressed");
+    assert.equal(fallback.demand.preference, 2);
+    assert.ok(fallback.reasons.some(reason => reason.stage === "path" && reason.rule.includes("60 Hz 폴백")));
+    const match = fallback.result.matches.find(m => m.verdict === "impossible" &&
+      fallback.result.demands[m.demand]!.workload === fallback.demand.workload &&
+      fallback.result.options[m.option]!.linkResource === fallback.option.linkResource)!;
+    assert.ok(fallback.reasons.some(reason => reason.stage === "path" && reason.rule === match.rule && reason.rule.includes("수신 디코더")));
+    assert.ok(match.inputs.includes(portClaim(scene, "host", "dp", "dscBpp")));
+    assert.ok(match.inputs.includes(portClaim(scene, "native", "dp", "dscBpp")));
+    assert.ok(match.inputs.some(row => scene.claims[row]!.owner === fallback.demand.workload && scene.claims[row]!.ownerKind === "workload"));
+    assert.deepEqual(match.specs, ["dsc"]);
+  }
+});
+
+test("무관한 DSC 목표를 가진 작업을 추가해도 링크 옵션과 그 출처는 그대로다", () => {
+  const scene = load();
+  const before = evaluate(scene, [display]).options;
+  const unrelated = scene.workloads.findIndex(w => w.id === "alt-c");
+  const owner = scene.workloads.push({ ...scene.workloads[unrelated]!, id: "alt-c-extra" }) - 1;
+  const claims = scene.claims.filter(c => c.ownerKind === "workload" && c.owner === unrelated);
+  scene.claims.push(...claims.map(c => ({ ...c, owner })), { ...claims[0]!, owner, field: "dscBpp", value: 10, unit: "bpp" });
+  assert.deepEqual(evaluate(scene, [display]).options, before);
 });
 
 test("DSC 지원값이 미확인이면 압축이 필요한 작업은 미확인이고 알려진 비압축 작업은 성립한다", () => {
@@ -127,7 +144,7 @@ test("DSC 지원값이 미확인이면 압축이 필요한 작업은 미확인�
   setPortValue(scene, "native", "dp", "dscBpp", null);
   const r = inspect(scene, "dsc");
   assert.equal(r.outcome.verdict, "unknown");
-  assert.ok(r.reasons.some(reason => reason.stage === "negotiate" && reason.rule.includes("DSC 전송 조건")));
+  assert.ok(r.reasons.some(reason => reason.stage === "path" && reason.rule.includes("DSC") && reason.rule.includes("미확인")));
   assert.ok(r.specs.includes("dsc") && r.claims.includes(portClaim(scene, "native", "dp", "dscBpp")));
   assert.equal(inspect(scene, "native").outcome.verdict, "ok");
 });
@@ -153,6 +170,111 @@ test("T3 포트의 출력 GPU가 미확인이면 후보 경로와 확인할 부�
   assert.equal(inspect(scene, "unresolved").outcome.verdict, "ok");
   attachment.reference = scene.nodes.findIndex(n => n.id === "gpu-b");
   assert.equal(evaluate(scene, [display]).outcomes.find(o => o.subjectKind === "workload" && o.subjectRow === r.demand.workload)?.verdict, "impossible");
+});
+
+test("T4 GPU 스트림 두 자리를 세 화면이 경쟁하면 세 화면 동시 출력이 확정되지 않는다", () => {
+  const scene = load();
+  assert.ok(display.resourceUnits?.includes("streams"));
+  const works = ["native", "alt-c", "hdmi"].map(id => scene.workloads.findIndex(w => w.id === id));
+  const output = scene.workloads[works[0]!]!.from;
+  const item = scene.nodes[output]!.item;
+  const gpu = scene.nodes.push({ item, id: "renderer", kind: "gpu", label: "영상 생성" }) - 1;
+  const mst = scene.nodes.push({ item, id: "mst", kind: "mst", label: "영상 분기" }) - 1;
+  const resource = scene.resources.push({ item, id: "gpu-streams", kind: "stream-count", domain: "display", unit: "streams" }) - 1;
+  const evidence = scene.connections[0]!.evidence;
+  const capacity = scene.claims.push({ ...scene.claims[evidence]!, ownerKind: "resource", owner: resource,
+    domain: "display", field: "capacity", value: 2, unit: "streams" }) - 1;
+  scene.claims.push({ ...scene.claims[capacity]!, field: "policy", value: "max-min", unit: "" });
+  scene.claimSources.push({ claim: capacity, source: scene.claimSources.find(c => c.claim === evidence)!.source });
+  for (const [from, to] of [[gpu, mst], [mst, output]] as const) {
+    const edge = scene.edges.push({ item, id: `video-${from}`, from, to, evidence }) - 1;
+    scene.resourceUses.push({ edge, resource, evidence });
+  }
+  for (const workload of works) scene.workloads[workload]!.from = gpu;
+  scene.scenarios = [{ id: "three-screens" }];
+  scene.members = works.slice(0, 2).map(workload => ({ scenario: 0, workload }));
+  for (const name of ["native", "alt-c"]) assert.equal(inspect(scene, name).outcome.verdict, "ok");
+
+  scene.members.push({ scenario: 0, workload: works[2]! });
+  const three = evaluate(scene, [display]);
+  assert.deepEqual(three.errors, []);
+  const blocked = three.outcomes.findIndex(o => o.subjectKind === "workload" && works.includes(o.subjectRow) &&
+    (o.verdict === "impossible" || o.verdict === "unknown"));
+  assert.ok(blocked >= 0);
+  assert.ok(three.possibleVerdicts.some(v => v.outcome === blocked && v.verdict === "impossible"));
+  assert.ok(three.metrics.some(m => m.outcome === blocked && m.kind === "solo" && m.value! > 0));
+  const reason = three.reasons.findIndex(r => r.outcome === blocked && r.stage === "allocate" &&
+    r.targetKind === "resource" && r.targetRow === resource && r.rule.includes("스트림"));
+  assert.ok(three.reasonInputs.some(r => r.reason === reason && r.claim === capacity));
+  assert.equal(scene.sources[scene.claimSources.find(c => c.claim === capacity)!.source]!.id, "scene");
+
+  scene.members = [{ scenario: 0, workload: works[2]! }];
+  scene.claims[capacity]!.value = null;
+  const pending = inspect(scene, "hdmi");
+  assert.equal(pending.outcome.verdict, "unknown");
+  assert.ok(pending.quests.some(q => q.claim === capacity && q.instruction.includes("스트림")));
+});
+
+test("T4 USB4 DP 터널과 데이터가 방향별 예산을 나누고 디코더의 DSC는 따로 확인한다", () => {
+  const scene = load();
+  const connection = scene.connections.findIndex(c => c.id === "native");
+  const { from, to, evidence } = scene.connections[connection]!;
+  const parts = scene.parts.filter(p => p.connection === connection);
+  const ports = [from, ...parts.flatMap(p => [p.entry, p.exit]), to];
+  for (const port of ports) {
+    const endpoint = port === from || port === to;
+    const connector = scene.claims.find(c => c.ownerKind === "port" && c.owner === port && c.field === "connector")!;
+    connector.reference = scene.connectors.findIndex(c => c.id === (endpoint ? "usb-c-receptacle" : "usb-c-plug"));
+    connector.value = scene.connectors[connector.reference]!.id;
+    const iface = scene.interfaces.find(i => i.port === port && i.domain === "display")!;
+    if (endpoint) {
+      iface.protocol = "DP Tunnel";
+      scene.interfaces.push({ ...iface, id: "usb4", domain: "data", protocol: "USB4", role: "bidirectional" });
+    } else {
+      iface.domain = "data";
+      iface.protocol = "USB4";
+    }
+  }
+  const native = scene.workloads.findIndex(w => w.id === "native");
+  const dsc = scene.workloads.findIndex(w => w.id === "dsc");
+  const dataWork = scene.workloads.push({ ...scene.workloads[native]!, id: "tunnel-data", kind: "transfer", domain: "data" }) - 1;
+  const nativeScenario = scene.scenarios.findIndex(s => s.id === "native");
+  const dscScenario = scene.scenarios.findIndex(s => s.id === "dsc");
+  scene.members.push({ scenario: nativeScenario, workload: dataWork }, { scenario: dscScenario, workload: dataWork });
+  const source = { id: "test-tunnel", title: "시험용 터널 한도", locator: "fixture:display/usb4-tunnel" };
+  const trace = { rule: "시험 방향의 터널 한도", inputs: [evidence], specs: [source.id] };
+  const { match: _match, ...video } = display;
+  const data: DomainPlugin = {
+    ...video, id: "data", sources: [source],
+    negotiate: ({ connection: row }) => row === connection ? [{ ...trace, mode: "bulk", unit: "MB/s",
+      limit: 2000, verdict: "ok", condition: "", pool: { domain: "data", id: "usb4-tunnel", perUnit: 0.008 } }] : [],
+    pools: ({ connection: row, direction }) => row === connection ? [
+      { ...trace, id: "usb4-tunnel", scope: "direction", unit: "Gbps", limit: direction === "forward" ? 28 : 4 },
+    ] : [],
+    demand: () => [{ ...trace, mode: "bulk", preference: 0, elastic: true, via: [], requested: 2000, unit: "MB/s" }],
+    consume: () => [],
+  };
+  const r = inspect(scene, "native", [display, data]);
+  assert.equal(r.outcome.verdict, "ok");
+  assert.deepEqual(r.option.pool, { domain: "data", id: "usb4-tunnel", perUnit: 1 });
+  assert.equal(r.result.linkResources[r.option.poolResource!]!.direction, "forward");
+  assert.ok(r.specs.includes("dp-tunnel") && r.specs.includes(source.id));
+  const alone = r.result.allocations.find(a => a.scenario === nativeScenario && a.workload === dataWork && a.run === "solo")!;
+  const concurrent = r.result.allocations.find(a => a.scenario === nativeScenario && a.workload === dataWork && a.run === "together")!;
+  assert.equal(alone.value, 2000);
+  assert.equal(concurrent.value, (28 - r.demand.requested!) / 0.008);
+
+  const decoder = portClaim(scene, "native", "dp", "dscBpp");
+  scene.claims[decoder]!.value = null;
+  const pending = inspect(scene, "dsc", [display, data]);
+  assert.equal(pending.demand.workload, dsc);
+  assert.equal(pending.outcome.verdict, "unknown");
+  assert.ok(pending.quests.some(q => q.claim === decoder && q.instruction === display.quest("dscBpp")));
+  scene.claims[decoder]!.value = 12;
+  const compressed = inspect(scene, "dsc", [display, data]);
+  assert.equal(compressed.outcome.verdict, "conditional");
+  const shared = compressed.result.allocations.find(a => a.scenario === dscScenario && a.workload === dataWork && a.run === "together")!;
+  assert.equal(shared.value, (28 - compressed.demand.requested!) / 0.008);
 });
 
 test("USB-C DP Alt Mode 핀 C의 4레인에서는 성립하고 핀 D의 2레인에서는 불가하다", () => {
@@ -232,7 +354,7 @@ test("HDMI의 DSC 모드는 TMDS 보장 한도 대신 FRL 경계를 쓴다", () 
   setWorkloadValue(scene, "hdmi", "refresh", 144);
   const pending = inspect(scene, "hdmi");
   const compressed = pending.result.options.find(o => o.direction === "forward" &&
-    o.connection === pending.option.connection && o.mode === "dsc:12");
+    o.connection === pending.option.connection && o.mode === "dsc");
   assert.equal(pending.outcome.verdict, "unknown");
   assert.deepEqual(compressed?.bounds, { low: 0, high: 32 * (16 / 18) });
   assert.ok(pending.quests.some(q => q.claim === portClaim(scene, "hdmi", "hdmi", "frlCode")));
@@ -240,7 +362,7 @@ test("HDMI의 DSC 모드는 TMDS 보장 한도 대신 FRL 경계를 쓴다", () 
   setPortValue(scene, "hdmi", "hdmi", "frlCode", 1);
   const known = inspect(scene, "hdmi");
   assert.equal(known.outcome.verdict, "conditional");
-  assert.equal(known.outcome.mode, "dsc:12");
+  assert.equal(known.outcome.mode, "dsc");
   assert.equal(known.option.limit, 8);
   assert.ok(known.reasons.some(r => r.stage === "negotiate" && r.rule.includes("FRL") && r.rule.includes("8 Gbps")));
 });
@@ -294,12 +416,12 @@ test("모델에 DP 레인 수 필드가 없으면 로드 위치에서 거절하�
   assert.ok(r.quests.some(q => q.claim === portClaim(scene, "host", "dp", "lanes")));
 });
 
-test("DP·Alt Mode·HDMI 입력은 각자의 필수 칸에 명시적인 null을 허용한다", () => {
+test("DP·Alt Mode·DP 터널·HDMI 입력은 각자의 필수 칸에 명시적인 null을 허용한다", () => {
   const dp = { version: { value: null, unit: "" }, maxRate: { value: null, unit: "" },
     lanes: { value: null, unit: "" }, dscBpp: { value: null, unit: "bpp" } };
   const hdmi = { tmdsVersion: { value: null, unit: "" }, frlCode: { value: null, unit: "" }, dscBpp: dp.dscBpp };
   const alt = { ...dp, pin: { value: null, unit: "" } };
-  for (const [protocol, fields] of [["DP", dp], ["DP Alt Mode", alt], ["HDMI", hdmi]] as const) {
+  for (const [protocol, fields] of [["DP", dp], ["DP Alt Mode", alt], ["DP Tunnel", dp], ["HDMI", hdmi]] as const) {
     const schema = display.paramsFor?.(protocol) ?? display.params;
     assert.ok(schema.safeParse(fields).success, protocol);
     for (const field of Object.keys(fields)) {

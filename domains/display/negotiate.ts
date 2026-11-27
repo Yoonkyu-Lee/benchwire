@@ -1,18 +1,19 @@
-// 방향에 맞는 공통 영상 규격을 찾아 양 끝과 모든 중간 포트의 한도를 적용한다.
-// 부품은 같은 프로토콜의 통과 포트로 취급하며, 한도에는 채널 인코딩까지만 반영한다.
+// 방향별 영상 전송 한도와 DSC 인코더·디코더의 출처를 연결 옵션으로 낸다.
+// DP 터널 케이블의 한도는 data 예산에서 가져온다. 한 연결에서 공통 영상 프로토콜이 여럿이면 선택은 미확인이다.
 import { effectiveClaim, type Link, type Option, type Value, type Verdict } from "../../engine/contract.ts";
 import {
   DP_ALT_MODE_PIN_ASSIGNMENTS, DP_LINK_RATES, DP_MAX_LANES, DP_VERSION_MAX_LINK_RATES, HDMI_21_FRL_LINK_RATES,
   HDMI_TMDS_VERSION_LIMITS,
 } from "./constants.ts";
-import { dscTarget, DSC_PREFIX, SUBSAMPLED, UNCOMPRESSED, VIDEO_UNIT } from "./demand.ts";
+import { SUBSAMPLED, UNCOMPRESSED, VIDEO_UNIT } from "./demand.ts";
+import { DSC_MODE, type DisplayOption } from "./dsc.ts";
 import {
   dpAltModeCapacityGbps, dpLinkCapacityGbps, hdmiFrlCapacityGbps, hdmiTmdsCapacityGbps,
   type DpAltModePin, type HdmiFrlCode, type HdmiTmdsVersion,
 } from "./link-capacity.ts";
-import { DP_ALT_MODE, DP_RATES, DP_VERSIONS, DSC, HDMI_FRL, HDMI_TMDS } from "./sources.ts";
+import { DP_ALT_MODE, DP_RATES, DP_TUNNEL, DP_VERSIONS, DSC, HDMI_FRL, HDMI_TMDS } from "./sources.ts";
 
-const PROTOCOLS = ["DP", "DP Alt Mode", "HDMI"] as const;
+const PROTOCOLS = ["DP", "DP Alt Mode", "DP Tunnel", "HDMI"] as const;
 
 type Limit = Pick<Option, "limit" | "bounds">;
 
@@ -25,7 +26,7 @@ interface Capacity extends Limit {
   subsampled?: Verdict;
 }
 
-function dpCapacity(read: (row: number, field: string) => Value, rows: number[], altMode: boolean): Capacity {
+function dpCapacity(read: (row: number, field: string) => Value, rows: number[], protocol: "DP" | "DP Alt Mode" | "DP Tunnel"): Capacity {
   const ports = rows.map(row => {
     const version = read(row, "version");
     const maxRate = read(row, "maxRate");
@@ -38,8 +39,9 @@ function dpCapacity(read: (row: number, field: string) => Value, rows: number[],
   const specs = [DP_RATES, DP_VERSIONS];
   let pin: DpAltModePin | null = null;
   let pinCanMismatch = false;
-  let label = "DP";
-  if (altMode) {
+  let label: string = protocol;
+  if (protocol === "DP Tunnel") specs.push(DP_TUNNEL);
+  if (protocol === "DP Alt Mode") {
     specs.push(DP_ALT_MODE);
     const sourcePin = read(rows[0]!, "pin") as DpAltModePin | null;
     const sinkPin = read(rows.at(-1)!, "pin") as DpAltModePin | null;
@@ -108,7 +110,7 @@ function hdmiCapacity(read: (row: number, field: string) => Value, rows: number[
     dscTransport, subsampled: "unknown" };
 }
 
-export function negotiateDisplay({ scene, connection, ports }: Link): Option[] {
+export function negotiateDisplay({ scene, connection, ports }: Link): DisplayOption[] {
   const inputs = [scene.connections[connection]!.evidence];
   const declarations = ports.map(port => scene.interfaces.flatMap((i, row) => {
     if (i.port !== port || i.domain !== "display") return [];
@@ -116,8 +118,12 @@ export function negotiateDisplay({ scene, connection, ports }: Link): Option[] {
     return [{ ...i, row }];
   }));
   const common = PROTOCOLS.flatMap(protocol => {
-    const interfaces = declarations.map((entries, i) => entries.filter(entry => entry.protocol === protocol &&
-      (entry.role === "bidirectional" || (i === 0 ? entry.role === "source" : i === ports.length - 1 && entry.role === "sink"))));
+    const last = ports.length - 1;
+    const interfaces = declarations.flatMap((entries, i) => {
+      if (protocol === "DP Tunnel" && i !== 0 && i !== last) return [];
+      return [entries.filter(entry => entry.protocol === protocol &&
+        (entry.role === "bidirectional" || (i === 0 ? entry.role === "source" : i === last && entry.role === "sink")))];
+    });
     return interfaces.every(entries => entries.length > 0) ? [{ protocol, interfaces }] : [];
   });
 
@@ -132,7 +138,7 @@ export function negotiateDisplay({ scene, connection, ports }: Link): Option[] {
   const rows = chosen?.interfaces.map(entries => entries[0]!.row) ?? [];
   let capacity: Capacity;
   if (chosen) {
-    capacity = chosen.protocol === "HDMI" ? hdmiCapacity(read, rows) : dpCapacity(read, rows, chosen.protocol === "DP Alt Mode");
+    capacity = chosen.protocol === "HDMI" ? hdmiCapacity(read, rows) : dpCapacity(read, rows, chosen.protocol);
   } else {
     capacity = common.length > 0
       ? { limit: null, verdict: "unknown", rule: "동일 방향의 공통 영상 인터페이스 선택 미확인", specs: [] }
@@ -140,39 +146,21 @@ export function negotiateDisplay({ scene, connection, ports }: Link): Option[] {
   }
 
   const base = { unit: VIDEO_UNIT, rule: capacity.rule,
+    ...(chosen?.protocol === "DP Tunnel" ? { pool: { domain: "data", id: "usb4-tunnel", perUnit: 1 } } : {}),
     ...(capacity.unused === undefined ? {} : { unused: capacity.unused }) };
   const plain = { ...base, limit: capacity.limit, verdict: capacity.verdict, inputs: [...inputs], specs: capacity.specs, condition: "" };
   const uncompressed = { ...plain, mode: UNCOMPRESSED, ...(capacity.bounds ? { bounds: capacity.bounds } : {}) };
   const subsampled = capacity.subsampled === "unknown"
     ? { ...plain, mode: SUBSAMPLED, verdict: "unknown" as const, rule: "HDMI의 크로마 서브샘플링 전송 한도 미확인" }
     : { ...uncompressed, mode: SUBSAMPLED };
-  const options: Option[] = [uncompressed, subsampled];
-
-  const endpoints = chosen ? [read(rows[0]!, "dscBpp"), read(rows.at(-1)!, "dscBpp")] : [];
-  const targets = new Map<number | null, number[]>();
-  for (const target of endpoints) if (typeof target === "number" && target > 0) targets.set(target, []);
-  scene.workloads.forEach((work, workload) => {
-    if (work.domain !== "display") return;
-    const target = dscTarget(scene, workload);
-    if (target) {
-      const claims = targets.get(target.value);
-      if (!claims) targets.set(target.value, [target.claim]);
-      else if (claims.length) claims.push(target.claim);
-    }
-  });
-  for (const [target, targetInputs] of targets) {
-    const transport = capacity.dscTransport ?? capacity;
-    const blocked = endpoints.includes(0) || target !== null && endpoints.some(bpp => bpp !== null && bpp !== target);
-    const codecKnown = target !== null && !endpoints.includes(null);
-    const verdict = blocked || transport.verdict === "impossible" ? "impossible"
-      : transport.verdict === "unknown" || !codecKnown ? "unknown" : "conditional";
-    const bounds = transport.bounds && !codecKnown ? { low: 0, high: transport.bounds.high } : transport.bounds;
-    const condition = verdict === "conditional" || codecKnown && bounds && verdict === "unknown"
-      ? `양 끝이 DSC ${target} bpp로 동작할 때 · ${transport.rule}` : "";
-    const rule = blocked ? "송신과 수신에 공통 DSC 목표가 없음" : verdict === "unknown" ? "DSC 전송 조건 또는 목표 bpp 미확인" : transport.rule;
-    options.push({ ...base, mode: DSC_PREFIX + (target ?? "unknown"), limit: transport.limit, ...(bounds ? { bounds } : {}),
-      verdict, condition, rule,
-      inputs: [...inputs, ...targetInputs], specs: [...capacity.specs, DSC] });
-  }
-  return options;
+  const encoderClaim = chosen ? effectiveClaim(scene, "interface", rows[0]!, "display", "dscBpp") : undefined;
+  const decoderClaim = chosen ? effectiveClaim(scene, "interface", rows.at(-1)!, "display", "dscBpp") : undefined;
+  const codecInputs = [encoderClaim, decoderClaim].filter(claim => claim !== undefined);
+  const { limit, bounds, verdict, rule } = capacity.dscTransport ?? capacity;
+  const dsc: DisplayOption = { ...base, mode: DSC_MODE, limit, ...(bounds ? { bounds } : {}),
+    verdict: verdict === "ok" ? "conditional" : verdict, condition: "", rule,
+    inputs: [...inputs, ...codecInputs], specs: [...capacity.specs, DSC],
+    ...(encoderClaim === undefined ? {} : { encoderClaim }), ...(decoderClaim === undefined ? {} : { decoderClaim }),
+  };
+  return [uncompressed, subsampled, dsc];
 }
