@@ -1,0 +1,25 @@
+{
+  "sceneId": "power-policy",
+  "sources": [
+    {"id":"scene","title":"scene 합성 시험 정의","locator":"fixture:scene","retrievedAt":"2026-11-26"}
+  ],
+  "items": [
+    {"instanceId":"host","modelId":"power-source","revision":"1"},
+    {"instanceId":"a","modelId":"power-sink","revision":"1"},
+    {"instanceId":"b","modelId":"power-sink","revision":"1"},
+    {"instanceId":"c","modelId":"power-sink","revision":"1"}
+  ],
+  "connections": [
+    {"id":"wire-a","from":{"instanceId":"host","id":"a"},"to":{"instanceId":"a","id":"in"},"parts":[],"evidence":{"value":true,"confidence":"inferred","sources":["scene"]}},
+    {"id":"wire-b","from":{"instanceId":"host","id":"b"},"to":{"instanceId":"b","id":"in"},"parts":[],"evidence":{"value":true,"confidence":"inferred","sources":["scene"]}},
+    {"id":"wire-c","from":{"instanceId":"host","id":"c"},"to":{"instanceId":"c","id":"in"},"parts":[],"evidence":{"value":true,"confidence":"inferred","sources":["scene"]}}
+  ],
+  "workloads": [
+    {"id":"a","domain":"trial-power","kind":"transfer","from":{"instanceId":"host","id":"root"},"to":{"instanceId":"a","id":"end"},"request":{"rate":{"value":80,"unit":"W","confidence":"inferred","sources":["scene"]}}},
+    {"id":"b","domain":"trial-power","kind":"transfer","from":{"instanceId":"host","id":"root"},"to":{"instanceId":"b","id":"end"},"request":{"rate":{"value":30,"unit":"W","confidence":"inferred","sources":["scene"]}}},
+    {"id":"c","domain":"trial-power","kind":"transfer","from":{"instanceId":"host","id":"root"},"to":{"instanceId":"c","id":"end"},"request":{"rate":{"value":20,"unit":"W","confidence":"inferred","sources":["scene"]}}}
+  ],
+  "scenarios": [
+    {"id":"all","members":["a","b","c"]}
+  ]
+}

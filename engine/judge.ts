@@ -57,6 +57,8 @@ export function judgeConnections(scene: Scene, plugins: readonly DomainPlugin[],
         const { row: option, option: o, verdict } = bestOption(result, rows);
         const outcome = result.outcomes.push({ subjectKind: "connection", subjectRow: connection, path: null, scenario: null, direction, domain, verdict, mode: o.mode,
           label: plugins.find(p => p.id === domain)!.explain(verdict, o.mode) }) - 1;
+        if (o.unused !== undefined) result.metrics.push({ outcome, kind: "unused", unit: o.unit,
+          value: o.unused, low: o.unused, high: o.unused, basis: "calculated" });
         linkReason(scene, result, outcome, option);
       }
     }
@@ -105,6 +107,11 @@ export function judgeWork(scene: Scene, result: Results, plugin: DomainPlugin, s
     if (o.unused !== undefined) metric("unused", o.unused, o.unit);
   }
   const parents: number[] = [];
+  for (const [run, share] of [["단독", solo], ["동시", together]] as const) for (const limit of share.policies ?? []) {
+    const facts = resourceFacts(scene, limit.resource);
+    parents.push(addReason(result, { outcome, stage: "allocate", rule: run + " " + limit.rule, targetKind: "resource", targetRow: limit.resource },
+      [facts.policy, facts.capacity, ...limit.inputs], [], scene.resources[limit.resource]!.domain, limit.specs));
+  }
   for (const candidate of refused) {
     const path = result.paths[candidate.flow.path!]!, prior = result.demands[path.demand]!;
     const limits: number[] = [];
@@ -115,6 +122,9 @@ export function judgeWork(scene: Scene, result: Results, plugin: DomainPlugin, s
         if (verdict === "impossible" || verdict === "unknown") limits.push(linkReason(scene, result, outcome, s.option));
       }
     }
+    for (const limit of candidate.solo.policies ?? []) if (candidate.solo.bindings.includes(limit.resource))
+      limits.push(addReason(result, { outcome, stage: "allocate", rule: limit.rule, targetKind: "resource", targetRow: limit.resource },
+        [resourceFacts(scene, limit.resource).policy, ...limit.inputs], [], scene.resources[limit.resource]!.domain, limit.specs));
     const pending = candidate.solo.verdict === "unknown";
     for (const u of candidate.flow.uses) if (pending || candidate.solo.bindings.includes(u.resource))
       limits.push(useReason(scene, result, outcome, plugin.id, u, []));
@@ -142,4 +152,5 @@ export function judgeWork(scene: Scene, result: Results, plugin: DomainPlugin, s
       parents.push(useReason(scene, result, outcome, scene.workloads[f.workload]!.domain, u, [request]));
   }
   addReason(result, { outcome, stage: "judge", rule: "요청과 단독·동시 성능 비교", targetKind: "workload", targetRow: flow.workload }, [], parents);
+  return outcome;
 }

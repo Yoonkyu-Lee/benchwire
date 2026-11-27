@@ -2,7 +2,7 @@
 import type { Demand, DomainPlugin, Scene, Step, Verdict } from "./contract.ts";
 import { bestOption, verdictOrder } from "./negotiate.ts";
 import { portFacts } from "./scene.ts";
-import { checkedTrace, type Results } from "./results.ts";
+import { checkedQuantity, checkedTrace, type Results } from "./results.ts";
 import { routes, MAX_PATHS, type Arc } from "./route.ts";
 
 interface PathArc extends Arc { steps: Step[]; verdict: Verdict; truncated: boolean }
@@ -69,7 +69,9 @@ export function paths(scene: Scene, plugins: readonly DomainPlugin[], result: Re
   scene.workloads.forEach((w, workload) => {
     const plugin = plugins.find(p => p.id === w.domain)!;
     for (const raw of plugin.demand(scene, workload)) {
-      const d = checkedTrace(result, plugin.id, "demand", workload, raw);
+      const trace = checkedTrace(result, plugin.id, "demand", workload, raw);
+      const requested = checkedQuantity(result, plugin.id, "demand", workload, "requested", trace.requested);
+      const d = { ...trace, requested };
       const demand = result.demands.push({ ...d, workload }) - 1;
       const arcs = [...internal, ...connectionArcs(scene, result, w.domain, d)];
       const { found, truncated } = through(arcs, [w.from, ...d.via, w.to]);

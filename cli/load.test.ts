@@ -245,7 +245,7 @@ test("판정: 배선·용량의 null은 미확인이고 알려진 용량 0은 �
   f.sink.ports[0]!.attachment.value = null;
   f.save();
   run = f.open();
-  assert.ok(workRows(run.scene, run.result).every(w => w.verdict === "unknown" && w.together === null));
+  assert.deepEqual(workRows(run.scene, run.result).map(w => [w.verdict, w.together]), [["ok", 100], ["conditional", 400], ["conditional", 400]]);
   evidence(run.scene, run.result);
 });
 

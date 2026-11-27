@@ -22,7 +22,13 @@ export interface Consumption extends Trace { resource: number; fixed: number; co
 export interface InputSchema {
   safeParse(input: unknown): { success: true } | { success: false; error: { issues: readonly { path: readonly PropertyKey[]; message: string }[] } };
 }
+export interface PolicyContext {
+  scene: Scene; resource: number; connectedPorts: readonly number[]; activeWorkloads: readonly number[];
+}
+// limit는 해당 자원 단위의 작업별 사용 상한이다. 적용할 표가 없으면 null을 돌려준다.
+export interface PolicyLimit extends Trace { workload: number; limit: number }
 export interface DomainPlugin {
+  policy?(context: PolicyContext): PolicyLimit[] | null;
   id: string;
   sources: readonly { id: string; title: string; locator: string }[];
   // 각 스키마는 필드 이름을 키로, {value, unit}을 값으로 받는다. null은 미확인이다.

@@ -1,0 +1,28 @@
+{
+  "modelId": "power-source",
+  "revision": "1",
+  "kind": "device",
+  "brand": "합성",
+  "name": "source",
+  "category": "시험",
+  "sources": [
+    {"id":"source","title":"source 합성 시험 정의","locator":"fixture:source","retrievedAt":"2026-11-26"},
+    {"id":"table","title":"합성 장치의 포트별 동시 전력표","locator":"fixture:power-policy","retrievedAt":"2026-11-26"}
+  ],
+  "nodes": [
+    {"id":"root","kind":"junction","label":"root"},
+    {"id":"out","kind":"junction","label":"out"}
+  ],
+  "ports": [
+    {"id":"a","label":"a","connector":{"value":"trial-plug","confidence":"inferred","sources":["source"]},"attachment":{"value":"out","confidence":"inferred","sources":["source"]},"interfaces":[{"id":"a-iface","domain":"trial-power","protocol":"pulse","role":"bidirectional","evidence":{"value":true,"confidence":"inferred","sources":["source"]},"params":{"rate":{"value":60,"unit":"W","confidence":"inferred","sources":["source"]}}}]},
+    {"id":"b","label":"b","connector":{"value":"trial-plug","confidence":"inferred","sources":["source"]},"attachment":{"value":"out","confidence":"inferred","sources":["source"]},"interfaces":[{"id":"b-iface","domain":"trial-power","protocol":"pulse","role":"bidirectional","evidence":{"value":true,"confidence":"inferred","sources":["source"]},"params":{"rate":{"value":100,"unit":"W","confidence":"inferred","sources":["source"]}}}]},
+    {"id":"c","label":"c","connector":{"value":"trial-plug","confidence":"inferred","sources":["source"]},"attachment":{"value":"out","confidence":"inferred","sources":["source"]},"interfaces":[{"id":"c-iface","domain":"trial-power","protocol":"pulse","role":"bidirectional","evidence":{"value":true,"confidence":"inferred","sources":["source"]},"params":{"rate":{"value":100,"unit":"W","confidence":"inferred","sources":["source"]}}}]}
+  ],
+  "edges": [
+    {"id":"root-out","from":"root","to":"out","evidence":{"value":true,"confidence":"inferred","sources":["source"]},"uses":[{"resource":"trunk","evidence":{"value":true,"confidence":"inferred","sources":["source"]}}]}
+  ],
+  "resources": [
+    {"id":"trunk","kind":"rate","domain":"trial-power","unit":"W","capacity":{"value":100,"unit":"W","confidence":"inferred","sources":["source"]},"policy":{"value":"port-table","confidence":"inferred","sources":["source"]}}
+  ],
+  "attributes": {"trial-power":{"budget:a+b+c:a:a":{"value":100,"unit":"W","confidence":"inferred","sources":["table"]},"budget:a+b+c:a+b+c:a":{"value":50,"unit":"W","confidence":"inferred","sources":["table"]},"budget:a+b+c:b:b":{"value":100,"unit":"W","confidence":"inferred","sources":["table"]},"budget:a+b+c:a+b+c:b":{"value":30,"unit":"W","confidence":"inferred","sources":["table"]},"budget:a+b+c:c:c":{"value":100,"unit":"W","confidence":"inferred","sources":["table"]},"budget:a+b+c:a+b+c:c":{"value":20,"unit":"W","confidence":"inferred","sources":["table"]}}}
+}

@@ -1,14 +1,18 @@
 // 후보마다 단독 성립 여부와 성능을 비교한 뒤 같은 배선으로 시나리오를 계산한다.
 import type { DomainPlugin, Scene } from "./contract.ts";
-import { allocate, allocationGroup, type Flow, type Use } from "./allocate.ts";
+import { allocationGroup, type Flow, type Use } from "./allocate.ts";
 import { negotiate, verdictOrder } from "./negotiate.ts";
 import { paths } from "./path.ts";
 import { judgeConnections, judgeWork } from "./judge.ts";
-import { checkedTrace, type Results } from "./results.ts";
+import { checkedQuantity, checkedTrace, type Results } from "./results.ts";
 
-export function evaluate(scene: Scene, plugins: readonly DomainPlugin[]): Results {
+import { policyAllocation } from "./policy.ts";
+import { uncertainPolicies } from "./policy-range.ts";
+import { resolveUnknowns } from "./unknown.ts";
+
+function evaluateWiring(scene: Scene, plugins: readonly DomainPlugin[]): Results {
   const result: Results = { physical: [], options: [], demands: [], paths: [], steps: [], allocations: [], bindings: [], outcomes: [],
-    metrics: [], reasons: [], reasonInputs: [], reasonParents: [], reasonSpecs: [], needs: [], errors: [], linkResources: [],
+    possibleVerdicts: [], quests: [], wirings: [], metrics: [], reasons: [], reasonInputs: [], reasonParents: [], reasonSpecs: [], needs: [], errors: [], linkResources: [],
     specSources: plugins.flatMap(p => p.sources.map(s => ({ ...s, domain: p.id }))) };
   negotiate(scene, plugins, result);
   paths(scene, plugins, result);
@@ -18,19 +22,25 @@ export function evaluate(scene: Scene, plugins: readonly DomainPlugin[]): Result
     const candidates = result.paths.flatMap((p, path) => {
       if (p.workload !== workload) return [];
       const d = result.demands[p.demand]!, steps = result.steps.filter(s => s.path === path);
+      let unknownConsumption = false;
       const uses: Use[] = p.verdict === "impossible" ? [] : plugin.consume(scene, workload, steps, d, result.options)
         .map(raw => {
-          const u = checkedTrace(result, w.domain, "consume", path, raw);
+          const trace = checkedTrace(result, w.domain, "consume", path, raw);
+          const fixed = checkedQuantity(result, w.domain, "consume", path, "fixed", trace.fixed);
+          const coefficient = checkedQuantity(result, w.domain, "consume", path, "coefficient", trace.coefficient);
+          const unknown = fixed === null || coefficient === null;
+          unknownConsumption ||= unknown;
+          const u = { ...trace, fixed: fixed ?? 0, coefficient: coefficient ?? 0, unknown };
           return !d.elastic && d.requested !== null ? { ...u, fixed: u.fixed + u.coefficient * d.requested, coefficient: 0 } : u;
         })
-        .filter(u => u.coefficient > 0 || u.fixed > 0);
+        .filter(u => u.coefficient > 0 || u.fixed > 0 || u.unknown);
       for (const s of steps) if (s.option !== null && p.verdict !== "impossible") {
         const o = result.options[s.option]!;
         uses.push({ resource: scene.resources.length + o.linkResource, option: s.option, coefficient: d.elastic ? 1 : 0,
           fixed: d.elastic ? 0 : d.requested ?? 0, rule: "같은 방향의 링크 한도", inputs: o.inputs, specs: o.specs });
       }
-      const flow: Flow = { workload, path, cap: d.requested, elastic: d.elastic, verdict: p.verdict, uses };
-      const solo = allocate(scene, result, [flow])[0]!;
+      const flow: Flow = { workload, path, cap: d.requested, elastic: d.elastic, verdict: unknownConsumption ? "unknown" : p.verdict, uses };
+      const solo = policyAllocation(scene, plugins, result, [flow])[0]!;
       if (p.verdict === "impossible") {
         for (const step of steps) if (step.option !== null) {
           const o = result.options[step.option]!;
@@ -46,12 +56,12 @@ export function evaluate(scene: Scene, plugins: readonly DomainPlugin[]): Result
     const best = candidates[0];
     if (!best) {
       const flow: Flow = { workload, path: null, cap: 0, elastic: false, verdict: "impossible", uses: [] };
-      return { flow, solo: allocate(scene, result, [flow])[0]!, refused: [] };
+      return { flow, solo: policyAllocation(scene, plugins, result, [flow])[0]!, refused: [] };
     }
     if (candidates.some(c => c.truncated)) {
       best.flow.verdict = "unknown";
       best.solo = { workload, value: null, verdict: "unknown", bindings: [] };
-    } else if (best.solo.verdict === "impossible") best.flow.verdict = "impossible";
+    } else if (best.solo.verdict === "impossible" && !best.solo.policies?.length) best.flow.verdict = "impossible";
     const refused = candidates.filter(c => c.preference < best.preference);
     return { ...best, refused };
   });
@@ -61,13 +71,20 @@ export function evaluate(scene: Scene, plugins: readonly DomainPlugin[]): Result
         const x = scene.workloads[a.workload]!.id, y = scene.workloads[b.workload]!.id;
         return x < y ? -1 : x > y ? 1 : 0;
       });
-    const together = allocate(scene, result, active);
-    active.forEach((f, i) => {
+    const together = policyAllocation(scene, plugins, result, active);
+    const outcomes = active.map((f, i) => {
       const plugin = plugins.find(p => p.id === scene.workloads[f.workload]!.domain)!;
       const { solo, refused } = chosen[f.workload]!;
       const peers = f.verdict === "impossible" ? [f] : allocationGroup(active, f);
-      judgeWork(scene, result, plugin, scenario, f, solo, f.verdict === "impossible" ? solo : together[i]!, peers, refused);
+      return judgeWork(scene, result, plugin, scenario, f, solo, f.verdict === "impossible" ? solo : together[i]!, peers, refused);
     });
+    uncertainPolicies(scene, plugins, result, active, together, active.map(f => chosen[f.workload]!.solo), outcomes);
   });
+  return result;
+}
+
+export function evaluate(scene: Scene, plugins: readonly DomainPlugin[]): Results {
+  const result = evaluateWiring(scene, plugins);
+  resolveUnknowns(scene, plugins, result, evaluateWiring);
   return result;
 }

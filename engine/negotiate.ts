@@ -1,7 +1,7 @@
 // 양 끝과 부품의 협상 결과를 방향별로 모으고 연결 및 경로에 같은 옵션 선택 규칙을 적용한다.
 import type { Demand, DomainPlugin, Option, Scene, Verdict } from "./contract.ts";
 import { physicalSteps } from "./physical.ts";
-import { checkedTrace, type Results } from "./results.ts";
+import { checkedQuantity, checkedTrace, type Results } from "./results.ts";
 
 export const verdictOrder: readonly Verdict[] = ["ok", "conditional", "unknown", "impossible"];
 
@@ -38,7 +38,10 @@ export function negotiate(scene: Scene, plugins: readonly DomainPlugin[], result
           return declarations.some(i => i.domain === plugin.id) ? [] : declarations.map(i => i.evidence);
         });
         for (const option of options) {
-          const o = checkedTrace(result, plugin.id, "negotiate", linkResource, option);
+          const trace = checkedTrace(result, plugin.id, "negotiate", linkResource, option);
+          const limit = checkedQuantity(result, plugin.id, "negotiate", linkResource, "limit", trace.limit);
+          const o = { ...trace, limit };
+          if (o.unused !== undefined && checkedQuantity(result, plugin.id, "negotiate", linkResource, "unused", o.unused) === null) delete o.unused;
           const verdict = physical.some(s => s.verdict === "impossible") ? "impossible"
             : o.verdict !== "impossible" && physical.some(s => s.verdict === "unknown") ? "unknown" : o.verdict;
           result.options.push({ ...o, ...position, linkResource, verdict,

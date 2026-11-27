@@ -10,7 +10,10 @@ export interface PhysicalStep {
 export interface Results {
   physical: PhysicalStep[];
   linkResources: { connection: number; domain: string; direction: Direction; capacity: number | null; unit: string | null; absentDomain: number[] }[];
-  errors: { domain: string; spec: string; stage: "negotiate" | "demand" | "consume"; row: number }[];
+  errors: { domain: string; spec: string; field?: string; resource?: number; stage: "negotiate" | "demand" | "consume"; row: number }[];
+  possibleVerdicts: { outcome: number; verdict: Verdict }[];
+  quests: { outcome: number; claim: number; instruction: string }[];
+  wirings: { world: number; claim: number; node: number }[];
   specSources: { domain: string; id: string; title: string; locator: string }[];
   reasonSpecs: { reason: number; source: number }[];
   options: (Option & { linkResource: number; connection: number; domain: string; direction: Direction })[];
@@ -21,6 +24,7 @@ export interface Results {
   bindings: { scenario: number; workload: number; run: Run; resourceKind: "scene" | "link"; resource: number }[];
   outcomes: { subjectKind: "connection" | "workload"; subjectRow: number; path: number | null; direction: Direction | null; scenario: number | null; domain: string; verdict: Verdict; mode: string; label: string }[];
   metrics: { outcome: number; kind: "solo" | "together" | "drop" | "dropPercent" | "unused"; unit: string;
+    range?: "witnessed" | "conservative"; lowWorld?: number; highWorld?: number;
     value: number | null; low: number | null; high: number | null; basis: "calculated" | "assumed" }[];
   reasons: { outcome: number; stage: "physical" | "negotiate" | "path" | "allocate" | "judge"; rule: string; targetKind: Target; targetRow: number }[];
   reasonInputs: { reason: number; claim: number }[];
@@ -39,12 +43,21 @@ export function addReason(result: Results, reason: Results["reasons"][number], i
 }
 
 // 계약 위반은 호출한 링크 자원·워크로드·경로를 가리킨다. 유효한 규격은 그대로 추적한다.
-export function checkedTrace<T extends Trace>(result: Results, domain: string, stage: Results["errors"][number]["stage"], row: number, trace: T): T {
+export function checkedTrace<T extends Trace>(result: Results, domain: string, stage: Results["errors"][number]["stage"], row: number, trace: T, resource?: number): T {
   const specs = trace.specs.filter(id => result.specSources.some(s => s.domain === domain && s.id === id));
   if (specs.length === trace.specs.length) return trace;
   for (const spec of new Set(trace.specs.filter(id => !specs.includes(id)))) {
-    if (!result.errors.some(e => e.domain === domain && e.spec === spec && e.stage === stage && e.row === row))
-      result.errors.push({ domain, spec, stage, row });
+    if (!result.errors.some(e => e.domain === domain && e.spec === spec && e.stage === stage && e.row === row && e.resource === resource))
+      result.errors.push({ domain, spec, stage, row, ...(resource === undefined ? {} : { resource }) });
   }
   return { ...trace, specs };
+}
+
+// 영역 경계에서 유한한 수량만 받는다. 오류 행의 field는 플러그인이 반환한 필드를 가리킨다.
+export function checkedQuantity(result: Results, domain: string, stage: Results["errors"][number]["stage"],
+  row: number, field: string, value: number | null, resource?: number) {
+  if (value === null || Number.isFinite(value)) return value;
+  if (!result.errors.some(e => e.domain === domain && e.stage === stage && e.row === row && e.field === field && e.resource === resource))
+    result.errors.push({ domain, stage, row, field, spec: "", ...(resource === undefined ? {} : { resource }) });
+  return null;
 }
