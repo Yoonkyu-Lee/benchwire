@@ -2,6 +2,7 @@
 import { domains, workloadKindName, workPresets, type DomainRegistration } from "../domains/registry.ts";
 import { claimInput, describe, field, showError } from "./field.ts";
 import { loadSceneDocuments } from "../scene/load.ts";
+import { scenarioName } from "../scene/files.ts";
 import type { Documents } from "./assessment.ts";
 import { modelKey, type SceneDocument } from "./document.ts";
 
@@ -151,18 +152,19 @@ export function mountScenario(root: HTMLElement, documents: Documents, act: (int
     const { document: saved, scenarioId } = state;
     const index = creatingScenario ? -1 : saved.scenarios.findIndex(scenario => scenario.id === scenarioId);
     const scenario = saved.scenarios[index];
+    const savedName = scenario ? scenarioName(scenario) : "";
     const placeholder = new Option(saved.scenarios.length ? "시나리오 선택" : "시나리오 없음", "");
     placeholder.disabled = true;
     scenarioSelect.replaceChildren(placeholder,
-      ...saved.scenarios.map(s => new Option(s.id, s.id)));
+      ...saved.scenarios.map(s => new Option(scenarioName(s), s.id)));
     scenarioSelect.value = scenario?.id ?? "";
     scenarioForm.replaceChildren();
     scenarioForm.onsubmit = null;
     if (!scenario && !creatingScenario) return;
     const path = "scenarios." + (index < 0 ? saved.scenarios.length : index);
     const name = document.createElement("input");
-    name.value = draft?.name ?? scenario?.id ?? "";
-    field(scenarioForm, "시나리오 이름", name, path + ".id");
+    name.value = draft?.name ?? savedName;
+    field(scenarioForm, "시나리오 이름", name, path + ".name");
     if (saved.workloads.length) {
       const legend = document.createElement("p");
       legend.className = "scenario-hint";
@@ -202,7 +204,8 @@ export function mountScenario(root: HTMLElement, documents: Documents, act: (int
       { enabled: row.enabled.checked, priority: row.priority.value }])) });
     scenarioForm.onsubmit = event => {
       event.preventDefault();
-      const id = name.value.trim();
+      const id = scenario?.id ?? crypto.randomUUID();
+      const label = name.value.trim();
       validate(scenarioForm, id, (before, fact) => {
         const members: Member[] = [];
         for (const { workload, member, enabled, priority, rank } of rows) {
@@ -213,9 +216,9 @@ export function mountScenario(root: HTMLElement, documents: Documents, act: (int
             : typeof member === "object" && member.priority.value === value ? member
             : { workload: workload.id, priority: fact(value, "") });
         }
-        if (scenario?.id === id && members.length === scenario.members.length
+        if (scenario && label === savedName && members.length === scenario.members.length
           && members.every((member, i) => member === scenario.members[i])) return before;
-        const next = { ...scenario, id, members };
+        const next = { ...scenario, id, ...(label !== savedName || !scenario ? { name: label } : {}), members };
         const scenarios = index < 0 ? [...saved.scenarios, next] : saved.scenarios.with(index, next);
         return { ...before, scenarios };
       }, () => { creatingScenario = false; });

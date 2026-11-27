@@ -3,9 +3,10 @@ import type { PriceBook, ProductRef, Quote } from "../server/prices.ts";
 import type { ReceiptResult } from "../server/receipt.ts";
 import type { BestBuyCandidate } from "../server/bestbuy.ts";
 import { compare, type Snapshot } from "../engine/compare.ts";
+import { scenarioName } from "../scene/files.ts";
 import { evaluateInWorker, loadAssessment, type Documents } from "./assessment.ts";
 import { modelKey, type InventoryItem, type Item, type Library, type SceneDocument } from "./document.ts";
-import { interval, verdictText, type ResultView } from "./results.ts";
+import { interval, resultView, verdictText, type ResultView } from "./results.ts";
 
 type Scenario = SceneDocument["scenarios"][number];
 type Purchase = NonNullable<Scenario["purchases"]>[number];
@@ -169,11 +170,12 @@ export function calculateBudget(scenario: Scenario, items: readonly Item[], book
   }
   const limitCents = scenario.budget === undefined ? null : BigInt(centsFromDollars(String(scenario.budget)));
   const limitStatus = limitCents === null ? "unset" : subtotalCents > limitCents ? "over" : unknownCount ? "unknown" : "within";
-  return { lines, owned, subtotalCents, unknownCount, limitCents, limitStatus };
+  return { lines, owned, subtotalCents, unknownCount, unassignedNeeds, limitCents, limitStatus };
 }
 
 type Budget = ReturnType<typeof calculateBudget>;
 export function compareBudgets(before: Budget, after: Budget) {
+  if (before.unassignedNeeds || after.unassignedNeeds) return null;
   const unknown = new Map<string, bigint>();
   for (const line of before.lines) if (line.cents === null) unknown.set(line.key, line.quantity);
   for (const line of after.lines) if (line.cents === null) unknown.set(line.key, (unknown.get(line.key) ?? 0n) - line.quantity);
@@ -210,14 +212,27 @@ async function json<T>(path: string, body?: unknown, method = "PUT"): Promise<T>
   return await response.json() as T;
 }
 
+function budgetRequirements(view: ResultView, scenario: Scenario) {
+  const rows = [...view.negotiations].flatMap(([connection,outcomes]) => {
+    const capabilities = new Set(view.result.needs.filter(n => outcomes.includes(n.outcome)).map(n => n.requiredCapability));
+    return [...capabilities].map(capability => ({
+      need: {connection,capability},
+      purchases: scenario.purchases?.filter(p => p.need?.connection === connection && p.need.capability === capability) ?? [],
+    }));
+  });
+  return { rows, unassigned: rows.filter(row => !row.purchases.length).length };
+}
+
 // 선택한 시나리오만 평가한다. 서로 다른 장면에서 고른 두 시나리오는 비교 키에서 같은 자리다.
-async function comparisonSnapshot(doc: SceneDocument, scenario: Scenario, documents: Documents): Promise<Snapshot> {
+async function comparisonSnapshot(doc: SceneDocument, scenario: Scenario, documents: Documents) {
   const selected = {...doc, scenarios:[{...scenario,id:"선택한 시나리오"}]};
   const loaded = loadAssessment(selected, documents, null);
   if ("error" in loaded) throw new Error(loaded.error);
   const reply = await evaluateInWorker({}, {kind:"primary",document:selected,documents});
   if (reply?.kind !== "primary") throw new Error(reply?.kind === "error" ? reply.message : "비교할 판정을 읽을 수 없습니다.");
-  return {scene:loaded.scene,result:reply.result};
+  const snapshot: Snapshot = {scene:loaded.scene,result:reply.result};
+  const {unassigned} = budgetRequirements(resultView(snapshot.scene,snapshot.result,loaded.scenario,"together"),scenario);
+  return {snapshot,unassigned};
 }
 function technicalValue(snapshot: Snapshot, row: number | null) {
   if (row === null) return "없음";
@@ -375,7 +390,7 @@ export function mountBudget(root: HTMLElement, library: Library, documents: Docu
     dialog.onclose = () => { refresh = undefined; clearTimeout(expiryTimer); document.removeEventListener("visibilitychange",expire); dialog.remove(); };
     let book: PriceBook | undefined;
     let choices: Purchase[] = [];
-    let requirements: NonNullable<Purchase["need"]>[] = [];
+    let requirements: ReturnType<typeof budgetRequirements>["rows"] = [];
     const chosen = () => {
       const {doc,id} = state();
       return doc.scenarios.find(s => s.id === id);
@@ -468,25 +483,17 @@ export function mountBudget(root: HTMLElement, library: Library, documents: Docu
       const picker = select("need"), before = picker.value;
       const area = get(".needs");
       area.replaceChildren();
-      requirements = [];
-      const assessed = view && view.scenario !== null && view.scene.scenarios[view.scenario]?.id === id;
-      if (assessed) {
-        for (const [connection,outcomes] of view.negotiations) {
-          const capabilities = new Set(view.result.needs.filter(n => outcomes.includes(n.outcome)).map(n => n.requiredCapability));
-          for (const capability of capabilities) requirements.push({connection,capability});
-        }
-      }
+      const assessed = view && view.scenario !== null && view.scene.scenarios[view.scenario]?.id === id
+        ? budgetRequirements(view,scenario) : undefined;
+      requirements = assessed?.rows ?? [];
       picker.replaceChildren(new Option("일반 구매",""));
       if (requirements.length) area.append(el("h3","필요한 결합 형태"));
-      let unassigned = 0;
-      for (const need of requirements) {
+      for (const {need,purchases} of requirements) {
         const label = need.connection + " · " + need.capability;
         picker.add(new Option(label,JSON.stringify(need)));
-        const selected = scenario.purchases?.filter(p => p.need?.connection === need.connection && p.need.capability === need.capability);
-        if (!selected?.length) unassigned++;
         const connection = doc.connections.find(c => c.id === need.connection)!;
         const endpoints = [connection.from,connection.to].map(p => p.instanceId + "/" + p.id).join(" ↔ ");
-        const line = el("p",label + " (" + endpoints + ") · " + (selected?.length ? selected.map(purchaseName).join(", ") : "해결 품목 미지정 · 추가 비용 미확인"));
+        const line = el("p",label + " (" + endpoints + ") · " + (purchases.length ? purchases.map(purchaseName).join(", ") : "해결 품목 미지정 · 추가 비용 미확인"));
         const choose = el("button","품목 지정");
         choose.onclick = () => {
           get(".purchases").closest("details")!.open = true;
@@ -499,9 +506,10 @@ export function mountBudget(root: HTMLElement, library: Library, documents: Docu
         area.append(line);
       }
       if ([...picker.options].some(o => o.value === before)) picker.value = before;
-      return assessed ? unassigned : undefined;
+      return assessed?.unassigned;
     }
     let lastScenario: Scenario | undefined;
+    let comparisonScenarios: SceneDocument["scenarios"] | undefined;
     function render() {
       if (!book || !dialog.open) return;
       const {doc} = state(), scenario = chosen(), area = get(".totals");
@@ -510,7 +518,7 @@ export function mountBudget(root: HTMLElement, library: Library, documents: Docu
       if (!scenario) { area.append(el("p","예산을 작성할 시나리오를 먼저 만드세요.")); return; }
       const unassigned = showNeeds(scenario);
       const budget = calculateBudget(scenario,doc.items,book,unassigned);
-      area.append(el("h3",scenario.id),el("strong","확인된 상품 소계 " + usd(budget.subtotalCents)),
+      area.append(el("h3",scenarioName(scenario)),el("strong","확인된 상품 소계 " + usd(budget.subtotalCents)),
         el("p","가격 미확인 " + budget.unknownCount + "개 · 세금과 배송비 미확인"));
       area.querySelector("strong")!.className = "budget-total";
       const remaining = budget.limitCents === null ? "상품 예산 상한 미설정" : budget.limitStatus === "over"
@@ -532,6 +540,10 @@ export function mountBudget(root: HTMLElement, library: Library, documents: Docu
       if (lastScenario !== scenario) {
         input("limit").value = scenario.budget?.toString() ?? "";
         lastScenario = scenario;
+        invalidateComparison();
+      }
+      if (!sceneSelect.value && scenarioSelect.options.length && comparisonScenarios !== doc.scenarios) {
+        selectScenarios(doc);
         invalidateComparison();
       }
       const purchases = get(".purchases");
@@ -600,7 +612,7 @@ export function mountBudget(root: HTMLElement, library: Library, documents: Docu
     }
     submit("add",() => {
       const s = chosen()!, selected = choices[select("item").selectedIndex]!;
-      const need = requirements.find(n => JSON.stringify(n) === select("need").value);
+      const need = requirements.find(row => JSON.stringify(row.need) === select("need").value)?.need;
       const row = {...selected,...("quantity" in selected && {quantity:input("quantity").valueAsNumber}),...(need && {need})};
       const rows = [...s.purchases ?? []];
       if (rows.some(p => JSON.stringify(p) === JSON.stringify(row)) && !("quantity" in row)) return;
@@ -689,8 +701,11 @@ export function mountBudget(root: HTMLElement, library: Library, documents: Docu
       status.textContent = "선택한 모델에 Best Buy 견적을 적용했습니다.";
     });
     function selectScenarios(doc: SceneDocument) {
-      scenarioSelect.replaceChildren(...doc.scenarios.map(s => new Option(s.id)));
-      if (doc.scenarios.some(s => s.id === state().id)) scenarioSelect.value = state().id!;
+      const selected = scenarioSelect.value;
+      comparisonScenarios = doc.scenarios;
+      scenarioSelect.replaceChildren(...doc.scenarios.map(s => new Option(scenarioName(s),s.id)));
+      const preferred = doc.scenarios.find(s => s.id === selected) ?? doc.scenarios.find(s => s.id === state().id);
+      if (preferred) scenarioSelect.value = preferred.id;
     }
     async function loadOther() {
       invalidateComparison();
@@ -719,13 +734,15 @@ export function mountBudget(root: HTMLElement, library: Library, documents: Docu
       const right = after?.scenarios.find(s => s.id === scenarioSelect.value);
       if (!after || !right) throw new Error("비교할 시나리오를 고르세요.");
       const version = ++comparisonVersion;
-      const a = calculateBudget(left,before.items,book!), b = calculateBudget(right,after.items,book!);
-      const [old,next] = await Promise.all([comparisonSnapshot(before,left,documents),
+      const [leftSide,rightSide] = await Promise.all([comparisonSnapshot(before,left,documents),
         comparisonSnapshot(after,right,sceneSelect.value ? otherDocuments : documents)]);
       expire();
       if (version !== comparisonVersion || !dialog.open) return;
+      const a = calculateBudget(left,before.items,book!,leftSide.unassigned);
+      const b = calculateBudget(right,after.items,book!,rightSide.unassigned);
+      const old = leftSide.snapshot, next = rightSide.snapshot;
       comparison.replaceChildren(el("h3","가격 차이 " + difference(compareBudgets(a,b))),
-        el("p",before.sceneId + " / " + left.id + " → " + after.sceneId + " / " + right.id));
+        el("p",before.sceneId + " / " + scenarioName(left) + " → " + after.sceneId + " / " + scenarioName(right)));
       const byProduct = new Map<string,{label:string;before?:BudgetLine;after?:BudgetLine}>();
       for (const [side,budget] of [["before",a],["after",b]] as const) for (const line of budget.lines) {
         const product = line.quote ?? line.product;

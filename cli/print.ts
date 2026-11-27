@@ -1,6 +1,7 @@
 // 판정 표와 장면 표를 따라 터미널에 읽을 수 있는 성능·병목·근거를 만든다.
 import { connectionPorts, type MeasurementContext } from "../engine/scene.ts";
 import { inactiveReason } from "../scene/measurement.ts";
+import { scenarioName } from "../scene/files.ts";
 import { evidenceRows } from "../engine/evidence.ts";
 import type { Claim, Scene, Verdict } from "../engine/contract.ts";
 import type { Results, Target } from "../engine/results.ts";
@@ -187,8 +188,8 @@ export function printResults(scene: Scene, result: Results): string {
     writeConnection(o, row, "");
   });
   scene.scenarios.forEach((s, scenario) => {
-    lines.push("", `시나리오 ${s.id}`);
-    evidence.push("", `시나리오 ${s.id}`);
+    lines.push("", `시나리오 ${scenarioName(s)}`);
+    evidence.push("", `시나리오 ${scenarioName(s)}`);
     for (const choice of result.choices.filter(c => c.scenario === scenario)) {
       const label = `  연결 설정 ${targetName("connection", choice.connection)} · ${choice.profile}`;
       lines.push(label);
@@ -232,7 +233,7 @@ export function printResults(scene: Scene, result: Results): string {
 }
 
 export function printVariant(scene: Scene, base: Results, variant: Results, scenario: number, order: number): string {
-  const lines = [`대안 ${order} · 시나리오 ${scene.scenarios[scenario]!.id}`];
+  const lines = [`대안 ${order} · 시나리오 ${scenarioName(scene.scenarios[scenario]!)}`];
   const before = new Map(base.choices.filter(c => c.scenario === scenario).map(c => [c.connection, c.profile]));
   const after = new Map(variant.choices.filter(c => c.scenario === scenario).map(c => [c.connection, c.profile]));
   for (const connection of new Set([...before.keys(), ...after.keys()])) {

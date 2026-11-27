@@ -269,7 +269,9 @@ test("Mbps·W 작업, 멤버, 우선순위, 미확인 요청을 고쳐 문서 �
     await panel.getByRole("button", { name: "새 시나리오", exact: true }).click();
     await name.fill("작업 시험");
     await panel.getByRole("button", { name: "시나리오 만들기", exact: true }).click();
-    assert.equal(await selector.inputValue(), "작업 시험");
+    const scenarioId = await selector.inputValue();
+    assert.match(scenarioId, /^[0-9a-f]{8}-[0-9a-f-]{27}$/);
+    assert.equal(await selector.locator("option:checked").textContent(), "작업 시험");
     async function newWorkload(preset: string, label: string, value: string) {
       await panel.getByRole("button", { name: "새 작업", exact: true }).click();
       await panel.getByLabel("작업 프리셋", { exact: true }).selectOption({ label: preset });
@@ -316,7 +318,8 @@ test("Mbps·W 작업, 멤버, 우선순위, 미확인 요청을 고쳐 문서 �
     await power.uncheck();
     await name.fill("이더넷 우선");
     await submitScenario.click();
-    assert.equal(await selector.inputValue(), "이더넷 우선");
+    assert.equal(await selector.inputValue(), scenarioId);
+    assert.equal(await selector.locator("option:checked").textContent(), "이더넷 우선");
     assert(await traffic.isChecked());
     assert(!(await power.isChecked()));
 
@@ -339,7 +342,9 @@ test("Mbps·W 작업, 멤버, 우선순위, 미확인 요청을 고쳐 문서 �
     assert.equal(parsed.sources.find(source => source.id === watts.sources[0])?.locator, "canvas:scenario");
     await page.evaluate(json => window.benchwire.open(JSON.parse(json)), saved);
     await panel.locator("summary").click();
-    await selector.selectOption("이더넷 우선");
+    assert.equal(parsed.scenarios[1]!.id, scenarioId);
+    assert.equal(parsed.scenarios[1]!.name, "이더넷 우선");
+    await selector.selectOption(scenarioId);
     assert(await traffic.isChecked());
     assert(!(await power.isChecked()));
     assert.equal(await rank.inputValue(), "2");
@@ -697,7 +702,8 @@ test("작업 요청을 적용해도 이름·멤버 초안이 남고 시나리오
     await panel.getByRole("button", { name: "시나리오 적용", exact: true }).click();
     assert.equal(await throughput.inputValue(), "675");
     const saved = await page.evaluate(() => window.benchwire.read());
-    assert.equal(saved.scenarios[0]!.id, "편집 중인 이름");
+    assert.equal(saved.scenarios[0]!.id, "poe-and-ethernet");
+    assert.equal(saved.scenarios[0]!.name, "편집 중인 이름");
     assert.equal(saved.workloads.find(row => row.id === "poe-ethernet")!.request.throughput!.value, 625);
     assert.deepEqual(errors, []);
   } finally { await page.close(); }

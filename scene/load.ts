@@ -2,7 +2,7 @@
 import { connectionPorts } from "../engine/scene.ts";
 import type { z } from "zod";
 import type { Scene, Claim, DomainPlugin, InputSchema, MeasurementContext } from "../engine/contract.ts";
-import { connectorsFile, modelFile, sceneFile, parseDocument, type Fact } from "./files.ts";
+import { connectorsFile, modelFile, sceneFile, parseDocument, scenarioName, type Fact } from "./files.ts";
 
 function fail(at: string, why: string): never { throw new Error(at + " — " + why); }
 
@@ -333,15 +333,19 @@ export function loadSceneDocuments(document: unknown, library: { connectors: unk
     fields("workload", workload, "scene", domain, w.request, ref(domains, domain, at + ".domain").request, sceneSources, at + ".request");
   });
   const scenarios = new Map<string, number>();
+  const scenarioNames = new Set<string>();
   saved.scenarios.forEach((s, scenario) => {
     const at = file + "#scenarios." + scenario;
     unique(scenarios, s.id, scenario, at + ".id");
+    const name = scenarioName(s);
+    if (scenarioNames.has(name)) fail(at + ".name", "중복 이름: " + name);
+    scenarioNames.add(name);
     s.purchases?.forEach((p, i) => {
       const where = at + ".purchases." + i;
       if ("instanceId" in p) ref(instances, p.instanceId, where + ".instanceId");
       if (p.need) ref(connectionIds, p.need.connection, where + ".need.connection");
     });
-    scene.scenarios.push({ id: s.id });
+    scene.scenarios.push({ id: s.id, name });
     const members = new Map<string, number>();
     s.members.forEach((entry, i) => {
       const pos = at + ".members." + i;

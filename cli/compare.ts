@@ -7,6 +7,7 @@ import type { Claim, DomainPlugin, Verdict } from "../engine/contract.ts";
 import type { Results, Run } from "../engine/results.ts";
 import { plugins as productPlugins } from "../domains/registry.ts";
 import { loadScene } from "./load.ts";
+import { scenarioName } from "../scene/files.ts";
 
 const verdicts: Record<Verdict, string> = { ok: "✅", conditional: "⚠️", impossible: "❌", unknown: "❓" };
 const runs: Record<Run, string> = { solo: "단독", together: "동시" };
@@ -26,7 +27,7 @@ function quantity(value: number | null, unit: string) {
 function title({ scene, result }: Snapshot, row: number) {
   const o = result.outcomes[row]!;
   if (o.subjectKind === "workload")
-    return `시나리오 ${scene.scenarios[o.scenario!]!.id} · 작업 ${scene.workloads[o.subjectRow]!.id}`;
+    return `시나리오 ${scenarioName(scene.scenarios[o.scenario!]!)} · 작업 ${scene.workloads[o.subjectRow]!.id}`;
   const tags = [direction(o.direction), o.domain, o.unit, o.pool ? `${o.pool.domain}/${o.pool.id}` : ""].filter(Boolean);
   return `연결 ${scene.connections[o.subjectRow]!.id} · ${tags.join(" · ")}`;
 }
