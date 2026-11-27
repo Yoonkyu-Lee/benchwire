@@ -2,7 +2,7 @@
 import assert from "node:assert/strict";
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import type { Server } from "node:http";
-import { join, resolve } from "node:path";
+import { basename, dirname, join, resolve } from "node:path";
 import { after, before, test } from "node:test";
 import { setTimeout as sleep } from "node:timers/promises";
 import { chromium, type Browser, type BrowserContext, type Locator, type Page } from "playwright";
@@ -41,7 +41,11 @@ before(async () => {
 
 after(async () => {
   await Promise.all([browser?.close(), closeServer()]);
-  if (dataDir) await rm(dataDir, { recursive: true, force: true });
+  if (dataDir) {
+    assert.equal(dirname(dataDir), resolve("work"));
+    assert(basename(dataDir).startsWith("ui-data-"));
+    await rm(dataDir, { recursive: true, force: true });
+  }
 });
 
 async function center(locator: Locator) {
@@ -76,14 +80,13 @@ test("예제 한 케이블의 전력과 네트워크 레이어를 독립적으�
     assert.equal(await port(page, "pse", "pse").getAttribute("data-face"), "list");
     assert.equal(await port(page, "pse", "pse").locator("path").getAttribute("data-glyph"), "rj45");
     assert.equal(await page.locator('[data-inventory="spare-wire"] strong').textContent(), "예비 이더넷 케이블");
-    const power = wire.locator('[data-layer="power"]');
-    const network = wire.locator('[data-layer="network"]');
+    const power = wire.locator('[data-layer="power"][data-direction="forward"][data-result-kind="negotiation"]');
+    const network = wire.locator('[data-layer="network"][data-direction="forward"][data-result-kind="negotiation"]');
     const powerToggle = page.getByRole("button", { name: "전력" });
     const networkToggle = page.getByRole("button", { name: "네트워크" });
     assert(await power.isVisible());
     assert(await network.isVisible());
-    assert.equal(await networkToggle.evaluate(button => getComputedStyle(button, "::before").backgroundColor),
-      await network.evaluate(path => getComputedStyle(path).stroke));
+
     await powerToggle.click();
     assert.equal(await powerToggle.getAttribute("aria-pressed"), "false");
     assert(await power.isHidden());
@@ -203,7 +206,7 @@ test("팬·줌 뒤 실물 드롭과 카드 이동을 문서에 담고 다시 열
     const pannedScale = await world.evaluate((g: SVGGElement) => g.getScreenCTM()!.a);
     await page.mouse.move(772, 347);
     await page.mouse.wheel(0, -120);
-    assert(await world.evaluate((g: SVGGElement) => g.getScreenCTM()!.a) > pannedScale);
+    await page.waitForFunction(scale => document.querySelector<SVGGElement>(".world")!.getScreenCTM()!.a > scale, pannedScale);
     assert.equal(await page.evaluate(() => window.benchwire.changes()), 0);
 
     const viewportBox = await surface.boundingBox();
@@ -257,11 +260,11 @@ test("포인터와 키보드로 연결하고 취소하거나 거절한 포트는
     assert.equal(await a.getAttribute("aria-pressed"), "true");
     await page.keyboard.press("Escape");
     assert.equal(await a.getAttribute("aria-pressed"), null);
-    assert.equal(await page.evaluate(() => window.benchwire.tried().length), 0);
+    assert.equal(await page.evaluate(() => window.benchwire.changes()), 0);
 
     await a.press("Enter");
     await c.press("Space");
-    assert.match((await page.getByRole("status").textContent())!, /커넥터가 맞지 않습니다.*USB-C → DP 어댑터/);
+    assert.match((await page.getByRole("status").textContent())!, /커넥터가 맞지 않습니다.*network-socket/);
     assert.equal(await a.getAttribute("aria-disabled"), "false");
     assert.equal(await c.getAttribute("aria-disabled"), "false");
     assert.equal(await page.evaluate(() => window.benchwire.changes()), 0);
@@ -289,7 +292,7 @@ test("포인터와 키보드로 연결하고 취소하거나 거절한 포트는
     assert.equal(await a2.getAttribute("aria-disabled"), "true");
     const edited = await page.evaluate(() => window.benchwire.read());
     assert.equal(edited.connections.length, 2);
-    assert.deepEqual(edited.connections[0]!.parts, [{ instanceId: "wire", entry: "p0", exit: "p1" }]);
+    assert.deepEqual(edited.connections[0]!.parts, [{ instanceId: "wire", entry: "a", exit: "b" }]);
     assert.deepEqual(edited.connections[1]!.parts, []);
     assert.equal(edited.sources.filter(source => source.locator === "canvas:placement").length, 1);
     await page.getByRole("button", { name: "추천", exact: true }).click();
@@ -308,8 +311,8 @@ async function measure(page: Page, motion: Motion) {
   await cardTitle.waitFor();
   assert.equal(await page.locator(".device").count(), 50);
   assert.equal(await page.locator(".port").count(), 400);
-  assert.equal(await page.locator(".wire-line").count(), 100);
-  assert.equal(await page.locator("animateMotion").count(), 100);
+  assert.equal(await page.locator(".wire").count(), 100);
+  assert.equal(await page.locator('.wire-line[data-result-kind="negotiation"]').count(), 200);
   const target = motion === "drag" ? await center(cardTitle)
     : motion === "pan" ? { x: 288, y: 134 } : { x: 848, y: 432 };
   const carrier = motion === "drag" ? page.locator('[data-instance="grid-12"]') : page.locator(".world");
@@ -358,5 +361,144 @@ test("50기기·400포트·100선 장면의 드래그·팬·줌 프레임 p95가
       context.diagnostic(JSON.stringify(sample));
       assert(sample.p95 <= 20, `${sample.motion} ${sample.trial}: p95 ${sample.p95} ms`);
     }
+  } finally { await page.close(); }
+});
+
+test("PoE 예제의 작업량, 협상 출처와 자원 막대를 열고 의미 편집 후 한 흐름만 지운다", async () => {
+  const { page, errors } = await newPage("/testbed.html?example");
+  try {
+    const wire = page.locator('[data-connection="poe"]');
+    const flow = wire.locator(".wire-result[data-workload]");
+    const flowBefore = await flow.allTextContents();
+    assert.equal(flowBefore.length, 2);
+    assert(flowBefore.some(text => text.includes("12 W")));
+    assert(flowBefore.some(text => text.includes("900 Mbps")));
+    assert.equal(await wire.locator('[data-result-kind="negotiation"]').count(), 4);
+    await wire.locator(".wire-name").click();
+    const panel = page.getByRole("complementary", { name: "결과와 근거" });
+    const detail = panel.getByRole("region", { name: "선택한 항목 근거" });
+    assert.match(await detail.innerText(), /PoE 성립/);
+    assert.match(await detail.innerText(), /이더넷 성립/);
+    for (const label of [/→ 이더넷 성립/, /→ PoE 성립/]) {
+      const negotiation = detail.locator(".negotiation-evidence").filter({ has: page.locator("summary").filter({ hasText: label }) });
+      await negotiation.locator(":scope > summary").click();
+      const link = negotiation.locator(".specs a").first();
+      assert(await link.isVisible());
+      assert.match((await link.getAttribute("href"))!, /^https?:\/\//);
+    }
+    const hiddenSource = detail.getByText("합성 PoE 송전 장치", { exact: true });
+    assert(await hiddenSource.count() > 0);
+    await detail.locator(".reason-tree details:not([open]) > summary").first().click();
+    assert(await detail.locator(".reason-tree details[open]").count() > 4);
+    await panel.evaluate(el => { el.scrollTop = 0; });
+    await page.screenshot({ path: "work/m3-results-evidence.png" });
+
+    await panel.locator("summary").getByText(/^자원 /).click();
+    await panel.getByRole("button", { name: /포트|port-budget/ }).first().click();
+    assert.match(await detail.innerText(), /사용 14 W \/ 용량 15 W/);
+    assert.equal(await detail.locator("meter").getAttribute("value"), "14");
+    await panel.getByRole("button", { name: "닫기" }).click();
+
+    const layout = await page.evaluate(() => window.benchwire.read().layout);
+    assert.equal(await page.evaluate(() => {
+      const scene = window.benchwire.read();
+      return window.benchwire.edit({ ...scene, workloads: scene.workloads.filter(w => w.id !== "poe-12"),
+        scenarios: [{ id: "poe", members: ["poe-ethernet"] }] });
+    }), true);
+    assert.deepEqual(await flow.allTextContents(), flowBefore.filter(text => text.includes("900 Mbps")));
+    assert.equal(await wire.locator('[data-result-kind="negotiation"]').count(), 4);
+    assert.deepEqual(await page.evaluate(() => window.benchwire.read().layout), layout);
+
+    assert.equal(await page.evaluate(() => {
+      const scene = window.benchwire.read();
+      return window.benchwire.edit({ ...scene, scenarios: [{ id: "poe", members: ["missing"] }] });
+    }), false);
+    assert.match(await page.getByRole("alert").innerText(), /scene\.json#scenarios\.0.*missing/);
+    assert.equal(await flow.count(), 1);
+    assert.equal(await page.evaluate(() => window.benchwire.changes()), 1);
+    assert.deepEqual(errors, []);
+  } finally { await page.close(); }
+});
+
+test("PoE 손실이 미확인이면 케이블 위에 범위·점선을 그리고 검증 퀘스트를 연다", async () => {
+  const { page, errors } = await newPage("/testbed.html?unknown");
+  try {
+    const wire = page.locator('[data-connection="poe"]');
+    const power = wire.locator('path[data-direction="forward"][data-unit="W"][data-result-kind="negotiation"]');
+    assert.equal(await power.getAttribute("data-verdict"), "unknown");
+    assert.notEqual(await power.evaluate(path => getComputedStyle(path).strokeDasharray), "none");
+    const unknown = wire.locator('.wire-result[data-verdict="unknown"]');
+    assert((await unknown.allTextContents()).some(text => /0–15 W/.test(text)));
+    await wire.locator(".wire-name").click();
+    const detail = page.getByRole("region", { name: "선택한 항목 근거" });
+    assert.match(await detail.innerText(), /검증 퀘스트/);
+    assert.match(await detail.innerText(), /최대 전력 손실\(W\).*확인하세요/);
+    await page.screenshot({ path: "work/m3-results-unknown.png" });
+    assert.deepEqual(errors, []);
+  } finally { await page.close(); }
+});
+
+test("예제와 50기기 정적 빌드에서 의미 편집부터 새 판정이 그려지는 시간을 기록한다", { timeout: 60_000 }, async context => {
+  const measurements = [];
+  for (const [mode, id, expected] of [["example", "poe-ethernet", 2], ["performance", "traffic-3", 50]] as const) {
+    const { page, errors } = await newPage("/testbed.html?" + mode);
+    try {
+      assert.equal(await page.locator(".device").count(), expected);
+      if (mode === "performance") {
+        assert.equal(await page.locator(".port").count(), 400);
+        assert.equal(await page.locator(".wire").count(), 100);
+        assert.equal(await page.locator('.wire-line[data-result-kind="negotiation"]').count(), 200);
+      }
+      await page.getByRole("button", { name: "결과 · 근거" }).click();
+      const samples = await page.evaluate(async id => {
+        const samples: number[] = [];
+        for (let i = 0; i < 23; i++) {
+          const throughput = i % 2 ? 840 : 860;
+          const scene = window.benchwire.read();
+          const workloads = scene.workloads.map(w => w.id !== id ? w : { ...w, request: { ...w.request,
+            throughput: { ...w.request.throughput!, value: throughput },
+          } });
+          const start = performance.now();
+          if (!window.benchwire.edit({ ...scene, workloads })) throw new Error("편집 실패");
+          await new Promise<void>(resolve => requestAnimationFrame(() => requestAnimationFrame(() => resolve())));
+          const elapsed = performance.now() - start;
+          const mark = document.querySelector(`.wire-result[data-workload="${id}"]`);
+          const amount = `${throughput} Mbps`;
+          const list = document.querySelectorAll(".results-panel .result-list[open] button");
+          if (!mark?.textContent?.includes(amount) || ![...list].some(option => option.textContent?.includes(amount)))
+            throw new Error("새 배분량 미표시");
+          if (i >= 2) samples.push(elapsed);
+        }
+        return samples.map(ms => Number(ms.toFixed(2)));
+      }, id);
+      const sorted = [...samples].sort((a, b) => a - b);
+      const percentile = (q: number) => sorted[Math.ceil(q * sorted.length) - 1]!;
+      const stat = { mode, samples, p50: percentile(0.5), p95: percentile(0.95), max: percentile(1) };
+      context.diagnostic(JSON.stringify(stat));
+      measurements.push(stat);
+      assert.deepEqual(errors, []);
+    } finally { await page.close(); }
+  }
+  await writeFile("work/m3-results-perf.json", JSON.stringify({ browser: browser.version(), viewport, measurements }, null, 2));
+});
+
+test("다른 설정을 고르면 이미 평가한 시나리오의 핀 배정과 흐름을 바꿔 그린다", async () => {
+  const { page, errors } = await newPage("/testbed.html?profile");
+  try {
+    const wire = page.locator('[data-connection="display-hub"]');
+    const hub = wire.locator('.wire-result[data-workload="hub"]');
+    const video = wire.locator('.wire-result[data-workload="video"]');
+    assert.match(await hub.textContent() ?? "", /53\.248 MB\/s/);
+    assert.match(await video.textContent() ?? "", /15\.674 Gbps/);
+    await page.getByRole("button", { name: "결과 · 근거" }).click();
+    const panel = page.getByRole("complementary", { name: "결과와 근거" });
+    await panel.getByText("다른 설정", { exact: true }).click();
+    await panel.getByRole("button", { name: /대안.*dp-2lane/ }).click();
+    assert.match(await hub.textContent() ?? "", /400 MB\/s/);
+    assert.match(await video.textContent() ?? "", /12\.543 Gbps/);
+    assert.equal(await page.evaluate(() => window.benchwire.scenario("hub-only")), true);
+    assert.equal(await video.count(), 0);
+    assert.equal(await page.evaluate(() => window.benchwire.changes()), 0);
+    assert.deepEqual(errors, []);
   } finally { await page.close(); }
 });

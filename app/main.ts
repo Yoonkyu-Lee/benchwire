@@ -1,16 +1,7 @@
 // 로컬 API의 장면을 작업대에 열고 확정 편집을 ETag 순서대로 저장한다.
 import "./style.css";
-import type { z } from "zod";
-import type { connectorsFile } from "../scene/files.ts";
-import type { CanvasLibrary } from "./canvas.ts";
-import type { SceneDocument } from "./document.ts";
+import type { Library, SceneDocument } from "./document.ts";
 import { mountWorkbench } from "./workbench.ts";
-
-interface LibraryResponse extends CanvasLibrary {
-  defaultSceneId: string;
-  scenes: { id: string; title: string; example: boolean }[];
-  connectors: z.output<typeof connectorsFile>;
-}
 
 const root = document.querySelector<HTMLElement>("#app")!;
 const notice = document.querySelector<HTMLElement>("#storage-status")!;
@@ -39,7 +30,9 @@ async function start() {
     status("라이브러리를 열 수 없습니다.");
     return;
   }
-  const library = await response.json() as LibraryResponse;
+  const library = await response.json() as Library & {
+    defaultSceneId: string; scenes: { id: string; title: string }[];
+  };
   for (const { id, title } of library.scenes) picker.add(new Option(title, id));
 
   let saved: SceneDocument;

@@ -12,7 +12,7 @@ const faces = Object.keys(faceNames) as Face[];
 export interface FaceLayout extends Point { label: string; face: Face; width: number; height: number }
 export interface PortLayout extends Point { port: Port }
 export function cardLayout(model: Model) {
-  const known = model.ports.filter(p => p.position && p.position.confidence !== "unknown");
+  const known = model.ports.filter(p => p.position !== undefined);
   const unknown = model.ports.filter(p => !known.includes(p));
   const panels = faces.filter(face => known.some(p => p.position!.face === face)).map((face, i): FaceLayout => ({
     face, label: faceNames[face], x: 16 + (i % 2) * 99, y: CARD_HEADER + Math.floor(i / 2) * (FACE_HEIGHT + FACE_GAP),

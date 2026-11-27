@@ -1,21 +1,32 @@
-// 장면 문서 편집을 확정하고 캔버스·인벤토리·외부 결합 판정기를 연결한다.
-import { mountCanvas, type CanvasLibrary } from "./canvas.ts";
-import { occupiedPorts, type ConnectionCheck } from "./connection.ts";
-import { addConnection, modelKey, place, portKey, type InventoryItem, type SceneDocument, type SceneIntent } from "./document.ts";
+// 장면 편집을 확정하고 캔버스·엔진 결과·근거 패널을 연결한다.
+import type { Run } from "../engine/results.ts";
+import { assessDocument, type Assessment, type Documents } from "./assessment.ts";
+import { mountCanvas } from "./canvas.ts";
+import { occupiedPorts, type ConnectionDecision } from "./connection.ts";
+import { addConnection, modelKey, place, portKey, type InventoryItem, type Library, type SceneDocument, type SceneIntent } from "./document.ts";
+import { mountEvidence } from "./evidence.ts";
 import { INVENTORY_DRAG, mountInventory } from "./inventory.ts";
 import { mountLayers } from "./layers.ts";
 import { CARD_WIDTH } from "./layout.ts";
+import { resultView, type ResultView } from "./results.ts";
 
-export function mountWorkbench(root: HTMLElement, initial: SceneDocument, library: CanvasLibrary, options: {
+export function mountWorkbench(root: HTMLElement, initial: SceneDocument, library: Library, options: {
   title?: string;
-  checkConnection?: ConnectionCheck;
+  scenarioId?: string;
   onChange?: (document: SceneDocument, intent: SceneIntent) => void;
   onSelectConnection?: (id: string) => void;
+  onSelectScenario?: (id: string) => void;
 } = {}) {
   let scene = initial;
   let cable: InventoryItem | undefined;
-  let checking = false;
+  let assessment: Assessment | undefined;
+  let view: ResultView | undefined;
+
+  let scenario: number | null = null;
+  let variant = 0;
+  let run: Run = "together";
   const models = new Map(library.models.map(model => [modelKey(model), model]));
+  const documents: Documents = { connectors: library.connectors, models };
   const stock = new Map(library.inventory.map(item => [item.instanceId, item]));
   root.innerHTML = `
     <header class="topbar">
@@ -31,17 +42,30 @@ export function mountWorkbench(root: HTMLElement, initial: SceneDocument, librar
           <button type="button" class="fit" title="전체 맞춤">전체 맞춤</button>
           <button type="button" class="zoom-out" aria-label="축소" title="축소">−</button>
           <button type="button" class="zoom-in" aria-label="확대" title="확대">+</button>
+          <button type="button" class="results-toggle" aria-controls="results-panel">결과 · 근거</button>
         </div>
         <div class="canvas-help">빈 곳 드래그로 이동 · 휠로 확대/축소 · 포트에서 포트로 연결</div>
         <div class="status" role="status"></div>
+        <div class="assessment-error" role="alert"></div>
+        <aside id="results-panel" class="results-panel" aria-label="결과와 근거" hidden></aside>
       </main>
     </div>`;
-  root.querySelector("h1")!.textContent = options.title || scene.sceneId;
+  root.querySelector("h1")!.textContent = options.title || initial.sceneId;
   const count = root.querySelector<HTMLElement>(".scene-count")!;
   const stage = root.querySelector<HTMLElement>(".viewport")!;
   const status = root.querySelector<HTMLElement>(".status")!;
+  const error = root.querySelector<HTMLElement>(".assessment-error")!;
   const setStatus = (text: string) => { status.textContent = text; };
-  const canvas = mountCanvas(stage, library, { intent: edit, status: setStatus, selectConnection: options.onSelectConnection });
+  const panel = mountEvidence(root.querySelector<HTMLElement>(".results-panel")!, {
+    run(next) { run = next; redrawResults(); },
+    variant(index) { variant = index; redrawResults(); },
+    loadVariants: () => assessment?.variants(scenario, true) ?? [],
+  });
+  const canvas = mountCanvas(stage, library, {
+    intent: edit, status: setStatus,
+    selectConnection(id) { panel.choose({ kind: "connection", id }); options.onSelectConnection?.(id); },
+    selectWorkload(id) { panel.choose({ kind: "workload", id }); },
+  });
   const inventory = mountInventory(root.querySelector<HTMLElement>(".inventory-content")!, library, {
     add(item) {
       const center = canvas.center();
@@ -57,6 +81,7 @@ export function mountWorkbench(root: HTMLElement, initial: SceneDocument, librar
   root.querySelector(".fit")!.addEventListener("click", canvas.fit);
   root.querySelector(".zoom-out")!.addEventListener("click", () => canvas.zoom(1 / 1.2));
   root.querySelector(".zoom-in")!.addEventListener("click", () => canvas.zoom(1.2));
+  root.querySelector(".results-toggle")!.addEventListener("click", panel.toggle);
   stage.addEventListener("dragover", event => {
     if (!event.dataTransfer?.types.includes(INVENTORY_DRAG)) return;
     event.preventDefault();
@@ -71,63 +96,122 @@ export function mountWorkbench(root: HTMLElement, initial: SceneDocument, librar
 
   function render() {
     count.textContent = `실물 ${scene.items.length} · 연결 ${scene.connections.length}`;
-    canvas.render(scene);
+    canvas.render(scene, view?.wires);
     inventory(scene, cable?.instanceId);
   }
 
-  function commit(next: SceneDocument, intent: SceneIntent) {
-    scene = next;
+  function redrawResults(preserveSelection = true) {
+    const variants = assessment?.variants(scenario) ?? [];
+    if (assessment) view = resultView(assessment.scene, (variants[variant]?.result ?? assessment.primary), scenario, run);
     render();
+    panel.render(view, variants, variant, preserveSelection);
+  }
+
+  function load(next: SceneDocument) {
+    const loaded = assessDocument(next, documents, readScenario());
+    if ("error" in loaded) { error.textContent = loaded.error; return undefined; }
+    error.textContent = "";
+    return loaded;
+  }
+
+  function use(loaded: Assessment) {
+    assessment = loaded;
+    scenario = loaded.scenario;
+
+    variant = 0;
+    redrawResults();
+  }
+
+  function commit(next: SceneDocument, intent: SceneIntent, prepared?: Assessment) {
+    if (intent.kind === "place") {
+      scene = next;
+      render();
+    } else {
+      const loaded = prepared ?? load(next);
+      if (!loaded) return false;
+      scene = next;
+      use(loaded);
+    }
     options.onChange?.(scene, intent);
+    return true;
   }
 
   function edit(intent: SceneIntent) {
+    if (!assessment) return;
     if (intent.kind === "place") {
       commit(place(scene, intent.instanceId, intent.position), intent);
     } else if (intent.kind === "add-item") {
       if (scene.items.some(item => item.instanceId === intent.item.instanceId)) return;
-      commit(place({ ...scene, items: [...scene.items, intent.item] }, intent.item.instanceId, intent.position), intent);
-      setStatus("실물을 배치했습니다.");
-    } else void connect(intent);
+      if (commit(place({ ...scene, items: [...scene.items, intent.item] }, intent.item.instanceId, intent.position), intent))
+        setStatus("실물을 배치했습니다.");
+    } else if (intent.kind === "connect") connect(intent);
   }
 
-  async function connect(intent: Extract<SceneIntent, { kind: "connect" }>) {
+  function connect(intent: Extract<SceneIntent, { kind: "connect" }>) {
     const { from, to } = intent;
-    if (checking) { setStatus("앞선 연결을 확인하고 있습니다."); return; }
     const occupied = occupiedPorts(scene);
-    const selectedCable = cable;
     if (portKey(from) === portKey(to) || occupied.has(portKey(from)) || occupied.has(portKey(to))) return;
-    if (selectedCable && [from.instanceId, to.instanceId].includes(selectedCable.instanceId)) {
+    if (cable && [from.instanceId, to.instanceId].includes(cable.instanceId)) {
       setStatus("선택한 케이블의 양 끝에 연결할 실물 포트를 고르세요.");
       return;
     }
-    const [entry, exit] = selectedCable ? models.get(modelKey(selectedCable))!.ports : [];
-    const before = scene;
-    const candidate = addConnection(before, from, to, selectedCable && {
-      item: selectedCable, part: { instanceId: selectedCable.instanceId, entry: entry!.id, exit: exit!.id },
+    const [entry, exit] = cable ? models.get(modelKey(cable))!.ports : [];
+    const candidate = addConnection(scene, from, to, cable && {
+      item: cable, part: { instanceId: cable.instanceId, entry: entry!.id, exit: exit!.id },
     });
-    if (options.checkConnection) {
-      checking = true;
-      const id = candidate.connections.at(-1)!.id;
-      let decision;
-      try { decision = await options.checkConnection(candidate, id); }
-      catch { setStatus("결합 판정을 가져오지 못했습니다. 연결을 다시 시도하세요."); return; }
-      finally { checking = false; }
-      if (scene !== before) { setStatus("장면이 바뀌었습니다. 연결을 다시 시도하세요."); return; }
-      if (!decision.allowed) {
-        const needed = decision.required.length ? ` 필요한 결합 형태: ${decision.required.join(" · ")}.` : "";
-        setStatus(decision.reason + needed);
-        return;
-      }
+    const loaded = load(candidate);
+    if (!loaded) return;
+    const decision = checkConnection(loaded, candidate.connections.at(-1)!.id);
+    if (!decision.allowed) {
+      setStatus(decision.reason + (decision.required.length ? " 필요한 결합 형태 " + decision.required.join(" · ") : ""));
+      return;
     }
-    if (cable === selectedCable) cable = undefined;
-    commit(candidate, intent);
+    cable = undefined;
+    commit(candidate, intent, loaded);
     setStatus("연결을 배치했습니다.");
   }
 
-  render();
+  function readScenario() {
+    return assessment ? scenario === null ? null : assessment.scene.scenarios[scenario]!.id : options.scenarioId ?? null;
+  }
+
+  const loaded = load(initial);
+  if (loaded) use(loaded);
   return {
+    documents,
     readDocument: () => scene,
-    replaceDocument(document: SceneDocument) { scene = document; render(); },
+    readScenario,
+    setScenario(id: string) {
+      const row = assessment?.scene.scenarios.findIndex(s => s.id === id);
+      if (row === undefined || row < 0) return false;
+      if (row !== scenario) {
+        scenario = row;
+        variant = 0;
+        redrawResults(false);
+        options.onSelectScenario?.(id);
+      }
+      return true;
+    },
+    replaceDocument(next: SceneDocument) {
+      const loaded = load(next);
+      if (!loaded) return false;
+      scene = next;
+      use(loaded);
+      return true;
+    },
+    editScenario(next: SceneDocument) { return commit(next, { kind: "edit-scenario" }); },
   };
+}
+
+function checkConnection(assessment: Assessment, id: string): ConnectionDecision {
+  const { primary: result, scene } = assessment;
+  const connection = scene.connections.findIndex(c => c.id === id);
+  const mismatches = new Set(result.physical.filter(p => p.connection === connection && p.kind === "mate" && p.verdict === "impossible")
+    .map(p => p.required));
+  if (!mismatches.size) return { allowed: true };
+  const reported = result.needs.filter(n => {
+    const o = result.outcomes[n.outcome]!;
+    return o.subjectKind === "connection" && o.subjectRow === connection && mismatches.has(n.requiredCapability);
+  }).map(n => n.requiredCapability);
+  return { allowed: false, reason: "커넥터가 맞지 않습니다.", required: [...new Set([...reported, ...mismatches].filter(Boolean))] };
 }
