@@ -1,4 +1,5 @@
 // 공용 카탈로그와 예제를 읽고, 검증된 장면과 인벤토리를 사용자 폴더에 원자적으로 저장한다.
+// 한계: Windows 잠금 재시도 중에는 동기 저장이 요청 처리를 잠시 막고, 삭제 잠금이 지속되면 임시 파일이 남을 수 있다.
 import { createHash, randomUUID } from "node:crypto";
 import { closeSync, linkSync, mkdirSync, openSync, readFileSync, readdirSync, renameSync, statSync, unlinkSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
@@ -45,19 +46,52 @@ function filesIn(dir: string): string[] {
   }
 }
 
+// Windows의 일시적인 외부 핸들이 닫힐 시간을 준다. https://github.com/isaacs/node-graceful-fs/blob/v4.2.11/polyfills.js#L80-L116
+const WINDOWS_RENAME_CODES = new Set(["EPERM", "EACCES", "EBUSY"]);
+const WINDOWS_RENAME_LIMIT_MS = 100;
+const WINDOWS_RENAME_INTERVAL_MS = 10;
+const renameDelay = new Int32Array(new SharedArrayBuffer(Int32Array.BYTES_PER_ELEMENT));
+
+function replaceFile(temp: string, file: string) {
+  const deadline = performance.now() + WINDOWS_RENAME_LIMIT_MS;
+  let firstError: unknown;
+  for (;;) {
+    try {
+      renameSync(temp, file);
+      return;
+    } catch (error) {
+      const code = (error as NodeJS.ErrnoException).code;
+      if (process.platform !== "win32" || !code || !WINDOWS_RENAME_CODES.has(code)) throw error;
+      firstError ??= error;
+    }
+    const remaining = deadline - performance.now();
+    if (remaining <= 0) throw firstError;
+    Atomics.wait(renameDelay, 0, 0, Math.min(WINDOWS_RENAME_INTERVAL_MS, remaining));
+    if (performance.now() >= deadline) throw firstError;
+  }
+}
+
 export function writeAtomic(file: string, content: string | Buffer, exclusive = false): void {
   mkdirSync(dirname(file), { recursive: true });
   const temp = join(dirname(file), "." + randomUUID() + ".tmp");
   const fd = openSync(temp, "wx", 0o600);
-  let moved = false;
   try {
     try { writeFileSync(fd, content); }
     finally { closeSync(fd); }
     if (exclusive) linkSync(temp, file);
-    else { renameSync(temp, file); moved = true; }
-  } finally {
-    if (!moved) unlinkSync(temp);
+    else {
+      replaceFile(temp, file);
+      return;
+    }
+  } catch (error) {
+    try { unlinkSync(temp); }
+    catch (cleanupError) {
+      const code = (cleanupError as NodeJS.ErrnoException).code;
+      if (code !== "ENOENT") console.warn("원자적 저장 임시 파일 정리 실패", code);
+    }
+    throw error;
   }
+  unlinkSync(temp);
 }
 
 function validate<T>(parse: () => T): T {
