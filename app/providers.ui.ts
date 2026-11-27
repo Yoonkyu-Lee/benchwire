@@ -6,7 +6,7 @@ import type Anthropic from "@anthropic-ai/sdk";
 import extracted from "../fixtures/receipt/response.json" with {type:"json"};
 import products from "../fixtures/bestbuy/products.json" with {type:"json"};
 import { BESTBUY_TTL, openBestBuy } from "../server/bestbuy.ts";
-import { edgeSession } from "./edge-session.ts";
+import { edgeSession, waitForAssessment } from "./edge-session.ts";
 
 const edge = edgeSession();
 const png = Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jI1sAAAAASUVORK5CYII=","base64");
@@ -109,8 +109,10 @@ test("T9 Best Buy 가상 견적은 만료 순간 열린 화면과 비교에서 �
   try {
     await page.route("https://developer.bestbuy.com/**",route => route.fulfill({contentType:"image/png",body:png}));
     const scenePicker = page.getByRole("combobox",{name:"장면",exact:true});
+    await page.clock.install({ time: new Date(now - 60_000) });
     await scenePicker.selectOption("network");
-    await page.clock.install({time:new Date(now)});
+    await waitForAssessment(page);
+    await page.clock.pauseAt(new Date(now));
     await page.getByRole("button",{name:"구매 예산"}).click();
     const panel = page.getByRole("dialog",{name:"구매 예산"});
     await panel.getByText("Best Buy 상품 검색",{exact:true}).click();
@@ -124,6 +126,7 @@ test("T9 Best Buy 가상 견적은 만료 순간 열린 화면과 비교에서 �
     await panel.getByLabel("구매할 항목").selectOption(await model.getAttribute("value") ?? "");
     await panel.getByRole("button",{name:"목록에 추가"}).click();
     await panel.getByText("확인된 상품 소계 $15.25",{exact:true}).waitFor();
+    await panel.locator("[data-scene-save-status]").getByText("저장됨", { exact: true }).waitFor();
     await panel.getByText("구매 목록 편집",{exact:true}).click();
     await panel.getByText("Best Buy 상품 검색",{exact:true}).click();
     await panel.getByText("로드아웃 비교",{exact:true}).click();
@@ -132,8 +135,13 @@ test("T9 Best Buy 가상 견적은 만료 순간 열린 화면과 비교에서 �
     await panel.getByText("가격 차이 −$15.25").waitFor();
     await panel.getByRole("img",{name:"Best Buy Developer API"}).waitFor();
     await page.screenshot({path:resolve("work/m6-bestbuy.png")});
-    now += BESTBUY_TTL;
-    await page.clock.fastForward(BESTBUY_TTL);
+    now += BESTBUY_TTL - 1;
+    await page.clock.fastForward(BESTBUY_TTL - 1);
+    assert.equal(await page.evaluate(() => Date.now()), now);
+    assert.ok(await panel.getByText("확인된 상품 소계 $15.25", { exact: true }).isVisible());
+    now++;
+    await page.clock.runFor(1);
+    assert.equal(await page.evaluate(() => Date.now()), now);
     await panel.getByText("확인된 상품 소계 $0.00").waitFor();
     await panel.getByText(/가격 미확인 1개/).waitFor();
     assert.doesNotMatch(await panel.innerText(),/15\.25|9000001/);

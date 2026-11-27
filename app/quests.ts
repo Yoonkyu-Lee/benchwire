@@ -4,6 +4,7 @@ import type { Claim } from "../engine/contract.ts";
 import { measurementPrediction, measurementValueText, predictionText, recordMeasurement, sceneWithMeasurementContext,
   verificationLocator, verificationSource, type MeasurementTarget } from "../scene/measurement.ts";
 import { connectionPorts } from "../engine/scene.ts";
+import { scenarioName } from "../scene/files.ts";
 import { claimInput, describe, field, showError, showFieldError, type JSONSchema } from "./field.ts";
 import type { Connection, Item, SceneDocument } from "./document.ts";
 import { interval, verdictText, type ResultView } from "./results.ts";
@@ -115,14 +116,16 @@ function measurementTarget(view: ResultView, c: Claim) {
 export function claimQuest(view: ResultView, row: number) {
   const claim=view.scene.claims[row]!, target=measurementTarget(view,claim);
   const work=claim.ownerKind==="workload" ? view.scene.workloads[claim.owner] : undefined;
+  const priority = work && !claim.domain && claim.field === "priority";
+  const scenario = priority ? view.scene.scenarios.find(s => s.id === claim.condition) : undefined;
   const connection=claim.ownerKind==="connection" ? view.scene.connections[claim.owner] : undefined;
   const plugin=(work || connection) && domains.find(d=>d.plugin.id===claim.domain)?.plugin;
   const schema=work ? plugin?.request : connection ? plugin?.observations : undefined;
   const shape=schema && describe(schema);
   const field=shape?.properties?.[claim.field] ?? shape?.additionalProperties;
   const property: JSONSchema | undefined = typeof field==="object" ? field : target.property;
-  return {...target,property,title:target.template?.title ?? claim.field,
-    subject:target.subject ?? work?.id ?? connection?.id ?? "",workload:work?.id};
+  return {...target,property,title:target.template?.title ?? (priority ? "우선순위" : claim.field),
+    subject:scenario ? scenarioName(scenario) + " · " + work!.id : target.subject ?? work?.id ?? connection?.id ?? "",workload:work?.id};
 }
 
 function quests(view: ResultView, saved: SceneDocument) {

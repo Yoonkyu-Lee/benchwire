@@ -28,6 +28,7 @@ test("T9 예제에서 입력한 견적과 예산은 사본에 남고 같은 기�
     await panel.getByRole("button",{name:"상한 저장"}).click();
     await panel.getByText("상품 예산 $5.00 초과").waitFor();
     await panel.getByText(/오래된 견적/).first().waitFor();
+    await panel.locator("[data-scene-save-status]").getByText("저장됨", { exact: true }).waitFor();
     await panel.getByRole("button",{name:"닫기"}).click();
     await page.locator('.scene-title select option:checked[value="network-copy"]').waitFor({state:"attached"});
     await page.reload();
@@ -331,4 +332,30 @@ test("T9 커넥터가 충돌하면 일부 후보에만 필요한 부품과 미�
     assert.match(await panel.locator(".totals").innerText(),/가격 미확인 0–1개/);
     await panel.screenshot({path:resolve("work/6차-후보별-결합품.png")});
   } finally {await page.close();}
+});
+
+
+test("T9 비교할 장면을 읽어야 두 구성 비교를 시작할 수 있다", async () => {
+  const { page, errors } = await edge.newPage("/");
+  try {
+    await page.getByLabel("장면", { exact: true }).selectOption("network");
+    await waitForAssessment(page);
+    await page.getByRole("button", { name: "구매 예산", exact: true }).click();
+    const panel = page.getByRole("dialog", { name: "구매 예산" });
+    await panel.getByText("로드아웃 비교", { exact: true }).click();
+    const compare = panel.getByRole("button", { name: "두 구성 비교", exact: true });
+    const scene = panel.getByLabel("비교할 장면");
+    let release!: () => void;
+    const pending = new Promise<void>(done => { release = done; });
+    await page.route("**/api/scenes/network", async route => { await pending; await route.continue(); }, { times: 1 });
+    const requested = page.waitForRequest(r => r.url().endsWith("/api/scenes/network") && r.method() === "GET");
+    try {
+      await scene.selectOption("network");
+      await requested;
+      assert.equal(await compare.isDisabled(), true, "비교할 장면을 읽는 중에 비교 단추가 활성화됨");
+    } finally { release(); }
+    await compare.click();
+    await panel.getByRole("heading", { name: "가격 차이 $0.00", exact: true }).waitFor();
+    assert.deepEqual(errors, []);
+  } finally { await page.close(); }
 });

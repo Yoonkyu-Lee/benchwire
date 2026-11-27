@@ -186,3 +186,45 @@ test("목표 검산의 조합 상한과 열린 수를 구별하고 해당 주장
     assert.deepEqual(errors,[]);
   } finally {await page.close();}
 });
+
+
+test("목표 검산에서 같은 작업의 우선순위 버튼은 시나리오 이름으로 구별된다", async () => {
+  const { page, errors } = await edge.newPage("/");
+  try {
+    await page.evaluate(async () => {
+      const library = await (await fetch("/api/library")).json() as Library;
+      const doc = await (await fetch("/api/scenes/three-ports")).json() as SceneDocument;
+      const supply = doc.items.find(i => i.instanceId === "supply")!;
+      const model = library.models.find(m => m.modelId === supply.modelId && m.revision === supply.revision)!;
+      supply.revision = model.revision = "priority-quest";
+      Object.assign(model.ports[0]!.interfaces[0]!.params.pdo20!, { value: null, confidence: "unknown" });
+      const work = doc.workloads[0]!;
+      doc.sceneId = "priority-quest";
+      doc.connections = doc.connections.slice(0, 1);
+      doc.workloads = [work];
+      doc.sources.push({ ...doc.sources[0]!, id: "alternate-priority" });
+      doc.scenarios = ([["morning", "아침 충전"], ["evening", "저녁 충전"]] as const).map(([id, name]) => ({
+        id, name, members: [{ workload: work.id, priority: { value: 1, confidence: "inferred",
+          sources: [doc.sources[0]!.id], conflicts: [{ value: 2, confidence: "review", sources: ["alternate-priority"] }] } }],
+        goals: [{ id: "충전 성립", kind: "workload", workload: work.id }],
+      }));
+      async function put(path: string, body: unknown) {
+        const reply = await fetch(path, { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+        if (!reply.ok) throw new Error(await reply.text());
+      }
+      await put("/api/models/" + model.modelId + "/" + model.revision, model);
+      await put("/api/scenes/" + doc.sceneId, doc);
+    });
+    await page.reload();
+    await page.getByLabel("장면", { exact: true }).selectOption("priority-quest");
+    await waitForAssessment(page);
+    await page.getByRole("button", { name: "목표 체크리스트", exact: true }).click();
+    const panel = page.getByRole("dialog", { name: "목표 체크리스트" });
+    await panel.getByText("조합을 이루는 주장 3개", { exact: true }).click();
+    const names = await panel.getByRole("button", { name: /대기.*확인 퀘스트 열기/ }).evaluateAll(buttons =>
+      buttons.map(button => button.getAttribute("aria-label")));
+    assert.deepEqual(names.sort(), ["아침 충전 · 대기 · 우선순위 확인 퀘스트 열기", "저녁 충전 · 대기 · 우선순위 확인 퀘스트 열기"]);
+    await page.screenshot({ path: resolve("work/우선순위-퀘스트.png") });
+    assert.deepEqual(errors, []);
+  } finally { await page.close(); }
+});

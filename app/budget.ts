@@ -398,7 +398,7 @@ export function mountBudget(root: HTMLElement, library: Library, documents: Docu
       <details><summary>판매처 우선순위</summary><form class="prefer"><label>판매처 (한 줄에 하나씩, 위에서부터 우선)<textarea name="sellers" rows="3"></textarea></label><button>우선순위 저장</button></form></details>
       <details class="comparison"><summary>로드아웃 비교</summary>
         <form class="compare"><label>비교할 장면<select name="scene"></select></label>
-        <label>비교할 시나리오<select name="scenario" required></select></label><button>두 구성 비교</button></form>
+        <label>비교할 시나리오<select name="scenario" required></select></label><button disabled>두 구성 비교</button></form>
         <div class="compare-result" aria-live="polite"></div>
       </details><p role="status"></p><p role="status" data-scene-save-status></p></div>`;
     const get = <T extends HTMLElement = HTMLElement>(selector: string) => dialog.querySelector<T>(selector)!;
@@ -423,9 +423,13 @@ export function mountBudget(root: HTMLElement, library: Library, documents: Docu
     const sceneSelect = select("scene"), scenarioSelect = select("scenario");
     let otherDoc: SceneDocument | undefined;
     let otherDocuments = documents;
-    let comparisonVersion = 0;
+    let comparisonVersion = 0, sceneRequest = 0;
     const comparison = get(".compare-result");
-    function invalidateComparison() { comparisonVersion++; comparison.replaceChildren(); }
+    function invalidateComparison() {
+      comparisonVersion++;
+      comparison.replaceChildren();
+      syncComparison();
+    }
     let expiryTimer: ReturnType<typeof setTimeout> | undefined;
     let found: BestBuyCandidate[] = [];
     function branding() {
@@ -536,7 +540,8 @@ export function mountBudget(root: HTMLElement, library: Library, documents: Docu
       if (!book || !dialog.open) return;
       const {doc} = state(), scenario = chosen(), area = get(".totals");
       area.replaceChildren();
-      for (const name of ["add","cap","compare"]) get<HTMLButtonElement>("."+name+" button").disabled = !scenario;
+      for (const name of ["add","cap"]) get<HTMLButtonElement>("."+name+" button").disabled = !scenario;
+      syncComparison();
       if (!scenario) { area.append(el("p","예산을 작성할 시나리오를 먼저 만드세요.")); return; }
       const budget = calculateBudget(scenario,doc.items,book,state().view);
       showNeeds(budget.requirements);
@@ -620,17 +625,20 @@ export function mountBudget(root: HTMLElement, library: Library, documents: Docu
       scheduleExpiry();
       render();
     }
-    function submit(name: string, action: () => void | Promise<void>) {
-      const form = get<HTMLFormElement>("form."+name);
+    function submit(name: string, action: () => void | Promise<void>, ready?: () => boolean) {
+      const form = get<HTMLFormElement>("form."+name), button = form.querySelector("button")!;
+      let submitting = false;
+      function sync() { button.disabled = submitting || ready?.() === false; }
       form.onsubmit = async event => {
         event.preventDefault();
-        const button = form.querySelector("button")!;
-        if (button.disabled) return;
-        button.disabled = true;
+        if (button.disabled || submitting) return;
+        submitting = true;
+        sync();
         status.textContent = "";
         try { await action(); } catch (error) { report(error); }
-        finally { button.disabled = false; }
+        finally { submitting = false; sync(); }
       };
+      return sync;
     }
     submit("add",() => {
       const s = chosen()!, selected = choices[select("item").selectedIndex]!;
@@ -728,15 +736,16 @@ export function mountBudget(root: HTMLElement, library: Library, documents: Docu
       scenarioSelect.replaceChildren(...doc.scenarios.map(s => new Option(scenarioName(s),s.id)));
       const preferred = doc.scenarios.find(s => s.id === selected) ?? doc.scenarios.find(s => s.id === state().id);
       if (preferred) scenarioSelect.value = preferred.id;
+      syncComparison();
     }
     async function loadOther() {
-      invalidateComparison();
+      const request = ++sceneRequest, id = sceneSelect.value;
       otherDoc = undefined;
-      const id = sceneSelect.value;
       scenarioSelect.replaceChildren();
+      invalidateComparison();
       if (!id) { selectScenarios(state().doc); return; }
       const doc = await json<SceneDocument>("/api/scenes/" + encodeURIComponent(id));
-      if (sceneSelect.value !== id) return;
+      if (!dialog.open || request !== sceneRequest) return;
       otherDoc = doc;
       selectScenarios(doc);
     }
@@ -751,7 +760,7 @@ export function mountBudget(root: HTMLElement, library: Library, documents: Docu
         await loadOther();
       } catch (error) { report(error); }
     };
-    submit("compare",async () => {
+    const syncComparison = submit("compare",async () => {
       const before = state().doc, left = chosen()!, after = sceneSelect.value ? otherDoc : before;
       const right = after?.scenarios.find(s => s.id === scenarioSelect.value);
       if (!after || !right) throw new Error("비교할 시나리오를 고르세요.");
@@ -793,6 +802,9 @@ export function mountBudget(root: HTMLElement, library: Library, documents: Docu
       }
       const goals = renderGoalChanges(leftSide.view, rightSide.view, [...(left.goals ?? []), ...(right.goals ?? [])]);
       if (goals) comparison.append(goals);
+    }, () => {
+      const target = sceneSelect.value ? otherDoc : state().doc;
+      return !!book && !!chosen() && !!target?.scenarios.some(s => s.id === scenarioSelect.value);
     });
     refresh = render;
     const body = get(".creator-body");
