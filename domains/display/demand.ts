@@ -56,12 +56,16 @@ export function displayDemand(scene: Scene, workload: number): Demand[] {
       rule: target.value === null ? "요청 타이밍의 DSC 목표 bpp 미확인" : `요청 타이밍에 허용한 DSC ${target.value} bpp 영상 대역폭`, inputs: [...requestInputs, target.claim], specs: [...specs, DSC],
     });
   }
-  const fallback = read("fallbackRefresh") as number | null;
-  if (fallback !== null && (refresh === null || fallback < refresh)) {
-    demands.push({
-      ...common, mode, preference: 2, requested: uncompressed(clock(fallback)),
-      rule: `허용한 ${fallback} Hz 폴백의 비압축 영상 대역폭`, inputs, specs,
-    });
+  const fallbackClaim = effectiveClaim(scene, "workload", workload, "display", "fallbackRefresh");
+  if (fallbackClaim !== undefined) {
+    const fallback = scene.claims[fallbackClaim]!.value as number | null;
+    if (fallback === null || refresh === null || fallback < refresh) {
+      demands.push({
+        ...common, mode, preference: 2, requested: uncompressed(clock(fallback)),
+        rule: fallback === null ? "허용한 폴백 주사율 미확인" : `허용한 ${fallback} Hz 폴백의 비압축 영상 대역폭`,
+        inputs: [...requestInputs, fallbackClaim], specs,
+      });
+    }
   }
   return demands;
 }

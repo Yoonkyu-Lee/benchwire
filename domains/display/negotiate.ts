@@ -37,6 +37,7 @@ function dpCapacity(read: (row: number, field: string) => Value, rows: number[],
   });
   const specs = [DP_RATES, DP_VERSIONS];
   let pin: DpAltModePin | null = null;
+  let pinCanMismatch = false;
   let label = "DP";
   if (altMode) {
     specs.push(DP_ALT_MODE);
@@ -47,6 +48,7 @@ function dpCapacity(read: (row: number, field: string) => Value, rows: number[],
     pin = sourcePin ?? sinkPin;
     if (pin === null)
       return { limit: null, verdict: "unknown", rule: "DP Alt Mode 핀 할당 미확인", specs };
+    pinCanMismatch = sourcePin === null || sinkPin === null;
     label = "DP Alt Mode 핀 " + pin;
   }
 
@@ -58,12 +60,13 @@ function dpCapacity(read: (row: number, field: string) => Value, rows: number[],
   const highRate = DP_LINK_RATES[Math.min(...ports.map(p => p.rank < 0 ? p.highestRank : p.rank))]!.rate;
   const lowLanes = Math.min(pinLanes, ...ports.map(p => p.lanes ?? 1));
   const lanes = Math.min(pinLanes, ...ports.map(p => p.lanes ?? DP_MAX_LANES));
-  const low = dpLinkCapacityGbps(lowRate, lowLanes);
+  const low = pinCanMismatch ? 0 : dpLinkCapacityGbps(lowRate, lowLanes);
   const limit = dpLinkCapacityGbps(highRate, lanes);
-  if (low !== limit) return {
-    limit: null, bounds: { low, high: limit }, verdict: "unknown", specs,
-    rule: `${label} 지원 속도·레인 수에 따른 인코딩 후 한도 ${low}–${limit} Gbps`,
-  };
+  if (low !== limit) {
+    const basis = pinCanMismatch ? "양 끝 핀 일치 여부와 지원 속도·레인 수" : "지원 속도·레인 수";
+    return { limit: null, bounds: { low, high: limit }, verdict: "unknown", specs,
+      rule: `${label} ${basis}에 따른 인코딩 후 한도 ${low}–${limit} Gbps` };
+  }
 
   const rate = highRate;
   const ends = [ports[0]!, ports.at(-1)!];

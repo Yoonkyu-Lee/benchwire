@@ -29,6 +29,7 @@ export const display: DomainPlugin = {
     if (field === "pin") return "USB-C 연결의 DP Alt Mode 핀 할당을 확인하세요.";
     if (field === "frlCode") return "HDMI 포트나 케이블이 지원하는 최대 FRL 코드를 확인하세요.";
     if (field === "lanes") return "DP 포트나 케이블이 지원하는 최대 레인 수를 확인하세요.";
+    if (field === "fallbackRefresh") return "허용할 폴백 주사율(Hz)을 확인하세요.";
     return "영상 연결의 " + field + " 값을 확인하세요.";
   },
 };

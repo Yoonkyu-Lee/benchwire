@@ -8,8 +8,8 @@ import { display } from "../../domains/display/display.ts";
 import type { Scene, Value } from "../../engine/contract.ts";
 import { evaluate } from "../../engine/evaluate.ts";
 
-function load(modelsDir = import.meta.dirname) {
-  return loadScene(join(import.meta.dirname, "scene.json"), {
+function load(modelsDir = import.meta.dirname, sceneFile = join(import.meta.dirname, "scene.json")) {
+  return loadScene(sceneFile, {
     modelsDir, connectorsFile: join(import.meta.dirname, "connectors.json"),
   }, [display]);
 }
@@ -310,4 +310,65 @@ test("DP·Alt Mode·HDMI 입력은 각자의 필수 칸에 명시적인 null을 
     }
   }
   assert.equal((display.paramsFor?.("DP") ?? display.params).safeParse({ ...dp, frlCode: hdmi.frlCode }).success, false);
+});
+
+test("Alt Mode의 수신 핀이 미확인이면 일치와 불일치를 모두 남긴다", () => {
+  const scene = load();
+  const pin = portClaim(scene, "alt-c", "alt-c", "pin");
+  scene.claims[pin]!.value = null;
+  const pending = inspect(scene, "alt-c");
+  assert.equal(pending.outcome.verdict, "unknown");
+  assert.equal(pending.option.limit, null);
+  assert.deepEqual(pending.option.bounds, { low: 0, high: 25.92 });
+  assert.deepEqual(pending.possible, ["impossible", "ok"]);
+  assert.ok(pending.claims.includes(portClaim(scene, "host", "alt-c", "pin")));
+  assert.ok(pending.specs.includes("dp-alt-mode"));
+  assert.ok(pending.quests.some(q => q.claim === pin && q.instruction === display.quest("pin")));
+  const metric = pending.metrics.find(m => m.kind === "together")!;
+  assert.deepEqual([metric.low, metric.high], [0, 15.67842]);
+
+  scene.claims[pin]!.value = "C";
+  assert.equal(inspect(scene, "alt-c").outcome.verdict, "ok");
+  scene.claims[pin]!.value = "D";
+  const mismatch = inspect(scene, "alt-c");
+  assert.equal(mismatch.outcome.verdict, "impossible");
+  assert.ok(mismatch.reasons.some(r => r.stage === "negotiate" && r.rule.includes("핀 할당이 다름")));
+
+  setPortValue(scene, "host", "alt-c", "pin", null);
+  const blocked = inspect(scene, "alt-c");
+  assert.deepEqual(blocked.option.bounds, { low: 0, high: 12.96 });
+  assert.equal(blocked.outcome.verdict, "impossible");
+  assert.deepEqual(blocked.quests, []);
+});
+
+test("명시적인 null 폴백 주사율은 미확인 수요와 확인 퀘스트로 남는다", t => {
+  const work = join(import.meta.dirname, "../../work");
+  mkdirSync(work, { recursive: true });
+  const dir = mkdtempSync(join(work, "영상폴백시험-"));
+  t.after(() => rmSync(dir, { recursive: true, force: true }));
+  const model = JSON.parse(readFileSync(join(import.meta.dirname, "scene.json"), "utf8"));
+  const request = model.workloads.find((w: { id: string }) => w.id === "with-fallback").request;
+  delete request.dscBpp;
+  request.fallbackRefresh = { ...request.fallbackRefresh, value: null, confidence: "unknown" };
+  const file = join(dir, "scene.json");
+  writeFileSync(file, JSON.stringify(model));
+  const scene = load(import.meta.dirname, file);
+  const pending = inspect(scene, "with-fallback");
+  assert.equal(pending.outcome.verdict, "unknown");
+  assert.equal(pending.demand.preference, 2);
+  assert.equal(pending.demand.requested, null);
+  const claim = pending.demand.inputs.find(row => scene.claims[row]!.field === "fallbackRefresh");
+  assert.ok(pending.quests.some(q => q.claim === claim && q.instruction === display.quest("fallbackRefresh")));
+
+  setWorkloadValue(scene, "with-fallback", "fallbackRefresh", 60);
+  assert.equal(inspect(scene, "with-fallback").outcome.verdict, "conditional");
+  setWorkloadValue(scene, "with-fallback", "fallbackRefresh", 120);
+  assert.equal(inspect(scene, "with-fallback").outcome.verdict, "impossible");
+
+  delete request.fallbackRefresh;
+  writeFileSync(file, JSON.stringify(model));
+  const omitted = inspect(load(import.meta.dirname, file), "with-fallback");
+  assert.equal(omitted.outcome.verdict, "impossible");
+  assert.ok(!omitted.result.demands.some(d => d.workload === omitted.demand.workload && d.preference > 0));
+  assert.deepEqual(omitted.quests, []);
 });
